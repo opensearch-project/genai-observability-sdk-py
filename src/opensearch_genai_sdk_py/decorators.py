@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from opentelemetry import trace
+from opentelemetry.trace import SpanKind
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +41,24 @@ _OPERATION_NAME = {
     SPAN_KIND_TOOL: "execute_tool",
 }
 
+# Default OTel SpanKind per decorator type.
+# agent uses CLIENT because it typically represents a call out to an LLM/agent service.
+# tool uses INTERNAL because tool execution happens within the process.
+_DEFAULT_OTEL_KIND = {
+    SPAN_KIND_WORKFLOW: SpanKind.INTERNAL,
+    SPAN_KIND_TASK: SpanKind.INTERNAL,
+    SPAN_KIND_AGENT: SpanKind.CLIENT,
+    SPAN_KIND_TOOL: SpanKind.INTERNAL,
+}
+
 _TRACER_NAME = "opensearch-genai-sdk-py"
 
 
 def workflow(
     name: str | None = None,
     version: int | None = None,
+    kind: SpanKind | None = None,
+    name_from: str | None = None,
 ) -> Callable[[F], F]:
     """Trace a function as a workflow span.
 
@@ -55,6 +68,10 @@ def workflow(
     Args:
         name: Span name. Defaults to the function's qualified name.
         version: Optional version number for tracking changes.
+        kind: Override the OTel SpanKind. Defaults to INTERNAL.
+        name_from: Name of a function parameter whose runtime value is used
+            as the entity name. Useful for dispatcher functions where the
+            logical name isn't known until call time.
 
     Example:
         @workflow(name="qa_pipeline")
@@ -63,12 +80,14 @@ def workflow(
             result = execute(plan)
             return result
     """
-    return _make_decorator(name=name, version=version, span_kind=SPAN_KIND_WORKFLOW)
+    return _make_decorator(name=name, version=version, span_kind=SPAN_KIND_WORKFLOW, otel_kind=kind, name_from=name_from)
 
 
 def task(
     name: str | None = None,
     version: int | None = None,
+    kind: SpanKind | None = None,
+    name_from: str | None = None,
 ) -> Callable[[F], F]:
     """Trace a function as a task span.
 
@@ -77,27 +96,36 @@ def task(
     Args:
         name: Span name. Defaults to the function's qualified name.
         version: Optional version number for tracking changes.
+        kind: Override the OTel SpanKind. Defaults to INTERNAL.
+        name_from: Name of a function parameter whose runtime value is used
+            as the entity name.
 
     Example:
         @task(name="summarize")
         def summarize_text(text: str) -> str:
             return llm.generate(f"Summarize: {text}")
     """
-    return _make_decorator(name=name, version=version, span_kind=SPAN_KIND_TASK)
+    return _make_decorator(name=name, version=version, span_kind=SPAN_KIND_TASK, otel_kind=kind, name_from=name_from)
 
 
 def agent(
     name: str | None = None,
     version: int | None = None,
+    kind: SpanKind | None = None,
+    name_from: str | None = None,
 ) -> Callable[[F], F]:
-    """Trace a function as an agent span.
+    """Trace a function as an agent span (SpanKind.CLIENT by default).
 
-    Use for autonomous agent logic that makes decisions and
-    invokes tools.
+    Use for autonomous agent logic that makes decisions and invokes tools.
+    Defaults to SpanKind.CLIENT because agent invocations typically represent
+    a call out to an external LLM or agent service.
 
     Args:
         name: Span name. Defaults to the function's qualified name.
         version: Optional version number for tracking changes.
+        kind: Override the OTel SpanKind. Defaults to CLIENT.
+        name_from: Name of a function parameter whose runtime value is used
+            as the entity name.
 
     Example:
         @agent(name="research_agent")
@@ -107,12 +135,14 @@ def agent(
                 result = execute_action(action)
             return result
     """
-    return _make_decorator(name=name, version=version, span_kind=SPAN_KIND_AGENT)
+    return _make_decorator(name=name, version=version, span_kind=SPAN_KIND_AGENT, otel_kind=kind, name_from=name_from)
 
 
 def tool(
     name: str | None = None,
     version: int | None = None,
+    kind: SpanKind | None = None,
+    name_from: str | None = None,
 ) -> Callable[[F], F]:
     """Trace a function as a tool span.
 
@@ -121,29 +151,37 @@ def tool(
     Args:
         name: Span name. Defaults to the function's qualified name.
         version: Optional version number for tracking changes.
+        kind: Override the OTel SpanKind. Defaults to INTERNAL.
+        name_from: Name of a function parameter whose runtime value is used
+            as the entity name and span name. Useful for dispatcher methods
+            where the actual tool name is a runtime argument.
 
-    Example:
+    Example — static tool:
         @tool(name="web_search")
         def search(query: str) -> list[dict]:
             return search_api.query(query)
+
+    Example — dispatcher with dynamic tool name:
+        @tool(name_from="tool_name")
+        def execute_tool(self, tool_name: str, arguments: dict) -> dict:
+            ...
     """
-    return _make_decorator(name=name, version=version, span_kind=SPAN_KIND_TOOL)
+    return _make_decorator(name=name, version=version, span_kind=SPAN_KIND_TOOL, otel_kind=kind, name_from=name_from)
 
 
 def _make_decorator(
     name: str | None,
     version: int | None,
     span_kind: str,
+    otel_kind: SpanKind | None,
+    name_from: str | None,
 ) -> Callable[[F], F]:
     """Create a decorator that wraps a function in an OTEL span."""
 
+    resolved_otel_kind = otel_kind if otel_kind is not None else _DEFAULT_OTEL_KIND[span_kind]
+
     def decorator(fn: F) -> F:
-        entity_name = name or fn.__qualname__
-        # Agent/tool span names follow semconv: "{operation} {name}"
-        if span_kind in (SPAN_KIND_AGENT, SPAN_KIND_TOOL):
-            span_name = f"{span_kind} {entity_name}"
-        else:
-            span_name = entity_name
+        static_entity_name = name or fn.__qualname__
         fn_doc = fn.__doc__
         sig = inspect.signature(fn)
         # NOTE: tracer is intentionally fetched inside each wrapper (at call
@@ -154,12 +192,31 @@ def _make_decorator(
         # the wrapper always uses the provider that is current when the
         # function is actually invoked.
 
+        def _resolve_names(args, kwargs):
+            """Resolve entity name and span name at call time."""
+            entity = static_entity_name
+            if name_from:
+                try:
+                    bound = sig.bind(*args, **kwargs)
+                    bound.apply_defaults()
+                    runtime_val = bound.arguments.get(name_from)
+                    if runtime_val is not None:
+                        entity = str(runtime_val)
+                except TypeError:
+                    pass
+            if span_kind in (SPAN_KIND_AGENT, SPAN_KIND_TOOL):
+                span_name = f"{span_kind} {entity}"
+            else:
+                span_name = entity
+            return entity, span_name
+
         if inspect.iscoroutinefunction(fn):
 
             @functools.wraps(fn)
             async def async_wrapper(*args, **kwargs):
+                entity_name, span_name = _resolve_names(args, kwargs)
                 tracer = trace.get_tracer(_TRACER_NAME)
-                with tracer.start_as_current_span(span_name) as span:
+                with tracer.start_as_current_span(span_name, kind=resolved_otel_kind) as span:
                     _set_span_attributes(
                         span, span_kind, entity_name, version, sig, args, kwargs, fn_doc
                     )
@@ -178,8 +235,9 @@ def _make_decorator(
 
             @functools.wraps(fn)
             def gen_wrapper(*args, **kwargs):
+                entity_name, span_name = _resolve_names(args, kwargs)
                 tracer = trace.get_tracer(_TRACER_NAME)
-                with tracer.start_as_current_span(span_name) as span:
+                with tracer.start_as_current_span(span_name, kind=resolved_otel_kind) as span:
                     _set_span_attributes(
                         span, span_kind, entity_name, version, sig, args, kwargs, fn_doc
                     )
@@ -200,8 +258,9 @@ def _make_decorator(
 
             @functools.wraps(fn)
             async def async_gen_wrapper(*args, **kwargs):
+                entity_name, span_name = _resolve_names(args, kwargs)
                 tracer = trace.get_tracer(_TRACER_NAME)
-                with tracer.start_as_current_span(span_name) as span:
+                with tracer.start_as_current_span(span_name, kind=resolved_otel_kind) as span:
                     _set_span_attributes(
                         span, span_kind, entity_name, version, sig, args, kwargs, fn_doc
                     )
@@ -222,8 +281,9 @@ def _make_decorator(
 
             @functools.wraps(fn)
             def sync_wrapper(*args, **kwargs):
+                entity_name, span_name = _resolve_names(args, kwargs)
                 tracer = trace.get_tracer(_TRACER_NAME)
-                with tracer.start_as_current_span(span_name) as span:
+                with tracer.start_as_current_span(span_name, kind=resolved_otel_kind) as span:
                     _set_span_attributes(
                         span, span_kind, entity_name, version, sig, args, kwargs, fn_doc
                     )
@@ -271,7 +331,9 @@ def _set_span_attributes(
     if span_kind == SPAN_KIND_TOOL:
         span.set_attribute("gen_ai.tool.type", "function")
         if fn_doc:
-            span.set_attribute("gen_ai.tool.description", fn_doc)
+            # Use first non-empty line of docstring
+            first_line = next((l.strip() for l in fn_doc.splitlines() if l.strip()), fn_doc[:200])
+            span.set_attribute("gen_ai.tool.description", first_line)
 
     # Capture input (best-effort, don't fail if serialization fails)
     _set_input(span, span_kind, sig, args, kwargs)
@@ -284,6 +346,7 @@ def _set_input(
 
     Binds positional and keyword arguments to their parameter names
     so the trace shows {"city": "Paris"} instead of just "Paris".
+    Skips 'self' and 'cls' parameters for class methods.
     """
     try:
         if not args and not kwargs:
@@ -293,7 +356,8 @@ def _set_input(
         try:
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
-            value = dict(bound.arguments)
+            # Skip 'self' and 'cls' — not useful in traces and not serializable
+            value = {k: v for k, v in bound.arguments.items() if k not in ("self", "cls")}
         except TypeError:
             # Fallback if binding fails (e.g., *args/**kwargs signatures)
             value = {"args": list(args), "kwargs": kwargs}
@@ -313,18 +377,31 @@ def _set_input(
 
 
 def _set_output(span: trace.Span, span_kind: str, result: Any) -> None:
-    """Attempt to capture function output as a span attribute."""
+    """Attempt to capture function output as a span attribute.
+
+    Skips setting the attribute if the user already set it inside the function
+    body (via trace.get_current_span().set_attribute(...)), so that custom
+    formatting (e.g. genai role/parts schema) is not overwritten.
+    """
     try:
         if result is None:
             return
+
+        attr_key = (
+            "gen_ai.tool.call.result" if span_kind == SPAN_KIND_TOOL else "gen_ai.output.messages"
+        )
+
+        # Don't overwrite a value the user already set inside the function body.
+        # _attributes is an implementation detail but is the only way to read
+        # span attributes in the OTel Python SDK before export.
+        existing = getattr(span, "_attributes", None)
+        if existing and attr_key in existing:
+            return
+
         serialized = json.dumps(result, default=str)
         if len(serialized) > 10_000:
             serialized = serialized[:10_000] + "...(truncated)"
 
-        # Tool spans use semconv attribute name; all others use gen_ai.output.messages
-        attr_key = (
-            "gen_ai.tool.call.result" if span_kind == SPAN_KIND_TOOL else "gen_ai.output.messages"
-        )
         span.set_attribute(attr_key, serialized)
     except Exception:
         pass

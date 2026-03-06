@@ -165,3 +165,4 @@ safety-report.json
 
 # Test environments
 test_env/
+.pypi-token
