@@ -120,11 +120,11 @@ all = [
 ]
 
 [project.urls]
-Repository = "https://github.com/vamsimanohar/opensearch-genai-sdk-py"
-Homepage = "https://github.com/vamsimanohar/opensearch-genai-sdk-py"
-Documentation = "https://github.com/vamsimanohar/opensearch-genai-sdk-py#readme"
-"Bug Tracker" = "https://github.com/vamsimanohar/opensearch-genai-sdk-py/issues"
-Changelog = "https://github.com/vamsimanohar/opensearch-genai-sdk-py/blob/main/CHANGELOG.md"
+Repository = "https://github.com/opensearch-project/genai-observability-sdk-py"
+Homepage = "https://github.com/opensearch-project/genai-observability-sdk-py"
+Documentation = "https://github.com/opensearch-project/genai-observability-sdk-py#readme"
+"Bug Tracker" = "https://github.com/opensearch-project/genai-observability-sdk-py/issues"
+Changelog = "https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]

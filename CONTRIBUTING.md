@@ -18,8 +18,8 @@ This project adheres to the OpenSearch [Code of Conduct](https://opensearch.org/
 1. Fork the repository on GitHub
 2. Clone your fork locally:
    ```bash
-   git clone https://github.com/your-username/opensearch-genai-sdk-py.git
-   cd opensearch-genai-sdk-py
+   git clone https://github.com/your-username/genai-observability-sdk-py.git
+   cd genai-observability-sdk-py
    ```
 
 3. Install the development dependencies:
@@ -144,8 +144,8 @@ Releases are handled by maintainers:
 
 ## Getting Help
 
-- **Questions**: Open a [discussion](https://github.com/vamsimanohar/opensearch-genai-sdk-py/discussions)
-- **Issues**: Use the [issue tracker](https://github.com/vamsimanohar/opensearch-genai-sdk-py/issues)
+- **Questions**: Open a [discussion](https://github.com/opensearch-project/genai-observability-sdk-py/discussions)
+- **Issues**: Use the [issue tracker](https://github.com/opensearch-project/genai-observability-sdk-py/issues)
 - **Security**: Report security vulnerabilities privately to security@opensearch.org
 
 ## License
