@@ -513,3 +513,83 @@ class TestEdgeCases:
         spans = exporter.get_finished_spans()
         span = spans[0]
         assert span.kind == SpanKind.CLIENT
+
+
+# ---------------------------------------------------------------------------
+# name_from — dynamic span naming
+# ---------------------------------------------------------------------------
+
+
+class TestNameFrom:
+    def test_name_from_parameter(self, exporter):
+        @observe(op=Op.EXECUTE_TOOL, name_from="tool_name")
+        def run_tool(tool_name: str, args: dict) -> str:
+            return "result"
+
+        run_tool("web_search", {"q": "hello"})
+        span = exporter.get_finished_spans()[0]
+        assert span.name == "execute_tool web_search"
+        assert span.attributes["gen_ai.tool.name"] == "web_search"
+
+    def test_name_from_with_static_fallback(self, exporter):
+        @observe(name="fallback", op=Op.EXECUTE_TOOL, name_from="tool_name")
+        def run_tool(tool_name: str) -> str:
+            return "result"
+
+        run_tool("calculator")
+        span = exporter.get_finished_spans()[0]
+        assert span.name == "execute_tool calculator"
+        assert span.attributes["gen_ai.tool.name"] == "calculator"
+
+    def test_name_from_missing_param_uses_static_name(self, exporter):
+        @observe(name="dispatcher", op=Op.EXECUTE_TOOL, name_from="tool_name")
+        def run_tool(args: dict) -> str:
+            return "result"
+
+        run_tool({"q": "hello"})
+        span = exporter.get_finished_spans()[0]
+        assert span.name == "execute_tool dispatcher"
+
+    def test_name_from_none_value_uses_static_name(self, exporter):
+        @observe(name="dispatcher", op=Op.EXECUTE_TOOL, name_from="tool_name")
+        def run_tool(tool_name: str = None) -> str:
+            return "result"
+
+        run_tool()
+        span = exporter.get_finished_spans()[0]
+        assert span.name == "execute_tool dispatcher"
+
+    def test_name_from_with_invoke_agent(self, exporter):
+        @observe(op=Op.INVOKE_AGENT, name_from="agent_name")
+        def dispatch(agent_name: str, query: str) -> str:
+            return "done"
+
+        dispatch("research-agent", "find papers")
+        span = exporter.get_finished_spans()[0]
+        assert span.name == "invoke_agent research-agent"
+        assert span.attributes["gen_ai.agent.name"] == "research-agent"
+
+
+# ---------------------------------------------------------------------------
+# Tool type attribute
+# ---------------------------------------------------------------------------
+
+
+class TestToolTypeAttribute:
+    def test_execute_tool_sets_tool_type(self, exporter):
+        @observe(name="my_tool", op=Op.EXECUTE_TOOL)
+        def tool_fn() -> str:
+            return "ok"
+
+        tool_fn()
+        span = exporter.get_finished_spans()[0]
+        assert span.attributes["gen_ai.tool.type"] == "function"
+
+    def test_non_tool_op_does_not_set_tool_type(self, exporter):
+        @observe(name="my_agent", op=Op.INVOKE_AGENT)
+        def agent_fn() -> str:
+            return "ok"
+
+        agent_fn()
+        span = exporter.get_finished_spans()[0]
+        assert "gen_ai.tool.type" not in span.attributes

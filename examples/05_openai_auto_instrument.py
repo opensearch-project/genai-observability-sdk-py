@@ -13,7 +13,7 @@ register() auto-discovers and activates any installed OpenTelemetry
 instrumentors. Just pip install them — no code changes.
 
 This example shows OpenAI auto-instrumentation: every openai.chat.completions
-call is automatically traced as an OTEL span with gen_ai.* attributes.
+call is automatically traced as an OTel span with gen_ai.* attributes.
 """
 
 # Step 1: pip install opensearch-genai-observability-sdk-py[openai]

@@ -103,6 +103,8 @@ def _set_span_op_attributes(span: trace.Span, name: str, op: str | None) -> None
     span.set_attribute("gen_ai.operation.name", op)
     attr_key = _NAME_ATTR.get(op, _DEFAULT_NAME_ATTR)
     span.set_attribute(attr_key, name)
+    if op == Op.EXECUTE_TOOL:
+        span.set_attribute("gen_ai.tool.type", "function")
 
 
 class _Observe:
@@ -114,10 +116,12 @@ class _Observe:
         *,
         op: str | None = None,
         kind: SpanKind = SpanKind.INTERNAL,
+        name_from: str | None = None,
     ) -> None:
         self._name = name
         self._op = op
         self._kind = kind
+        self._name_from = name_from
         self._span: trace.Span | None = None
         self._ctx_manager: Any = None
 
@@ -151,16 +155,38 @@ class _Observe:
         entity_name = self._name or fn.__qualname__
         op = self._op
         kind = self._kind
+        name_from = self._name_from
         sig = inspect.signature(fn)
 
         if inspect.iscoroutinefunction(fn):
-            return _wrap_async(fn, entity_name, op, kind, sig)  # type: ignore[return-value]
+            return _wrap_async(fn, entity_name, op, kind, sig, name_from)  # type: ignore[return-value]
         elif inspect.isasyncgenfunction(fn):
-            return _wrap_async_gen(fn, entity_name, op, kind, sig)  # type: ignore[return-value]
+            return _wrap_async_gen(fn, entity_name, op, kind, sig, name_from)  # type: ignore[return-value]
         elif inspect.isgeneratorfunction(fn):
-            return _wrap_gen(fn, entity_name, op, kind, sig)  # type: ignore[return-value]
+            return _wrap_gen(fn, entity_name, op, kind, sig, name_from)  # type: ignore[return-value]
         else:
-            return _wrap_sync(fn, entity_name, op, kind, sig)  # type: ignore[return-value]
+            return _wrap_sync(fn, entity_name, op, kind, sig, name_from)  # type: ignore[return-value]
+
+
+def _resolve_name(
+    static_name: str,
+    name_from: str | None,
+    sig: inspect.Signature,
+    args: tuple,
+    kwargs: dict,
+) -> str:
+    """Resolve entity name at call time, optionally from a function parameter."""
+    if not name_from:
+        return static_name
+    try:
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        runtime_val = bound.arguments.get(name_from)
+        if runtime_val is not None:
+            return str(runtime_val)
+    except TypeError:
+        pass
+    return static_name
 
 
 def _set_input(
@@ -215,13 +241,21 @@ def _set_output(span: trace.Span, op: str | None, result: Any) -> None:
         pass
 
 
-def _wrap_sync(fn: F, name: str, op: str | None, kind: SpanKind, sig: inspect.Signature) -> F:
+def _wrap_sync(
+    fn: F,
+    name: str,
+    op: str | None,
+    kind: SpanKind,
+    sig: inspect.Signature,
+    name_from: str | None = None,
+) -> F:
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        span_name = _make_span_name(name, op)
+        entity_name = _resolve_name(name, name_from, sig, args, kwargs)
+        span_name = _make_span_name(entity_name, op)
         tracer = trace.get_tracer(_TRACER_NAME)
         with tracer.start_as_current_span(span_name, kind=kind) as span:
-            _set_span_op_attributes(span, name, op)
+            _set_span_op_attributes(span, entity_name, op)
             _set_input(span, op, sig, args, kwargs)
             try:
                 result = fn(*args, **kwargs)
@@ -235,13 +269,21 @@ def _wrap_sync(fn: F, name: str, op: str | None, kind: SpanKind, sig: inspect.Si
     return wrapper  # type: ignore[return-value]
 
 
-def _wrap_async(fn: F, name: str, op: str | None, kind: SpanKind, sig: inspect.Signature) -> F:
+def _wrap_async(
+    fn: F,
+    name: str,
+    op: str | None,
+    kind: SpanKind,
+    sig: inspect.Signature,
+    name_from: str | None = None,
+) -> F:
     @functools.wraps(fn)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        span_name = _make_span_name(name, op)
+        entity_name = _resolve_name(name, name_from, sig, args, kwargs)
+        span_name = _make_span_name(entity_name, op)
         tracer = trace.get_tracer(_TRACER_NAME)
         with tracer.start_as_current_span(span_name, kind=kind) as span:
-            _set_span_op_attributes(span, name, op)
+            _set_span_op_attributes(span, entity_name, op)
             _set_input(span, op, sig, args, kwargs)
             try:
                 result = await fn(*args, **kwargs)
@@ -255,13 +297,21 @@ def _wrap_async(fn: F, name: str, op: str | None, kind: SpanKind, sig: inspect.S
     return wrapper  # type: ignore[return-value]
 
 
-def _wrap_gen(fn: F, name: str, op: str | None, kind: SpanKind, sig: inspect.Signature) -> F:
+def _wrap_gen(
+    fn: F,
+    name: str,
+    op: str | None,
+    kind: SpanKind,
+    sig: inspect.Signature,
+    name_from: str | None = None,
+) -> F:
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        span_name = _make_span_name(name, op)
+        entity_name = _resolve_name(name, name_from, sig, args, kwargs)
+        span_name = _make_span_name(entity_name, op)
         tracer = trace.get_tracer(_TRACER_NAME)
         with tracer.start_as_current_span(span_name, kind=kind) as span:
-            _set_span_op_attributes(span, name, op)
+            _set_span_op_attributes(span, entity_name, op)
             _set_input(span, op, sig, args, kwargs)
             try:
                 collected = []
@@ -277,13 +327,21 @@ def _wrap_gen(fn: F, name: str, op: str | None, kind: SpanKind, sig: inspect.Sig
     return wrapper  # type: ignore[return-value]
 
 
-def _wrap_async_gen(fn: F, name: str, op: str | None, kind: SpanKind, sig: inspect.Signature) -> F:
+def _wrap_async_gen(
+    fn: F,
+    name: str,
+    op: str | None,
+    kind: SpanKind,
+    sig: inspect.Signature,
+    name_from: str | None = None,
+) -> F:
     @functools.wraps(fn)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        span_name = _make_span_name(name, op)
+        entity_name = _resolve_name(name, name_from, sig, args, kwargs)
+        span_name = _make_span_name(entity_name, op)
         tracer = trace.get_tracer(_TRACER_NAME)
         with tracer.start_as_current_span(span_name, kind=kind) as span:
-            _set_span_op_attributes(span, name, op)
+            _set_span_op_attributes(span, entity_name, op)
             _set_input(span, op, sig, args, kwargs)
             try:
                 collected = []
@@ -309,6 +367,7 @@ def observe(
     *,
     op: str | None = None,
     kind: SpanKind = SpanKind.INTERNAL,
+    name_from: str | None = None,
 ) -> _Observe: ...
 
 
@@ -317,6 +376,7 @@ def observe(
     *,
     op: str | None = None,
     kind: SpanKind = SpanKind.INTERNAL,
+    name_from: str | None = None,
 ) -> _Observe | Callable[..., Any]:
     """Create a traced span — as a decorator or context manager.
 
@@ -338,15 +398,27 @@ def observe(
         def my_function():
             ...
 
+    Dynamic span naming with ``name_from``::
+
+        @observe(op=Op.EXECUTE_TOOL, name_from="tool_name")
+        def run_tool(tool_name: str, args: dict) -> dict:
+            ...
+        run_tool("web_search", {"q": "hi"})  # span: "execute_tool web_search"
+
     Args:
         name: Span name. For decorators, defaults to the function's
             qualified name. For context managers, defaults to "unnamed".
         op: The ``gen_ai.operation.name`` value. Use ``Op`` constants
             for well-known values (``Op.INVOKE_AGENT``, ``Op.CHAT``,
             ``Op.EXECUTE_TOOL``, etc.) or any custom string.
-            When ``None``, no ``gen_ai.*`` attributes are set.
+            When ``None``, no ``gen_ai.operation.name`` or name attributes
+            are set on the span. Input/output capture still occurs.
         kind: OTel ``SpanKind``. Defaults to ``INTERNAL``.
             Use ``SpanKind.CLIENT`` when calling external services.
+        name_from: Name of a function parameter whose runtime value
+            becomes the span name. Useful for dispatcher functions where
+            the logical name isn't known until call time. Only applies
+            when used as a decorator.
 
     Returns:
         An ``_Observe`` instance that acts as both decorator and
@@ -355,7 +427,7 @@ def observe(
     # Support @observe without parentheses
     if callable(name):
         fn = name
-        obs = _Observe(name=None, op=op, kind=kind)
+        obs = _Observe(name=None, op=op, kind=kind, name_from=name_from)
         return obs(fn)
 
-    return _Observe(name=name, op=op, kind=kind)
+    return _Observe(name=name, op=op, kind=kind, name_from=name_from)
