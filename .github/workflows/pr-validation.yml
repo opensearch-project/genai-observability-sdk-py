@@ -1,0 +1,73 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validate-pr:
+    name: Validate PR Requirements
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Validate PR Title
+      uses: amannn/action-semantic-pull-request@v5
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        types: |
+          feat
+          fix
+          docs
+          style
+          refactor
+          perf
+          test
+          build
+          ci
+          chore
+          revert
+
+    - name: Check for breaking changes
+      run: |
+        # Look for breaking changes in the PR description or commits
+        if git log --oneline origin/main..HEAD | grep -i "breaking\|BREAKING"; then
+          echo "⚠️ This PR contains breaking changes. Ensure version is bumped appropriately."
+        fi
+
+    - name: Validate file changes
+      run: |
+        # Check if setup files are modified
+        MODIFIED_FILES=$(git diff --name-only origin/main..HEAD)
+
+        if echo "$MODIFIED_FILES" | grep -q "pyproject.toml\|setup.py\|requirements"; then
+          echo "📦 Package configuration files modified - version bump may be needed"
+        fi
+
+        if echo "$MODIFIED_FILES" | grep -q "src/"; then
+          echo "🔧 Source code changes detected"
+        fi
+
+        if echo "$MODIFIED_FILES" | grep -q "tests/"; then
+          echo "✅ Test changes detected"
+        fi
+
+  conventional-commits:
+    name: Validate Conventional Commits
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Validate commit messages
+      uses: wagoid/commitlint-github-action@v6
+      with:
+        configFile: .commitlintrc.json
+        failOnWarnings: false

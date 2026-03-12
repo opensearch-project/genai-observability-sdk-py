@@ -1,0 +1,146 @@
+[project]
+name = "opensearch-genai-observability-sdk-py"
+version = "0.2.6"
+description = "OpenSearch AI Observability SDK — OTEL-native tracing and scoring for LLM applications"
+authors = [
+    { name = "OpenSearch Contributors" },
+]
+license = "Apache-2.0"
+readme = "README.md"
+requires-python = ">=3.10,<4"
+keywords = ["opentelemetry", "tracing", "llm", "ai", "observability", "opensearch", "genai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "opentelemetry-api>=1.20.0,<2",
+    "opentelemetry-sdk>=1.20.0,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0,<2",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0,<2",
+    "botocore>=1.29.0",
+]
+
+[project.optional-dependencies]
+
+# Individual extras for popular providers.
+# auto_instrument=True in register() picks up whichever ones are installed.
+openai = [
+    "opentelemetry-instrumentation-openai>=0.52.0",
+    "opentelemetry-instrumentation-openai-agents>=0.52.0",
+]
+anthropic = [
+    "opentelemetry-instrumentation-anthropic>=0.52.0",
+]
+bedrock = [
+    "opentelemetry-instrumentation-bedrock>=0.52.0",
+]
+google = [
+    "opentelemetry-instrumentation-google-generativeai>=0.52.0",
+    "opentelemetry-instrumentation-vertexai>=0.52.0",
+]
+langchain = [
+    "opentelemetry-instrumentation-langchain>=0.52.0",
+]
+llamaindex = [
+    "opentelemetry-instrumentation-llamaindex>=0.52.0",
+]
+# All instrumentors at once.
+otel-instrumentors = [
+    "opentelemetry-instrumentation-openai>=0.52.0",
+    "opentelemetry-instrumentation-openai-agents>=0.52.0",
+    "opentelemetry-instrumentation-anthropic>=0.52.0",
+    "opentelemetry-instrumentation-cohere>=0.52.0",
+    "opentelemetry-instrumentation-mistralai>=0.52.0",
+    "opentelemetry-instrumentation-groq>=0.52.0",
+    "opentelemetry-instrumentation-ollama>=0.52.0",
+    "opentelemetry-instrumentation-together>=0.52.0",
+    "opentelemetry-instrumentation-replicate>=0.52.0",
+    "opentelemetry-instrumentation-writer>=0.52.0",
+    "opentelemetry-instrumentation-google-generativeai>=0.52.0",
+    "opentelemetry-instrumentation-vertexai>=0.52.0",
+    "opentelemetry-instrumentation-voyageai>=0.52.0",
+    "opentelemetry-instrumentation-alephalpha>=0.52.0",
+    "opentelemetry-instrumentation-bedrock>=0.52.0",
+    "opentelemetry-instrumentation-sagemaker>=0.52.0",
+    "opentelemetry-instrumentation-watsonx>=0.52.0",
+    "opentelemetry-instrumentation-langchain>=0.52.0",
+    "opentelemetry-instrumentation-llamaindex>=0.52.0",
+    "opentelemetry-instrumentation-haystack>=0.52.0",
+    "opentelemetry-instrumentation-crewai>=0.52.0",
+    "opentelemetry-instrumentation-agno>=0.52.0",
+    "opentelemetry-instrumentation-mcp>=0.52.0",
+    "opentelemetry-instrumentation-transformers>=0.52.0",
+    "opentelemetry-instrumentation-chromadb>=0.52.0",
+    "opentelemetry-instrumentation-pinecone>=0.52.0",
+    "opentelemetry-instrumentation-qdrant>=0.52.0",
+    "opentelemetry-instrumentation-weaviate>=0.52.0",
+    "opentelemetry-instrumentation-milvus>=0.52.0",
+    "opentelemetry-instrumentation-lancedb>=0.52.0",
+    "opentelemetry-instrumentation-marqo>=0.52.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+    "bandit>=1.7.5",
+    "safety>=2.3.0",
+    "pre-commit>=3.0.0",
+]
+# Everything — for development and integration testing.
+all = [
+    "opensearch-genai-observability-sdk-py[otel-instrumentors,dev]",
+]
+
+[project.urls]
+Repository = "https://github.com/opensearch-project/genai-observability-sdk-py"
+Homepage = "https://github.com/opensearch-project/genai-observability-sdk-py"
+Documentation = "https://github.com/opensearch-project/genai-observability-sdk-py#readme"
+"Bug Tracker" = "https://github.com/opensearch-project/genai-observability-sdk-py/issues"
+Changelog = "https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opensearch_genai_observability_sdk_py"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["examples/", "tests/"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "S", "B"]
+ignore = [
+    "S101",  # Use of assert detected (OK in tests)
+    "S113",  # Probable use of requests without timeout (handled by OTEL SDK)
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+addopts = "-v --tb=short"
