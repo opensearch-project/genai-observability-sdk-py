@@ -1,0 +1,66 @@
+name: Release drafter
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  draft-a-release:
+    name: Draft a release
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: write
+      id-token: write
+    if: github.repository == 'opensearch-project/genai-observability-sdk-py'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - id: get_data
+        run: |
+          echo "approvers=$(cat .github/CODEOWNERS | grep @ | tr -d '*\n ' | sed 's/@/,/g' | sed 's/,//1')" >> $GITHUB_OUTPUT
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Request release approval
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: ${{ steps.get_data.outputs.approvers }}
+          minimum-approvals: 1
+          issue-title: "Release opensearch-genai-observability-sdk-py ${{ steps.get_data.outputs.version }}"
+          issue-body: "Please approve or deny the release of opensearch-genai-observability-sdk-py **TAG**: ${{ github.ref_name }}  **COMMIT**: ${{ github.sha }} **VERSION**: ${{ steps.get_data.outputs.version }}"
+          exclude-workflow-initiator-as-approver: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Build and validate
+        run: |
+          python -m pip install --upgrade pip build
+          pip install -e ".[dev]"
+          pytest tests/ -v
+
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ "$TAG_VERSION" != "$VERSION" ]; then
+            echo "Version mismatch: tag=$TAG_VERSION, pyproject.toml=$VERSION"
+            exit 1
+          fi
+
+          python -m build
+          pip install dist/*.whl
+          python -c "import opensearch_genai_observability_sdk_py; print('Package imports successfully')"
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
