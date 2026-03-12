@@ -45,14 +45,23 @@ def score(
     label: str | None = None,
     explanation: str | None = None,
     response_id: str | None = None,
-    source: str = "sdk",
-    metadata: dict[str, Any] | None = None,
+    attributes: dict[str, Any] | None = None,
 ) -> None:
     """Submit an evaluation score as an OTel span.
 
     Creates a ``gen_ai.evaluation.*`` span that is attached to the
     evaluated trace, so scores appear in the same trace waterfall as the
     spans they evaluate.
+
+    Attributes follow the OTel GenAI semantic conventions:
+    - ``gen_ai.evaluation.result`` event (merged):
+      ``gen_ai.evaluation.name``, ``gen_ai.evaluation.score.value``,
+      ``gen_ai.evaluation.score.label``, ``gen_ai.evaluation.explanation``,
+      ``gen_ai.response.id``
+    - Experiment tracking (proposed,
+      https://github.com/open-telemetry/semantic-conventions/issues/3398):
+      ``test.suite.run.id``, ``test.suite.name``, ``test.case.id``,
+      ``test.case.result.status``, ``test.suite.run.status``
 
     Two scoring levels:
 
@@ -73,9 +82,9 @@ def score(
         label: Human-readable label (e.g., ``"pass"``, ``"relevant"``).
         explanation: Evaluator justification or rationale (truncated to 500 chars).
         response_id: Completion ID for correlation with a specific LLM response.
-        source: Who created the score — ``"sdk"``, ``"human"``,
-            ``"llm-judge"``, ``"heuristic"``.
-        metadata: Optional arbitrary key-value metadata.
+        attributes: Additional span attributes (e.g., ``test.*`` from
+            https://github.com/open-telemetry/semantic-conventions/issues/3398).
+            Keys are used as-is — no prefix is added.
 
     Examples:
         # Span-level: score a specific span
@@ -85,16 +94,22 @@ def score(
             trace_id="6ebb9835f43af1552f2cebb9f5165e39",
             span_id="89829115c2128845",
             explanation="Weather data is correct",
-            source="heuristic",
         )
 
-        # Trace-level: score the whole trace (attaches to root span)
+        # With experiment tracking
+        # (https://github.com/open-telemetry/semantic-conventions/issues/3398)
         score(
-            name="relevance",
-            value=0.92,
+            name="helpfulness",
+            value=0.83,
             trace_id="6ebb9835f43af1552f2cebb9f5165e39",
+            label="Very helpful",
             explanation="Response addresses the query",
-            source="llm-judge",
+            attributes={
+                "test.suite.run.id": "run_20250312_001",
+                "test.suite.name": "helpfulness_eval",
+                "test.case.id": "case_001",
+                "test.case.result.status": "pass",
+            },
         )
     """
     tracer = trace.get_tracer(_TRACER_NAME)
@@ -102,7 +117,6 @@ def score(
     attrs: dict[str, Any] = {
         "gen_ai.operation.name": "evaluation",
         "gen_ai.evaluation.name": name,
-        "gen_ai.evaluation.source": source,
     }
 
     if value is not None:
@@ -113,9 +127,8 @@ def score(
         attrs["gen_ai.evaluation.explanation"] = explanation[:500]
     if response_id:
         attrs["gen_ai.response.id"] = response_id
-    if metadata:
-        for k, v in metadata.items():
-            attrs[f"gen_ai.evaluation.metadata.{k}"] = str(v)
+    if attributes:
+        attrs.update(attributes)
 
     ctx = _build_parent_context(trace_id, span_id)
 
