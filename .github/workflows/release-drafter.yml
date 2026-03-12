@@ -21,7 +21,7 @@ jobs:
       - id: get_data
         run: |
           echo "approvers=$(cat .github/CODEOWNERS | grep @ | tr -d '*\n ' | sed 's/@/,/g' | sed 's/,//1')" >> $GITHUB_OUTPUT
-          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          VERSION=`cat pyproject.toml | grep "version =" | grep -Eo "[0-9.]+"`
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Request release approval
@@ -37,7 +37,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.10"
 
       - name: Build and validate
         run: |
@@ -45,8 +45,8 @@ jobs:
           pip install -e ".[dev]"
           pytest tests/ -v
 
-          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          VERSION=`cat pyproject.toml | grep "version =" | grep -Eo "[0-9.]+"`
+          TAG_VERSION="${GITHUB_REF#refs/tags/}"
           if [ "$TAG_VERSION" != "$VERSION" ]; then
             echo "Version mismatch: tag=$TAG_VERSION, pyproject.toml=$VERSION"
             exit 1
