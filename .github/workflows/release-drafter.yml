@@ -21,7 +21,7 @@ jobs:
       - id: get_data
         run: |
           echo "approvers=$(cat .github/CODEOWNERS | grep @ | tr -d '*\n ' | sed 's/@/,/g' | sed 's/,//1')" >> $GITHUB_OUTPUT
-          VERSION=`cat pyproject.toml | grep "version =" | grep -Eo "[0-9.]+"`
+          VERSION=`cat pyproject.toml | grep "^version =" | grep -Eo "[0-9.]+"`
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Request release approval
@@ -45,7 +45,7 @@ jobs:
           pip install -e ".[dev]"
           pytest tests/ -v
 
-          VERSION=`cat pyproject.toml | grep "version =" | grep -Eo "[0-9.]+"`
+          VERSION=`cat pyproject.toml | grep "^version =" | grep -Eo "[0-9.]+"`
           TAG_VERSION="${GITHUB_REF#refs/tags/}"
           if [ "$TAG_VERSION" != "$VERSION" ]; then
             echo "Version mismatch: tag=$TAG_VERSION, pyproject.toml=$VERSION"
