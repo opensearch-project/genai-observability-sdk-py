@@ -9,34 +9,35 @@
 
 """Async function tracing with opensearch-genai-observability-sdk-py.
 
-All decorators support async functions natively — no special config.
+@observe supports async functions natively — no special config.
 """
 
 import asyncio
 
-from opensearch_genai_observability_sdk_py import register, task, tool, workflow
+from opensearch_genai_observability_sdk_py import Op, enrich, observe, register
 
 # --- Setup ---
 register(endpoint="http://localhost:21890/opentelemetry/v1/traces")
 
 
-@tool(name="async_search")
+@observe(name="async_search", op=Op.EXECUTE_TOOL)
 async def search(query: str) -> list[dict]:
     """Simulated async API call."""
     await asyncio.sleep(0.1)  # simulate network latency
     return [{"title": f"Result: {query}"}]
 
 
-@task(name="async_summarize")
+@observe(name="async_summarize", op=Op.CHAT)
 async def summarize(text: str) -> str:
     """Simulated async LLM call."""
     await asyncio.sleep(0.2)
+    enrich(model="gpt-4.1", input_tokens=100, output_tokens=30)
     return f"Summary: {text[:50]}"
 
 
-@workflow(name="async_pipeline")
+@observe(name="async_pipeline", op=Op.INVOKE_AGENT)
 async def run_pipeline(question: str) -> str:
-    """Async workflow — decorators handle async transparently."""
+    """Async agent — @observe handles async transparently."""
     results = await search(question)
     summary = await summarize(str(results))
     return summary

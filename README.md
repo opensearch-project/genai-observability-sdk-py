@@ -5,7 +5,8 @@ OTel-native tracing and scoring for LLM applications. Instrument your AI workflo
 ## Features
 
 - **One-line setup** — `register()` configures the full OTel pipeline (TracerProvider, exporter, auto-instrumentation)
-- **Decorators** — `@workflow`, `@task`, `@agent`, `@tool` wrap functions as OTel spans with [GenAI semantic convention](https://opentelemetry.io/docs/specs/semconv/gen-ai/) attributes
+- **`observe()`** — single decorator / context manager that creates OTel spans with [GenAI semantic convention](https://opentelemetry.io/docs/specs/semconv/gen-ai/) attributes
+- **`enrich()`** — add model, token usage, and other GenAI attributes to the active span from anywhere in your code
 - **Auto-instrumentation** — automatically discovers and activates installed instrumentor packages (OpenAI, Anthropic, Bedrock, LangChain, etc.)
 - **Scoring** — `score()` emits evaluation metrics as OTel spans at span, trace, or session level
 - **AWS SigV4** — built-in SigV4 signing for AWS-hosted OpenSearch and Data Prepper endpoints
@@ -14,7 +15,7 @@ OTel-native tracing and scoring for LLM applications. Instrument your AI workflo
 ## Requirements
 
 - **Python**: 3.10, 3.11, 3.12, or 3.13
-- **OpenTelemetry SDK**: ≥1.20.0, <2
+- **OpenTelemetry SDK**: >=1.20.0, <2
 
 ## Installation
 
@@ -46,72 +47,82 @@ pip install opensearch-genai-observability-sdk-py[all]
 ## Quick Start
 
 ```python
-from opensearch_genai_observability_sdk_py import register, workflow, agent, tool, score
+from opensearch_genai_observability_sdk_py import register, observe, Op, enrich, score
 
 # 1. Initialize tracing (one line)
-# Defaults to Data Prepper at http://localhost:21890/opentelemetry/v1/traces.
-# Set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 for an OTel Collector.
-register()
+register(endpoint="http://localhost:21890/opentelemetry/v1/traces")
 
-# 2. Decorate your functions
-@tool("get_weather")
-def get_weather(city: str) -> dict:
-    """Fetch weather data for a city."""
-    return {"city": city, "temp": 22, "condition": "sunny"}
+# 2. Trace your functions
+@observe(name="web_search", op=Op.EXECUTE_TOOL)
+def search(query: str) -> list[dict]:
+    return [{"title": f"Result for: {query}"}]
 
-@agent("weather_assistant")
-def assistant(query: str) -> str:
-    data = get_weather("Paris")
-    return f"{data['condition']}, {data['temp']}C"
+@observe(name="research_agent", op=Op.INVOKE_AGENT)
+def research(query: str) -> str:
+    results = search(query)
+    enrich(model="gpt-4.1", provider="openai", input_tokens=150, output_tokens=50)
+    return f"Summary of: {results}"
 
-@workflow("weather_query")
-def run(query: str) -> str:
-    return assistant(query)
+# 3. Use context managers for inline blocks
+@observe(name="qa_pipeline", op=Op.INVOKE_AGENT)
+def run(question: str) -> str:
+    answer = research(question)
+    with observe("safety_check", op="guardrail"):
+        enrich(safe=True)
+    return answer
 
-result = run("What's the weather?")
+result = run("What is OpenSearch?")
 
-# 3. Submit scores (after workflow completes)
+# 4. Submit scores (after workflow completes)
 score(name="relevance", value=0.95, trace_id="...", source="llm-judge")
+```
+
+This produces the following span tree:
+
+```
+invoke_agent qa_pipeline
+├── invoke_agent research_agent
+│   └── execute_tool web_search
+└── safety_check
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  Your Application                    │
-│                                                      │
-│  @workflow ─→ @agent ─→ @tool    score()            │
-│     │            │         │        │                │
-│     └────────────┴─────────┴────────┘                │
-│                     │                                │
-│            opensearch-genai-observability-sdk-py                    │
-├─────────────────────────────────────────────────────┤
-│  register()                                          │
-│  ┌─────────────────────────────────────────────┐    │
-│  │  TracerProvider                              │    │
-│  │  ├── Resource (service.name)                 │    │
-│  │  ├── BatchSpanProcessor                      │    │
-│  │  │   └── OTLPSpanExporter (HTTP or gRPC)     │    │
-│  │  │       └── SigV4 signing (AWS endpoints)   │    │
-│  │  └── Auto-instrumentation                    │    │
-│  │      ├── openai, anthropic, bedrock, ...     │    │
-│  │      ├── langchain, llamaindex, haystack     │    │
-│  │      └── chromadb, pinecone, qdrant, ...     │    │
-│  └─────────────────────────────────────────────┘    │
-└──────────────────────┬──────────────────────────────┘
-                       │ OTLP (HTTP/gRPC)
-                       ▼
-              ┌─────────────────┐
-              │  Data Prepper /  │
-              │  OTel Collector  │
-              └────────┬────────┘
-                       │
-                       ▼
-              ┌─────────────────┐
-              │   OpenSearch     │
-              │  ├── traces      │
-              │  └── scores      │
-              └─────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                   Your Application                    │
+│                                                       │
+│  @observe(op=Op.INVOKE_AGENT)   enrich()   score()   │
+│  with observe("step", op=...)                         │
+│                     │                                 │
+│         opensearch-genai-observability-sdk-py         │
+├──────────────────────────────────────────────────────┤
+│  register()                                           │
+│  ┌──────────────────────────────────────────────┐    │
+│  │  TracerProvider                               │    │
+│  │  ├── Resource (service.name)                  │    │
+│  │  ├── BatchSpanProcessor                       │    │
+│  │  │   └── OTLPSpanExporter (HTTP or gRPC)      │    │
+│  │  │       └── SigV4 signing (AWS endpoints)    │    │
+│  │  └── Auto-instrumentation                     │    │
+│  │      ├── openai, anthropic, bedrock, ...      │    │
+│  │      ├── langchain, llamaindex, haystack      │    │
+│  │      └── chromadb, pinecone, qdrant, ...      │    │
+│  └──────────────────────────────────────────────┘    │
+└───────────────────────┬──────────────────────────────┘
+                        │ OTLP (HTTP/gRPC)
+                        ▼
+               ┌─────────────────┐
+               │  Data Prepper /  │
+               │  OTel Collector  │
+               └────────┬────────┘
+                        │
+                        ▼
+               ┌─────────────────┐
+               │   OpenSearch     │
+               │  ├── traces      │
+               │  └── scores      │
+               └─────────────────┘
 ```
 
 ## API Reference
@@ -168,45 +179,104 @@ register(
 
 `AWSSigV4OTLPExporter` is HTTP-only. AWS OSIS does not expose a gRPC endpoint.
 
-### Decorators
+### `observe()`
 
-Four decorators for tracing application logic. Each creates an OTel span with `gen_ai.*` semantic convention attributes.
+Single tracing primitive — works as both a **decorator** and a **context manager**. Creates an OTel span with GenAI semantic convention attributes.
 
-| Decorator | Use for | Operation name | Span name format |
+**As a decorator:**
+
+```python
+@observe(name="planner", op=Op.INVOKE_AGENT)
+def plan(query: str) -> str:
+    enrich(model="gpt-4.1")
+    return call_llm(query)
+
+# Without parentheses (uses function name, no op)
+@observe
+def my_function():
+    ...
+```
+
+**As a context manager:**
+
+```python
+with observe("thinking", op=Op.CHAT) as span:
+    enrich(model="gpt-4.1", input_tokens=1500)
+    result = call_llm(prompt)
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
 |---|---|---|---|
-| `@workflow("name")` | Top-level orchestration | `invoke_agent` | `name` |
-| `@task("name")` | Units of work | `invoke_agent` | `name` |
-| `@agent("name")` | Autonomous agent logic | `invoke_agent` | `invoke_agent name` |
-| `@tool("name")` | Tool/function calls | `execute_tool` | `execute_tool name` |
+| `name` | `str` | Function `__qualname__` (decorator) or `"unnamed"` (context manager) | Span name |
+| `op` | `str` | `None` | `gen_ai.operation.name` value. Use `Op` constants or any custom string |
+| `kind` | `SpanKind` | `INTERNAL` | OTel span kind. Use `SpanKind.CLIENT` for external service calls |
 
-All decorators accept `name` (defaults to function's `__qualname__`) and `version`.
+**Span naming:** When `op` is a well-known value, the span name is `"{op} {name}"` (e.g. `"invoke_agent planner"`). Custom ops follow the same pattern.
 
 **Attributes set automatically:**
 
-| Attribute | Set by |
+| Attribute | When set |
 |---|---|
-| `gen_ai.operation.name` | All decorators |
-| `gen_ai.agent.name` / `gen_ai.tool.name` | All decorators |
-| `gen_ai.input.messages` / `gen_ai.output.messages` | `@workflow`, `@task`, `@agent` |
-| `gen_ai.tool.call.arguments` / `gen_ai.tool.call.result` | `@tool` |
-| `gen_ai.tool.type` | `@tool` (always `"function"`) |
-| `gen_ai.tool.description` | `@tool` (from docstring, if present) |
-| `gen_ai.agent.version` | All decorators (when `version` is set) |
+| `gen_ai.operation.name` | When `op` is provided |
+| `gen_ai.agent.name` | All ops except `execute_tool` |
+| `gen_ai.tool.name` | When `op=Op.EXECUTE_TOOL` |
+| `gen_ai.input.messages` / `gen_ai.output.messages` | All ops except `execute_tool` (decorator only) |
+| `gen_ai.tool.call.arguments` / `gen_ai.tool.call.result` | When `op=Op.EXECUTE_TOOL` (decorator only) |
 
 **Supported function types:** sync, async, generators, async generators. Errors are captured as span status + exception events.
 
-```python
-@agent("research_agent", version=2)
-async def research(query: str) -> str:
-    """Agents create invoke_agent spans with gen_ai.agent.* attributes."""
-    result = await search_tool(query)
-    return summarize(result)
+### `Op`
 
-@tool("search")
-def search_tool(query: str) -> list:
-    """Docstring becomes gen_ai.tool.description. Input/output use gen_ai.tool.call.* attributes."""
-    return api.search(query)
+Constants for well-known `gen_ai.operation.name` values. Any custom string is also accepted.
+
+| Constant | Value | Use for |
+|---|---|---|
+| `Op.CHAT` | `"chat"` | LLM chat completions |
+| `Op.INVOKE_AGENT` | `"invoke_agent"` | Agent invocations |
+| `Op.CREATE_AGENT` | `"create_agent"` | Agent creation/setup |
+| `Op.EXECUTE_TOOL` | `"execute_tool"` | Tool/function calls |
+| `Op.RETRIEVAL` | `"retrieval"` | RAG retrieval steps |
+| `Op.EMBEDDINGS` | `"embeddings"` | Embedding generation |
+| `Op.GENERATE_CONTENT` | `"generate_content"` | Content generation |
+| `Op.TEXT_COMPLETION` | `"text_completion"` | Text completions |
+
+Custom strings work too: `@observe(name="check", op="guardrail")`.
+
+### `enrich()`
+
+Add GenAI semantic convention attributes to the currently active span. Call from inside an `@observe`-decorated function or a `with observe(...)` block.
+
+```python
+@observe(name="chat", op=Op.CHAT)
+def chat(prompt: str) -> str:
+    result = call_llm(prompt)
+    enrich(
+        model="gpt-4.1",
+        provider="openai",
+        input_tokens=150,
+        output_tokens=50,
+        temperature=0.7,
+    )
+    return result
 ```
+
+**Parameters:**
+
+| Parameter | Attribute | Description |
+|---|---|---|
+| `model` | `gen_ai.request.model` | Model name |
+| `provider` | `gen_ai.system` | Provider name (openai, anthropic, etc.) |
+| `input_tokens` | `gen_ai.usage.input_tokens` | Input token count |
+| `output_tokens` | `gen_ai.usage.output_tokens` | Output token count |
+| `total_tokens` | `gen_ai.usage.total_tokens` | Total token count |
+| `response_id` | `gen_ai.response.id` | Response/completion ID |
+| `finish_reason` | `gen_ai.response.finish_reasons` | Finish reason(s) |
+| `temperature` | `gen_ai.request.temperature` | Temperature setting |
+| `max_tokens` | `gen_ai.request.max_tokens` | Max tokens setting |
+| `session_id` | `gen_ai.session.id` | Session/conversation ID |
+| `**extra` | As provided | Any additional key-value attributes |
 
 ### `score()`
 
@@ -279,6 +349,18 @@ Scores follow the OTel GenAI semantic conventions with `gen_ai.evaluation.*` att
 | `AWS_DEFAULT_REGION` | AWS region for SigV4 signing | auto-detected |
 
 When no endpoint env var is set, `register()` defaults to the Data Prepper endpoint: `http://localhost:21890/opentelemetry/v1/traces`.
+
+## Examples
+
+See the [`examples/`](examples/) directory:
+
+| Example | Description |
+|---|---|
+| [`01_tracing_basics.py`](examples/01_tracing_basics.py) | `@observe` decorator, context manager, `enrich()` |
+| [`02_scoring.py`](examples/02_scoring.py) | Span-level, trace-level, and session-level scoring |
+| [`03_aws_sigv4.py`](examples/03_aws_sigv4.py) | AWS SigV4 authentication with `AWSSigV4OTLPExporter` |
+| [`04_async_tracing.py`](examples/04_async_tracing.py) | Async function tracing with `@observe` |
+| [`05_openai_auto_instrument.py`](examples/05_openai_auto_instrument.py) | OpenAI auto-instrumentation via `register()` |
 
 ## License
 
