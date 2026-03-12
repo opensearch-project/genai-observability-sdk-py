@@ -40,10 +40,14 @@ BOLD = "\033[1m"
 DIM = "\033[2m"
 
 SPAN_KIND_MAP = {
-    "workflow": f"{MAGENTA}workflow{RESET}",
+    "chat": f"{GREEN}chat{RESET}",
     "invoke_agent": f"{CYAN}agent{RESET}",
-    "task": f"{GREEN}task{RESET}",
+    "create_agent": f"{CYAN}create_agent{RESET}",
     "execute_tool": f"{YELLOW}tool{RESET}",
+    "retrieval": f"{MAGENTA}retrieval{RESET}",
+    "embeddings": f"{MAGENTA}embeddings{RESET}",
+    "generate_content": f"{GREEN}generate{RESET}",
+    "text_completion": f"{GREEN}completion{RESET}",
 }
 
 
@@ -95,8 +99,16 @@ def print_span(span, resource_attrs: dict):
 
     # Print interesting attributes
     for key in [
-        "gen_ai.entity.input",
-        "gen_ai.entity.output",
+        "gen_ai.system",
+        "gen_ai.request.model",
+        "gen_ai.agent.name",
+        "gen_ai.agent.id",
+        "gen_ai.tool.name",
+        "gen_ai.usage.input_tokens",
+        "gen_ai.usage.output_tokens",
+        "gen_ai.response.finish_reasons",
+        "gen_ai.input.messages",
+        "gen_ai.output.messages",
         "gen_ai.tool.call.arguments",
         "gen_ai.tool.call.result",
         "gen_ai.evaluation.name",
@@ -117,8 +129,9 @@ def print_span(span, resource_attrs: dict):
 
 
 @app.post("/v1/traces")
+@app.post("/opentelemetry/v1/traces")
 async def receive_traces(request: Request):
-    """OTLP/HTTP trace receiver."""
+    """OTLP/HTTP trace receiver (accepts both OTel Collector and Data Prepper paths)."""
     body = await request.body()
 
     req = ExportTraceServiceRequest()
@@ -151,9 +164,12 @@ if __name__ == "__main__":
     print(f"{BOLD}{'=' * 70}{RESET}")
     print(f"{BOLD}  Mini OTEL Collector — HTTP on port 4318{RESET}")
     print(f"{BOLD}{'=' * 70}{RESET}")
-    print("  Listening: http://0.0.0.0:4318/v1/traces")
+    print("  Listening:")
+    print("    http://0.0.0.0:4318/v1/traces                    (OTel Collector)")
+    print("    http://0.0.0.0:4318/opentelemetry/v1/traces      (Data Prepper)")
     print("  Protocol:  OTLP/HTTP (protobuf)")
     print()
-    print("  Test with: python examples/agent_http.py")
+    print("  Test with:")
+    print("    python examples/multi_agent_planner/run.py")
     print(f"{BOLD}{'=' * 70}{RESET}\n")
     uvicorn.run(app, host="0.0.0.0", port=4318, log_level="warning")  # noqa: S104

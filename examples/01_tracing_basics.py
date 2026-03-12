@@ -9,22 +9,19 @@
 
 """Basic tracing with opensearch-genai-observability-sdk-py.
 
-Shows how to register the SDK and trace custom functions
-with @workflow, @task, @agent, and @tool decorators.
+Shows how to register the SDK, trace functions with @observe,
+use observe() as a context manager, and enrich spans with
+GenAI semantic convention attributes.
 """
 
-from opensearch_genai_observability_sdk_py import agent, register, task, tool, workflow
+from opensearch_genai_observability_sdk_py import Op, enrich, observe, register
 
 # --- Setup ---
-# Local Data Prepper
 register(endpoint="http://localhost:21890/opentelemetry/v1/traces")
 
-# AWS-hosted (SigV4 is auto-detected from the hostname)
-# register(endpoint="https://my-pipeline.us-east-1.osis.amazonaws.com/v1/traces")
 
-
-# --- Decorators ---
-@tool(name="web_search")
+# --- Decorator: trace a tool ---
+@observe(name="web_search", op=Op.EXECUTE_TOOL)
 def search(query: str) -> list[dict]:
     """Simulated web search tool."""
     return [
@@ -32,24 +29,30 @@ def search(query: str) -> list[dict]:
     ]
 
 
-@task(name="summarize")
-def summarize(text: str) -> str:
-    """Simulated LLM summarization."""
-    return f"Summary of: {text[:100]}"
-
-
-@agent(name="research_agent")
+# --- Decorator: trace an agent with enrichment ---
+@observe(name="research_agent", op=Op.INVOKE_AGENT)
 def research(query: str) -> str:
-    """Agent that searches, then summarizes."""
+    """Agent that searches, then summarizes via LLM."""
     results = search(query)
     titles = ", ".join(r["title"] for r in results)
-    return summarize(titles)
+
+    # Enrich the agent span with model details
+    enrich(model="gpt-4.1", provider="openai", input_tokens=150, output_tokens=50)
+
+    return f"Summary of: {titles[:100]}"
 
 
-@workflow(name="qa_pipeline")
+# --- Context manager: trace inline blocks ---
+@observe(name="qa_pipeline", op=Op.INVOKE_AGENT)
 def run_pipeline(question: str) -> str:
-    """Top-level workflow that orchestrates the agent."""
+    """Top-level agent that orchestrates the research."""
     answer = research(question)
+
+    # Trace an inline step (e.g., a guardrail check)
+    with observe("safety_check", op="guardrail"):
+        is_safe = True  # simulated check
+        enrich(safe=is_safe)
+
     return answer
 
 
@@ -60,7 +63,7 @@ if __name__ == "__main__":
 
     # Produces this span tree:
     #
-    #   qa_pipeline          (workflow)
-    #   └── research_agent   (agent)
-    #       ├── web_search   (tool)
-    #       └── summarize    (task)
+    #   invoke_agent qa_pipeline             (@observe, op=INVOKE_AGENT)
+    #   ├── invoke_agent research_agent      (@observe, op=INVOKE_AGENT)
+    #   │   └── execute_tool web_search      (@observe, op=EXECUTE_TOOL)
+    #   └── safety_check                     (context manager, op="guardrail")

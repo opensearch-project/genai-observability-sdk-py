@@ -15,7 +15,7 @@ pass AWSSigV4OTLPExporter directly to register() via the exporter= parameter.
 Requires: pip install opensearch-genai-observability-sdk-py[aws]
 """
 
-from opensearch_genai_observability_sdk_py import register, score, workflow
+from opensearch_genai_observability_sdk_py import Op, observe, register, score
 from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
 
 ENDPOINT = "https://my-pipeline.us-east-1.osis.amazonaws.com/v1/traces"
@@ -32,7 +32,7 @@ register(
 )
 
 
-@workflow(name="qa_pipeline")
+@observe(name="qa_pipeline", op=Op.INVOKE_AGENT)
 def run(question: str) -> str:
     return f"Answer to: {question}"
 
