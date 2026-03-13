@@ -74,7 +74,7 @@ def run(question: str) -> str:
 result = run("What is OpenSearch?")
 
 # 4. Submit scores (after workflow completes)
-score(name="relevance", value=0.95, trace_id="...", source="llm-judge")
+score(name="relevance", value=0.95, trace_id="...")
 ```
 
 This produces the following span tree:
@@ -294,7 +294,6 @@ score(
     trace_id="6ebb9835f43af1552f2cebb9f5165e39",
     span_id="89829115c2128845",
     explanation="Weather data matches ground truth",
-    source="heuristic",
 )
 
 # Trace-level: score the entire trace (score attaches to the root span)
@@ -303,7 +302,10 @@ score(
     value=0.92,
     trace_id="6ebb9835f43af1552f2cebb9f5165e39",
     explanation="Response addresses the user's query",
-    source="llm-judge",
+    attributes={
+        "test.suite.name": "nightly_eval",
+        "test.case.result.status": "pass",
+    },
 )
 ```
 
@@ -318,8 +320,7 @@ score(
 | `label` | `str` | Human-readable label (`"pass"`, `"relevant"`, `"correct"`) |
 | `explanation` | `str` | Evaluator justification (truncated to 500 chars) |
 | `response_id` | `str` | LLM completion ID for correlation |
-| `source` | `str` | Score origin: `"sdk"`, `"human"`, `"llm-judge"`, `"heuristic"` |
-| `metadata` | `dict` | Arbitrary key-value metadata |
+| `attributes` | `dict` | Additional span attributes (keys used as-is, e.g. `test.*` from [semantic-conventions#3398](https://github.com/open-telemetry/semantic-conventions/issues/3398)) |
 
 Scores follow the OTel GenAI semantic conventions with `gen_ai.evaluation.*` attributes.
 

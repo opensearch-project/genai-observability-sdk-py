@@ -157,16 +157,6 @@ class TestScoreAttributes:
         span = exporter.get_finished_spans()[0]
         assert "gen_ai.evaluation.explanation" not in span.attributes
 
-    def test_source_default(self, exporter):
-        score(name="test", value=0.5)
-        span = exporter.get_finished_spans()[0]
-        assert span.attributes["gen_ai.evaluation.source"] == "sdk"
-
-    def test_source_override(self, exporter):
-        score(name="test", value=0.8, source="llm-judge")
-        span = exporter.get_finished_spans()[0]
-        assert span.attributes["gen_ai.evaluation.source"] == "llm-judge"
-
     def test_response_id(self, exporter):
         score(name="test", response_id="chatcmpl-abc123")
         span = exporter.get_finished_spans()[0]
@@ -177,17 +167,23 @@ class TestScoreAttributes:
         span = exporter.get_finished_spans()[0]
         assert "gen_ai.response.id" not in span.attributes
 
-    def test_metadata(self, exporter):
-        score(name="test", value=0.5, metadata={"model": "gpt-4", "temperature": 0.7})
+    def test_attributes_passthrough(self, exporter):
+        score(
+            name="test",
+            value=0.9,
+            attributes={
+                "test.suite.run.id": "run_001",
+                "test.case.id": "case_001",
+            },
+        )
         span = exporter.get_finished_spans()[0]
-        assert span.attributes["gen_ai.evaluation.metadata.model"] == "gpt-4"
-        assert span.attributes["gen_ai.evaluation.metadata.temperature"] == "0.7"
+        assert span.attributes["test.suite.run.id"] == "run_001"
+        assert span.attributes["test.case.id"] == "case_001"
 
-    def test_no_metadata(self, exporter):
+    def test_no_attributes(self, exporter):
         score(name="test", value=0.5)
         span = exporter.get_finished_spans()[0]
-        meta_keys = [k for k in span.attributes if k.startswith("gen_ai.evaluation.metadata.")]
-        assert meta_keys == []
+        assert "test.suite.run.id" not in span.attributes
 
 
 # ---------------------------------------------------------------------------
