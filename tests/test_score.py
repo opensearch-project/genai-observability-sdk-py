@@ -36,6 +36,35 @@ class TestSpanStructure:
         span = exporter.get_finished_spans()[0]
         assert span.attributes["gen_ai.evaluation.name"] == "factuality"
 
+    def test_event_emitted(self, exporter):
+        score(name="relevance", value=0.9)
+        span = exporter.get_finished_spans()[0]
+        assert len(span.events) == 1
+        assert span.events[0].name == "gen_ai.evaluation.result"
+
+    def test_event_attributes(self, exporter):
+        score(
+            name="helpfulness",
+            value=0.83,
+            label="Very helpful",
+            explanation="Good response",
+            response_id="resp_123",
+        )
+        span = exporter.get_finished_spans()[0]
+        event = span.events[0]
+        assert event.attributes["gen_ai.evaluation.name"] == "helpfulness"
+        assert event.attributes["gen_ai.evaluation.score.value"] == 0.83
+        assert event.attributes["gen_ai.evaluation.score.label"] == "Very helpful"
+        assert event.attributes["gen_ai.evaluation.explanation"] == "Good response"
+        assert event.attributes["gen_ai.response.id"] == "resp_123"
+
+    def test_event_minimal(self, exporter):
+        score(name="accuracy")
+        span = exporter.get_finished_spans()[0]
+        event = span.events[0]
+        assert event.attributes["gen_ai.evaluation.name"] == "accuracy"
+        assert "gen_ai.evaluation.score.value" not in event.attributes
+
 
 # ---------------------------------------------------------------------------
 # Span-level scoring — score span is a child of the evaluated span

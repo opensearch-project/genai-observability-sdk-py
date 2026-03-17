@@ -53,6 +53,11 @@ def score(
     evaluated trace, so scores appear in the same trace waterfall as the
     spans they evaluate.
 
+    The span also emits a ``gen_ai.evaluation.result`` event per the
+    `OTel GenAI semantic conventions
+    <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-events/#event-gen_aievaluationresult>`_.
+    This provides both queryable span attributes and spec-compliant events.
+
     Attributes follow the OTel GenAI semantic conventions:
     - ``gen_ai.evaluation.result`` event (merged):
       ``gen_ai.evaluation.name``, ``gen_ai.evaluation.score.value``,
@@ -114,29 +119,41 @@ def score(
     """
     tracer = trace.get_tracer(_TRACER_NAME)
 
-    attrs: dict[str, Any] = {
+    # Span attributes: operation context + passthrough attrs
+    span_attrs: dict[str, Any] = {
         "gen_ai.operation.name": "evaluation",
         "gen_ai.evaluation.name": name,
     }
-
     if value is not None:
-        attrs["gen_ai.evaluation.score.value"] = value
+        span_attrs["gen_ai.evaluation.score.value"] = value
     if label:
-        attrs["gen_ai.evaluation.score.label"] = label
+        span_attrs["gen_ai.evaluation.score.label"] = label
     if explanation:
-        attrs["gen_ai.evaluation.explanation"] = explanation[:500]
+        span_attrs["gen_ai.evaluation.explanation"] = explanation[:500]
     if response_id:
-        attrs["gen_ai.response.id"] = response_id
+        span_attrs["gen_ai.response.id"] = response_id
     if attributes:
-        attrs.update(attributes)
+        span_attrs.update(attributes)
+
+    # Event attributes per gen_ai.evaluation.result semconv
+    event_attrs: dict[str, Any] = {"gen_ai.evaluation.name": name}
+    if value is not None:
+        event_attrs["gen_ai.evaluation.score.value"] = value
+    if label:
+        event_attrs["gen_ai.evaluation.score.label"] = label
+    if explanation:
+        event_attrs["gen_ai.evaluation.explanation"] = explanation[:500]
+    if response_id:
+        event_attrs["gen_ai.response.id"] = response_id
 
     ctx = _build_parent_context(trace_id, span_id)
 
     with tracer.start_as_current_span(
         f"evaluation {name}",
         context=ctx,
-        attributes=attrs,
-    ):
+        attributes=span_attrs,
+    ) as span:
+        span.add_event("gen_ai.evaluation.result", attributes=event_attrs)
         logger.debug("Score emitted: %s=%s (trace=%s)", name, value, trace_id)
 
 
