@@ -423,6 +423,7 @@ See the [`examples/`](examples/) directory:
 | [`03_aws_sigv4.py`](examples/03_aws_sigv4.py) | AWS SigV4 authentication with `AWSSigV4OTLPExporter` |
 | [`04_async_tracing.py`](examples/04_async_tracing.py) | Async function tracing with `@observe` |
 | [`05_openai_auto_instrument.py`](examples/05_openai_auto_instrument.py) | OpenAI auto-instrumentation via `register()` |
+| [`06_retrieval_and_eval.py`](examples/06_retrieval_and_eval.py) | Retrieve traces from OpenSearch, evaluate, write scores back |
 
 ## License
 
