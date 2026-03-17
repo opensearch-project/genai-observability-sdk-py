@@ -200,7 +200,7 @@ class OpenSearchTraceRetriever:
         self._index = index
 
     @staticmethod
-    def _get_requests_connection():
+    def _get_requests_connection() -> Any:
         from opensearchpy import RequestsHttpConnection
 
         return RequestsHttpConnection
