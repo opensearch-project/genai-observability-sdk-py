@@ -16,6 +16,7 @@ from opensearch_genai_observability_sdk_py.enrich import enrich
 from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
 from opensearch_genai_observability_sdk_py.observe import Op, observe
 from opensearch_genai_observability_sdk_py.register import register
+from opensearch_genai_observability_sdk_py.retrieval import OpenSearchTraceRetriever
 from opensearch_genai_observability_sdk_py.score import score
 
 __all__ = [
@@ -27,6 +28,8 @@ __all__ = [
     "enrich",
     # Scoring
     "score",
+    # Retrieval
+    "OpenSearchTraceRetriever",
     # Exporters
     "AWSSigV4OTLPExporter",
 ]
