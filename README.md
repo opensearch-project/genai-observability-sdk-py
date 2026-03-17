@@ -322,7 +322,68 @@ score(
 | `response_id` | `str` | LLM completion ID for correlation |
 | `attributes` | `dict` | Additional span attributes (keys used as-is, e.g. `test.*` from [semantic-conventions#3398](https://github.com/open-telemetry/semantic-conventions/issues/3398)) |
 
-Scores follow the OTel GenAI semantic conventions with `gen_ai.evaluation.*` attributes.
+Scores follow the OTel GenAI semantic conventions with `gen_ai.evaluation.*` attributes. Each score span also emits a `gen_ai.evaluation.result` event per the [OTel GenAI event spec](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-events/#event-gen_aievaluationresult).
+
+### `OpenSearchTraceRetriever`
+
+Retrieves GenAI trace spans from OpenSearch. Works with any agent library that emits OTel GenAI semantic convention spans indexed by Data Prepper into `otel-v1-apm-span-*`.
+
+```python
+from opensearch_genai_observability_sdk_py import OpenSearchTraceRetriever
+
+# Option 1: Basic auth (local / docker-compose)
+retriever = OpenSearchTraceRetriever(
+    host="https://localhost:9200",
+    auth=("admin", "admin"),
+    verify_certs=False,
+)
+
+# Option 2: AWS OpenSearch Service (SigV4) — use this OR Option 1, not both
+import boto3
+from opensearchpy import RequestsAWSV4SignerAuth
+
+credentials = boto3.Session().get_credentials()
+auth = RequestsAWSV4SignerAuth(credentials, "us-west-2", "es")
+retriever = OpenSearchTraceRetriever(
+    host="https://search-my-domain.us-west-2.es.amazonaws.com",
+    auth=auth,
+)
+
+# Retrieve all spans for a session or trace
+session = retriever.get_traces("my-conversation-id")
+for trace in session.traces:
+    for span in trace.spans:
+        print(f"{span.operation_name}: {span.name} ({span.model})")
+
+# List recent root spans (for discovering traces to evaluate)
+roots = retriever.list_root_spans(services=["my-agent"], max_results=10)
+
+# Filter by time
+from datetime import datetime
+roots = retriever.list_root_spans(services=["my-agent"], since=datetime(2026, 3, 16))
+
+# Check which traces already have evaluation spans
+evaluated = retriever.find_evaluated_trace_ids(["trace-id-1", "trace-id-2"])
+```
+
+**Constructor:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `host` | `str` | `"https://localhost:9200"` | OpenSearch endpoint |
+| `index` | `str` | `"otel-v1-apm-span-*"` | Index pattern for span data |
+| `auth` | `tuple \| RequestsAWSV4SignerAuth` | `None` | Basic auth tuple or SigV4 auth |
+| `verify_certs` | `bool` | `True` | Verify TLS certificates |
+
+**Methods:**
+
+| Method | Returns | Description |
+|---|---|---|
+| `get_traces(identifier, max_spans=10000)` | `SessionRecord` | Fetch spans by conversation ID or trace ID |
+| `list_root_spans(services=None, since=None, max_results=50)` | `list[SpanRecord]` | List recent root spans, optionally filtered by service |
+| `find_evaluated_trace_ids(trace_ids)` | `set[str]` | Return subset of trace IDs that already have evaluation spans |
+
+Requires the `[opensearch]` extra: `pip install opensearch-genai-observability-sdk-py[opensearch]`
 
 ## Auto-Instrumented Libraries
 
