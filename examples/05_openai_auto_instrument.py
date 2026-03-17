@@ -51,7 +51,7 @@ if __name__ == "__main__":
     #   invoke_agent chat                  (@observe, op=INVOKE_AGENT)
     #   └── openai.chat.completions        (auto-instrumented)
     #       Attributes:
-    #         gen_ai.system = "openai"
+    #         gen_ai.provider.name = "openai"
     #         gen_ai.request.model = "gpt-4o-mini"
     #         gen_ai.usage.input_tokens = 12
     #         gen_ai.usage.output_tokens = 87

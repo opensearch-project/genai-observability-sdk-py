@@ -208,6 +208,42 @@ class TestRegister:
         )
         mock_create_grpc.assert_called_once()
 
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_register_sets_service_version(self, mock_create_http):
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from opensearch_genai_observability_sdk_py.register import register
+
+        mock_create_http.return_value = MagicMock()
+        provider = register(
+            service_version="1.0.0", set_global=False, auto_instrument=False
+        )
+        assert isinstance(provider, TracerProvider)
+        resource_attrs = dict(provider.resource.attributes)
+        assert resource_attrs["service.version"] == "1.0.0"
+
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_register_service_version_from_env(self, mock_create_http, monkeypatch):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        monkeypatch.setenv("OTEL_SERVICE_VERSION", "2.0.0")
+        mock_create_http.return_value = MagicMock()
+        provider = register(set_global=False, auto_instrument=False)
+        resource_attrs = dict(provider.resource.attributes)
+        assert resource_attrs["service.version"] == "2.0.0"
+
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_register_service_version_param_over_env(self, mock_create_http, monkeypatch):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        monkeypatch.setenv("OTEL_SERVICE_VERSION", "2.0.0")
+        mock_create_http.return_value = MagicMock()
+        provider = register(
+            service_version="3.0.0", set_global=False, auto_instrument=False
+        )
+        resource_attrs = dict(provider.resource.attributes)
+        assert resource_attrs["service.version"] == "3.0.0"
+
     def test_register_uses_custom_exporter(self):
         from opensearch_genai_observability_sdk_py.register import register
 

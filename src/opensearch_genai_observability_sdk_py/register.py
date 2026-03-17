@@ -90,6 +90,7 @@ def register(
     protocol: Literal["http", "grpc"] | None = None,
     project_name: str | None = None,
     service_name: str | None = None,
+    service_version: str | None = None,
     batch: bool = True,
     auto_instrument: bool = True,
     exporter: SpanExporter | None = None,
@@ -147,6 +148,9 @@ def register(
             Defaults to ``OTEL_SERVICE_NAME`` or ``OPENSEARCH_PROJECT``
             env var, or ``"default"``.
         service_name: Alias for ``project_name``.
+        service_version: Version string for the service (e.g. ``"1.0.0"``).
+            Sets the ``service.version`` resource attribute. When omitted,
+            resolved from ``OTEL_SERVICE_VERSION`` env var.
         batch: Use ``BatchSpanProcessor`` (``True``) or
             ``SimpleSpanProcessor`` (``False``). Batch is recommended for
             production.
@@ -201,7 +205,11 @@ def register(
     )
 
     # Step 1: Create Resource (identity tag for all spans)
-    resource = Resource.create({"service.name": name})
+    version = service_version or os.environ.get("OTEL_SERVICE_VERSION")
+    resource_attrs: dict[str, str] = {"service.name": name}
+    if version:
+        resource_attrs["service.version"] = version
+    resource = Resource.create(resource_attrs)
 
     # Step 2: Create TracerProvider
     provider = TracerProvider(resource=resource)

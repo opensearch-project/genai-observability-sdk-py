@@ -79,7 +79,7 @@ def enrich(
         model: Model identifier (e.g. ``"gpt-4.1"``, ``"claude-sonnet-4-6"``).
             Sets ``gen_ai.request.model``.
         provider: Provider/system name (e.g. ``"openai"``, ``"anthropic"``).
-            Sets ``gen_ai.system``.
+            Sets ``gen_ai.provider.name``.
         input_tokens: Number of input/prompt tokens.
             Sets ``gen_ai.usage.input_tokens``.
         output_tokens: Number of output/completion tokens.
@@ -117,7 +117,7 @@ def enrich(
 
     attr_map: dict[str, Any] = {
         "gen_ai.request.model": model,
-        "gen_ai.system": provider,
+        "gen_ai.provider.name": provider,
         "gen_ai.usage.input_tokens": input_tokens,
         "gen_ai.usage.output_tokens": output_tokens,
         "gen_ai.usage.total_tokens": total_tokens,
