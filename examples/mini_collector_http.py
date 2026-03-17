@@ -99,7 +99,7 @@ def print_span(span, resource_attrs: dict):
 
     # Print interesting attributes
     for key in [
-        "gen_ai.system",
+        "gen_ai.provider.name",
         "gen_ai.request.model",
         "gen_ai.agent.name",
         "gen_ai.agent.id",

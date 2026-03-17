@@ -267,7 +267,7 @@ def chat(prompt: str) -> str:
 | Parameter | Attribute | Description |
 |---|---|---|
 | `model` | `gen_ai.request.model` | Model name |
-| `provider` | `gen_ai.system` | Provider name (openai, anthropic, etc.) |
+| `provider` | `gen_ai.provider.name` | Provider name (openai, anthropic, etc.) |
 | `input_tokens` | `gen_ai.usage.input_tokens` | Input token count |
 | `output_tokens` | `gen_ai.usage.output_tokens` | Output token count |
 | `total_tokens` | `gen_ai.usage.total_tokens` | Total token count |

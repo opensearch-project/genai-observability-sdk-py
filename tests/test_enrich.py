@@ -29,7 +29,7 @@ class TestEnrichInDecorator:
         fn()
         span = exporter.get_finished_spans()[0]
         assert span.attributes["gen_ai.request.model"] == "gpt-4.1"
-        assert span.attributes["gen_ai.system"] == "openai"
+        assert span.attributes["gen_ai.provider.name"] == "openai"
 
     def test_token_usage(self, exporter):
         @observe(name="agent", op=Op.INVOKE_AGENT)
@@ -137,7 +137,7 @@ class TestEnrichInDecorator:
         fn()
         span = exporter.get_finished_spans()[0]
         assert span.attributes["gen_ai.request.model"] == "gpt-4.1"
-        assert "gen_ai.system" not in span.attributes
+        assert "gen_ai.provider.name" not in span.attributes
         assert "gen_ai.usage.input_tokens" not in span.attributes
 
 
@@ -164,7 +164,7 @@ class TestEnrichInContextManager:
 
         span = exporter.get_finished_spans()[0]
         assert span.attributes["gen_ai.request.model"] == "gpt-4.1"
-        assert span.attributes["gen_ai.system"] == "openai"
+        assert span.attributes["gen_ai.provider.name"] == "openai"
         assert span.attributes["gen_ai.usage.input_tokens"] == 1500
         assert span.attributes["gen_ai.usage.output_tokens"] == 200
         assert span.attributes["gen_ai.response.id"] == "chatcmpl-456"
