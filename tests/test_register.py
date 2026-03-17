@@ -215,9 +215,7 @@ class TestRegister:
         from opensearch_genai_observability_sdk_py.register import register
 
         mock_create_http.return_value = MagicMock()
-        provider = register(
-            service_version="1.0.0", set_global=False, auto_instrument=False
-        )
+        provider = register(service_version="1.0.0", set_global=False, auto_instrument=False)
         assert isinstance(provider, TracerProvider)
         resource_attrs = dict(provider.resource.attributes)
         assert resource_attrs["service.version"] == "1.0.0"
@@ -238,9 +236,7 @@ class TestRegister:
 
         monkeypatch.setenv("OTEL_SERVICE_VERSION", "2.0.0")
         mock_create_http.return_value = MagicMock()
-        provider = register(
-            service_version="3.0.0", set_global=False, auto_instrument=False
-        )
+        provider = register(service_version="3.0.0", set_global=False, auto_instrument=False)
         resource_attrs = dict(provider.resource.attributes)
         assert resource_attrs["service.version"] == "3.0.0"
 
