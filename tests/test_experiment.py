@@ -12,7 +12,6 @@
 import pytest
 
 from opensearch_genai_observability_sdk_py.experiment import (
-    CaseResult,
     EvaluateResult,
     Experiment,
     ExperimentSummary,
@@ -20,7 +19,6 @@ from opensearch_genai_observability_sdk_py.experiment import (
     _make_case_id,
     evaluate,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -407,7 +405,7 @@ class TestEvaluate:
         assert len(result.cases) == 2
 
     def test_evaluate_creates_spans(self, exporter):
-        result = evaluate(
+        evaluate(
             name="span-eval",
             task=lambda x: x,
             data=[{"input": "q1"}],
@@ -468,7 +466,7 @@ class TestEvaluate:
         assert result.cases[0].scores == {"a": 0.9, "b": 0.8}
 
     def test_evaluate_record_io(self, exporter):
-        result = evaluate(
+        evaluate(
             name="io-eval",
             task=lambda x: f"answer: {x}",
             data=[{"input": "question", "expected": "answer"}],
@@ -485,7 +483,7 @@ class TestEvaluate:
         assert '"answer: question"' in case.attributes["test.case.output"]
 
     def test_evaluate_case_id_from_data(self, exporter):
-        result = evaluate(
+        evaluate(
             name="cid-eval",
             task=lambda x: x,
             data=[{"input": "q1", "case_id": "my_custom_id"}],
