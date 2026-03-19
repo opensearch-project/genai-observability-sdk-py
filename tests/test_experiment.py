@@ -34,9 +34,7 @@ def _get_spans_by_name(exporter, name):
 
 def _get_root_span(exporter, experiment_name):
     return next(
-        s
-        for s in exporter.get_finished_spans()
-        if s.name == f"test_suite_run {experiment_name}"
+        s for s in exporter.get_finished_spans() if s.name == f"test_suite_run {experiment_name}"
     )
 
 
@@ -416,9 +414,7 @@ class TestEvaluate:
         assert root is not None
         assert root.attributes["test.suite.name"] == "span-eval"
 
-        case_spans = [
-            s for s in exporter.get_finished_spans() if s.name == "invoke_agent"
-        ]
+        case_spans = [s for s in exporter.get_finished_spans() if s.name == "invoke_agent"]
         assert len(case_spans) == 1
 
     def test_evaluate_task_error(self, exporter):
@@ -474,9 +470,7 @@ class TestEvaluate:
             record_io=True,
         )
 
-        case_spans = [
-            s for s in exporter.get_finished_spans() if s.name == "invoke_agent"
-        ]
+        case_spans = [s for s in exporter.get_finished_spans() if s.name == "invoke_agent"]
         case = case_spans[0]
         assert case.attributes["test.case.input"] == '"question"'
         assert case.attributes["test.case.expected"] == '"answer"'
@@ -490,9 +484,7 @@ class TestEvaluate:
             scores=[],
         )
 
-        case_spans = [
-            s for s in exporter.get_finished_spans() if s.name == "invoke_agent"
-        ]
+        case_spans = [s for s in exporter.get_finished_spans() if s.name == "invoke_agent"]
         assert case_spans[0].attributes["test.case.id"] == "my_custom_id"
 
     def test_evaluate_agent_spans_are_children(self, exporter):

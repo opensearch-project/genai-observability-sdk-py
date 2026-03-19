@@ -113,8 +113,7 @@ class ExperimentSummary:
         ]
         for s in self.scores.values():
             lines.append(
-                f"  {s.name:<20s} avg={s.avg:.2f}  min={s.min:.2f}"
-                f"  max={s.max:.2f}  (n={s.count})"
+                f"  {s.name:<20s} avg={s.avg:.2f}  min={s.min:.2f}  max={s.max:.2f}  (n={s.count})"
             )
         lines.append("=" * width)
         return "\n".join(lines)
@@ -156,9 +155,7 @@ def _make_run_id() -> str:
     return f"run_{ts}_{short_uuid}"
 
 
-def _build_span_link(
-    trace_id_hex: str, span_id_hex: str | None
-) -> Link | None:
+def _build_span_link(trace_id_hex: str, span_id_hex: str | None) -> Link | None:
     """Build an OTel span link from hex trace/span IDs."""
     try:
         trace_id_int = int(trace_id_hex, 16)
@@ -184,9 +181,7 @@ def _build_span_link(
     return Link(ctx)
 
 
-def _add_score_events(
-    span: trace.Span, scores: dict[str, float]
-) -> None:
+def _add_score_events(span: trace.Span, scores: dict[str, float]) -> None:
     """Emit gen_ai.evaluation.result events on a span."""
     for name, value in scores.items():
         event_attrs: dict[str, Any] = {
@@ -304,9 +299,7 @@ class Experiment:
         )
         self._root_context = trace.set_span_in_context(self._root_span)
 
-        logger.info(
-            "Experiment started: name=%s run_id=%s", name, self._run_id
-        )
+        logger.info("Experiment started: name=%s run_id=%s", name, self._run_id)
 
     @property
     def name(self) -> str:
@@ -439,9 +432,7 @@ class Experiment:
 
         self._closed = True
 
-        summary = _compute_summary(
-            self._name, self._run_id, self._cases, self._start_time
-        )
+        summary = _compute_summary(self._name, self._run_id, self._cases, self._start_time)
 
         # Set final status on root span
         has_errors = summary.error_count > 0
@@ -546,13 +537,9 @@ def evaluate(
 
         if record_io:
             if input_val is not None:
-                case_attrs["test.case.input"] = json.dumps(
-                    input_val, default=str
-                )[:10_000]
+                case_attrs["test.case.input"] = json.dumps(input_val, default=str)[:10_000]
             if expected_val is not None:
-                case_attrs["test.case.expected"] = json.dumps(
-                    expected_val, default=str
-                )[:10_000]
+                case_attrs["test.case.expected"] = json.dumps(expected_val, default=str)[:10_000]
 
         case_span = tracer.start_span(
             "invoke_agent",
@@ -636,9 +623,7 @@ def evaluate(
     # Finalize root span
     summary = _compute_summary(name, run_id, case_records, start_time)
     has_errors = summary.error_count > 0
-    root_span.set_attribute(
-        "test.suite.run.status", "failure" if has_errors else "success"
-    )
+    root_span.set_attribute("test.suite.run.status", "failure" if has_errors else "success")
     if has_errors:
         root_span.set_status(
             trace.StatusCode.ERROR,
