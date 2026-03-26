@@ -9,7 +9,8 @@
 
 """Tests for opensearch_genai_observability_sdk_py.score."""
 
-from opensearch_genai_observability_sdk_py.score import _parse_hex, score
+from opensearch_genai_observability_sdk_py._internal import parse_hex as _parse_hex
+from opensearch_genai_observability_sdk_py.score import score
 
 TRACE_ID = "6ebb9835f43af1552f2cebb9f5165e39"
 SPAN_ID = "89829115c2128845"

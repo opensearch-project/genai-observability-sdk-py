@@ -12,6 +12,15 @@
 OTEL-native tracing and scoring for LLM applications.
 """
 
+from opensearch_genai_observability_sdk_py.benchmark import (
+    Benchmark,
+    BenchmarkResult,
+    BenchmarkSummary,
+    EvalScore,
+    ScoreSummary,
+    TestCaseResult,
+    evaluate,
+)
 from opensearch_genai_observability_sdk_py.enrich import enrich
 from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
 from opensearch_genai_observability_sdk_py.observe import Op, observe
@@ -28,6 +37,14 @@ __all__ = [
     "enrich",
     # Scoring
     "score",
+    # Benchmarks
+    "Benchmark",
+    "evaluate",
+    "EvalScore",
+    "BenchmarkResult",
+    "BenchmarkSummary",
+    "ScoreSummary",
+    "TestCaseResult",
     # Retrieval
     "OpenSearchTraceRetriever",
     # Exporters

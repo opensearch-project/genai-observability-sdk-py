@@ -31,6 +31,8 @@ from typing import Any
 from opentelemetry import trace
 from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
+from opensearch_genai_observability_sdk_py._internal import parse_hex
+
 logger = logging.getLogger(__name__)
 
 _TRACER_NAME = "opensearch-genai-observability-sdk-py-scores"
@@ -63,7 +65,7 @@ def score(
       ``gen_ai.evaluation.name``, ``gen_ai.evaluation.score.value``,
       ``gen_ai.evaluation.score.label``, ``gen_ai.evaluation.explanation``,
       ``gen_ai.response.id``
-    - Experiment tracking (proposed,
+    - Benchmark tracking (proposed,
       https://github.com/open-telemetry/semantic-conventions/issues/3398):
       ``test.suite.run.id``, ``test.suite.name``, ``test.case.id``,
       ``test.case.result.status``, ``test.suite.run.status``
@@ -101,7 +103,7 @@ def score(
             explanation="Weather data is correct",
         )
 
-        # With experiment tracking
+        # With benchmark tracking
         # (https://github.com/open-telemetry/semantic-conventions/issues/3398)
         score(
             name="helpfulness",
@@ -170,7 +172,7 @@ def _build_parent_context(
     if not trace_id:
         return None
 
-    trace_id_int = _parse_hex(trace_id)
+    trace_id_int = parse_hex(trace_id)
     if trace_id_int is None:
         logger.warning("score(): invalid trace_id '%s', emitting standalone span", trace_id)
         return None
@@ -178,7 +180,7 @@ def _build_parent_context(
     # For trace-level scoring (no span_id), derive the root span_id from
     # the lower 64 bits of the trace_id — a standard convention for root spans.
     if span_id:
-        span_id_int = _parse_hex(span_id)
+        span_id_int = parse_hex(span_id)
         if span_id_int is None:
             logger.warning("score(): invalid span_id '%s', emitting standalone span", span_id)
             return None
@@ -192,11 +194,3 @@ def _build_parent_context(
         trace_flags=TraceFlags(TraceFlags.SAMPLED),
     )
     return trace.set_span_in_context(NonRecordingSpan(parent_span_context))
-
-
-def _parse_hex(value: str) -> int | None:
-    """Parse a hex string (with or without 0x prefix) to int. Returns None on failure."""
-    try:
-        return int(value.lstrip("0x").lstrip("0X") or "0", 16)
-    except ValueError:
-        return None

@@ -9,6 +9,7 @@ OTel-native tracing and scoring for LLM applications. Instrument your AI workflo
 - **`enrich()`** — add model, token usage, and other GenAI attributes to the active span from anywhere in your code
 - **Auto-instrumentation** — automatically discovers and activates installed instrumentor packages (OpenAI, Anthropic, Bedrock, LangChain, etc.)
 - **Scoring** — `score()` emits evaluation metrics as OTel spans at span, trace, or session level
+- **Benchmarks** — `evaluate()` runs your agent against a dataset with scorers; `Benchmark` uploads results from any eval framework (RAGAS, DeepEval, pytest)
 - **AWS SigV4** — built-in SigV4 signing for AWS-hosted OpenSearch and Data Prepper endpoints
 - **Zero lock-in** — remove a decorator and your code still works; everything is standard OTel
 
@@ -324,6 +325,76 @@ score(
 
 Scores follow the OTel GenAI semantic conventions with `gen_ai.evaluation.*` attributes. Each score span also emits a `gen_ai.evaluation.result` event per the [OTel GenAI event spec](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-events/#event-gen_aievaluationresult).
 
+### `evaluate()`
+
+Run a task against a dataset, score outputs, and record results as OTel spans. Agent execution spans are children of each case span, giving full trace waterfall per case.
+
+```python
+from opensearch_genai_observability_sdk_py import evaluate, EvalScore, observe, Op
+
+@observe(op=Op.INVOKE_AGENT)
+def my_agent(question: str) -> str:
+    return call_llm(question)
+
+def accuracy(input, output, expected) -> EvalScore:
+    return EvalScore(name="accuracy", value=1.0 if expected in output else 0.0)
+
+result = evaluate(
+    name="rag-agent",
+    task=my_agent,
+    data=[
+        {"input": "What is Python?", "expected": "programming language"},
+        {"input": "What causes rain?", "expected": "water vapor"},
+    ],
+    scores=[accuracy],
+    metadata={"agent_version": "v2"},
+    record_io=True,
+)
+```
+
+Produces:
+```
+test_suite_run rag-agent
+ └── test_case [case: What is Python?]
+      └── invoke_agent my_agent
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` | `str` | Benchmark name (`test.suite.name`). Stable across runs |
+| `task` | `Callable` | Function that takes input and returns output. Decorate with `@observe()` for tracing |
+| `data` | `list[dict]` | Dicts with `"input"` and optionally `"expected"`, `"case_id"` |
+| `scores` | `list[Callable]` | Scorer functions. Each receives `(input, output, expected)` and returns `EvalScore`, `list[EvalScore]`, or `float` |
+| `metadata` | `dict` | Attached to root span. Reserved keys (`test.*`, `gen_ai.*`) are filtered |
+| `record_io` | `bool` | Record input/output/expected as span attributes (default `False`) |
+
+Returns `BenchmarkResult` with `.summary` (aggregate stats) and `.cases` (per-case results).
+
+### `Benchmark`
+
+Upload pre-computed evaluation results from any framework (RAGAS, DeepEval, pytest, custom) as OTel spans. Use when you already have results and want to visualize them in agent-health or OpenSearch Dashboards.
+
+```python
+from opensearch_genai_observability_sdk_py import Benchmark
+
+# Upload results from your eval pipeline
+with Benchmark(name="nightly-eval", metadata={"model": "gpt-4o"}, record_io=True) as b:
+    b.log(input="What is Python?", output="A language", scores={"accuracy": 1.0})
+    b.log(input="Capital of France?", output="Paris", scores={"accuracy": 1.0})
+
+# Link to existing agent traces (click through from failed case → agent trace)
+with Benchmark(name="ci-eval") as b:
+    b.log(
+        input="query",
+        output="answer",
+        scores={"accuracy": 0.9},
+        trace_id="6ebb9835f43af1552f2cebb9f5165e39",
+        span_id="89829115c2128845",
+    )
+```
+
 ### `OpenSearchTraceRetriever`
 
 Retrieves GenAI trace spans from OpenSearch. Works with any agent library that emits OTel GenAI semantic convention spans indexed by Data Prepper into `otel-v1-apm-span-*`.
@@ -424,6 +495,8 @@ See the [`examples/`](examples/) directory:
 | [`04_async_tracing.py`](examples/04_async_tracing.py) | Async function tracing with `@observe` |
 | [`05_openai_auto_instrument.py`](examples/05_openai_auto_instrument.py) | OpenAI auto-instrumentation via `register()` |
 | [`06_retrieval_and_eval.py`](examples/06_retrieval_and_eval.py) | Retrieve traces from OpenSearch, evaluate, write scores back |
+| [`07_benchmarks.py`](examples/07_benchmarks.py) | `evaluate()` with scorers, compare agent versions |
+| [`08_upload_benchmark_results.py`](examples/08_upload_benchmark_results.py) | `Benchmark.log()` — upload results from RAGAS, DeepEval, custom, with trace links |
 
 ## License
 
