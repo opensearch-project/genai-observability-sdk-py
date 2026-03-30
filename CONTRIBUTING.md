@@ -138,9 +138,8 @@ Examples:
 Releases are handled by maintainers:
 
 1. Update version in `pyproject.toml`
-2. Update `CHANGELOG.md`
-3. Create and push a version tag
-4. GitHub Actions automatically builds and publishes to PyPI
+2. Create and push a version tag
+3. GitHub Actions automatically builds and publishes to PyPI (release notes are auto-generated)
 
 ## Getting Help
 

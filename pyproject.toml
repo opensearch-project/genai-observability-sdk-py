@@ -1,6 +1,6 @@
 [project]
 name = "opensearch-genai-observability-sdk-py"
-version = "0.2.7"
+version = "0.2.8"
 description = "OpenSearch AI Observability SDK — OTEL-native tracing and scoring for LLM applications"
 authors = [
     { name = "OpenSearch Contributors" },
@@ -113,7 +113,7 @@ Repository = "https://github.com/opensearch-project/genai-observability-sdk-py"
 Homepage = "https://github.com/opensearch-project/genai-observability-sdk-py"
 Documentation = "https://github.com/opensearch-project/genai-observability-sdk-py#readme"
 "Bug Tracker" = "https://github.com/opensearch-project/genai-observability-sdk-py/issues"
-Changelog = "https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/opensearch-project/genai-observability-sdk-py/releases"
 
 [build-system]
 requires = ["hatchling"]
