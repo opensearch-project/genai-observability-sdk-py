@@ -59,7 +59,7 @@ class _SigV4AuthSession(requests.Session):
         self._service = service
         self._region = region
 
-    def request(
+    def request(  # type: ignore[override]
         self,
         method: str,
         url: str,
@@ -93,7 +93,9 @@ class _SigV4AuthSession(requests.Session):
             if key.lower() != "content-type":  # already set by the OTLP exporter
                 headers[key] = value
 
-        return super().request(*args, method=method, url=url, data=data, headers=headers, **kwargs)
+        return super().request(  # type: ignore[misc]
+            method, url, *args, data=data, headers=headers, **kwargs
+        )
 
 
 class AWSSigV4OTLPExporter(OTLPSpanExporter):
