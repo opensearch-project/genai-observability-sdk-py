@@ -361,7 +361,8 @@ def _create_http_exporter(
     """Create a plain HTTP OTLP exporter."""
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-    return OTLPSpanExporter(endpoint=endpoint, headers=headers)
+    exporter: SpanExporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
+    return exporter
 
 
 def _create_grpc_exporter(
@@ -381,11 +382,12 @@ def _create_grpc_exporter(
     insecure = scheme != "grpcs" and scheme != "https"
 
     logger.info("Using gRPC exporter: %s (insecure=%s)", grpc_endpoint, insecure)
-    return GRPCSpanExporter(
+    exporter: SpanExporter = GRPCSpanExporter(
         endpoint=grpc_endpoint,
         insecure=insecure,
         headers=headers,
     )
+    return exporter
 
 
 def _auto_instrument(provider: TracerProvider) -> None:
