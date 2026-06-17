@@ -59,15 +59,13 @@ class _SigV4AuthSession(requests.Session):
         self._service = service
         self._region = region
 
-    def request(  # type: ignore[override]
+    def request(
         self,
         method: str,
-        url: str,
+        url: str | bytes,
         *args: Any,
-        data: Any = None,
-        headers: Any = None,
         **kwargs: Any,
-    ) -> Any:  # noqa: E501
+    ) -> requests.Response:
         import botocore.auth
         from botocore.awsrequest import AWSRequest
 
@@ -75,6 +73,7 @@ class _SigV4AuthSession(requests.Session):
         signer = botocore.auth.SigV4Auth(frozen, self._service, self._region)
 
         # Sign over the real body so the SHA256 payload hash is correct.
+        data = kwargs.get("data")
         aws_request = AWSRequest(
             method=method,
             url=url,
@@ -87,15 +86,13 @@ class _SigV4AuthSession(requests.Session):
         # Copy every header botocore added (Authorization, X-Amz-Date,
         # X-Amz-Security-Token, X-Amz-Content-Sha256, etc.) — OSIS requires
         # X-Amz-Content-Sha256 and will drop the connection if it is missing.
-        if headers is None:
-            headers = {}
+        headers = kwargs.get("headers") or {}
         for key, value in aws_request.headers.items():
             if key.lower() != "content-type":  # already set by the OTLP exporter
                 headers[key] = value
+        kwargs["headers"] = headers
 
-        return super().request(  # type: ignore[misc]
-            method, url, *args, data=data, headers=headers, **kwargs
-        )
+        return super().request(method, url, *args, **kwargs)
 
 
 class AWSSigV4OTLPExporter(OTLPSpanExporter):
