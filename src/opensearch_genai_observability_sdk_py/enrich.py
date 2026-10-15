@@ -169,12 +169,13 @@ AGENT_ROOT_ATTRIBUTE = "derived.gen_ai.is_root"
 def mark_agent_root() -> None:
     """Mark the current span as the agent root of its trace.
 
-    OpenSearch Agent Traces lists a trace by its root span when that span is a
-    GenAI span, or by a span marked with ``derived.gen_ai.is_root``. When the
-    trace root is not a GenAI span (for example an HTTP handler that runs the
-    agent), Data Prepper marks the outermost GenAI span for you. Call this to
+    OpenSearch Agent Traces lists a trace by the span marked with
+    ``derived.gen_ai.is_root``. Data Prepper marks the outermost GenAI span of
+    each trace for you: the root when it is a GenAI span, or the agent span
+    below it (for example when an HTTP handler runs the agent). Call this to
     choose the span yourself, for example the agent's entry span in a service
-    that is called by another agent.
+    that is called by another agent. A span marked at the source wins, and
+    Data Prepper then marks nothing else in that part of the trace.
 
     Example::
 

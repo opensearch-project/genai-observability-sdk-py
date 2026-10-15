@@ -286,7 +286,7 @@ def chat(prompt: str) -> str:
 
 ### `mark_agent_root()`
 
-Mark the current span as its trace's agent root. OpenSearch Agent Traces lists a trace by its root span when that span is a GenAI span, or by a span marked with `derived.gen_ai.is_root`. When the trace root is an HTTP handler that runs the agent, Data Prepper marks the outermost GenAI span for you, so you only need this to choose the span yourself.
+Mark the current span as its trace's agent root. OpenSearch Agent Traces lists a trace by the span marked with `derived.gen_ai.is_root`. Data Prepper marks the outermost GenAI span of each trace for you (the root when it is a GenAI span, or the agent span below an HTTP handler), so you only need this to choose the span yourself. A span marked at the source wins.
 
 ```python
 @observe(name="planner", op=Op.INVOKE_AGENT)
