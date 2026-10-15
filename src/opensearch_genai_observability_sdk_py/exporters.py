@@ -144,13 +144,15 @@ class AWSSigV4OTLPExporter(OTLPSpanExporter):
                 "AWS_DEFAULT_REGION environment variable, or ~/.aws/config."
             )
 
-        # Pass the signing session to OTLPSpanExporter.  The parent stores it
-        # as self._session and routes all HTTP calls through it.
-        kwargs["session"] = _SigV4AuthSession(
+        # Pass the signing session to OTLPSpanExporter, which routes all HTTP
+        # calls through it. Keep our own reference: where the parent stores the
+        # session is an implementation detail (1.45 moved it into a transport).
+        self.signing_session = _SigV4AuthSession(
             credentials=credentials,
             service=service,
             region=resolved_region,
         )
+        kwargs["session"] = self.signing_session
         super().__init__(*args, **kwargs)
 
         logger.info(
