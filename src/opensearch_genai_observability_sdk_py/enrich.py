@@ -160,3 +160,30 @@ def enrich(
     for key, value in extra.items():
         if value is not None:
             span.set_attribute(key, value)
+
+
+AGENT_ROOT_ATTRIBUTE = "derived.gen_ai.is_root"
+"""Marks the span that OpenSearch Agent Traces lists as a trace's agent root."""
+
+
+def mark_agent_root() -> None:
+    """Mark the current span as the agent root of its trace.
+
+    OpenSearch Agent Traces lists a trace by its root span when that span is a
+    GenAI span, or by a span marked with ``derived.gen_ai.is_root``. When the
+    trace root is not a GenAI span (for example an HTTP handler that runs the
+    agent), Data Prepper marks the outermost GenAI span for you. Call this to
+    choose the span yourself, for example the agent's entry span in a service
+    that is called by another agent.
+
+    Example::
+
+        @observe(name="planner", op=Op.INVOKE_AGENT)
+        def plan(query: str) -> str:
+            mark_agent_root()
+            ...
+    """
+    span = trace.get_current_span()
+    if not span.is_recording():
+        return
+    span.set_attribute(AGENT_ROOT_ATTRIBUTE, True)

@@ -7,6 +7,7 @@ OTel-native tracing and scoring for LLM applications. Instrument your AI workflo
 - **One-line setup** — `register()` configures the full OTel pipeline (TracerProvider, exporter, auto-instrumentation)
 - **`observe()`** — single decorator / context manager that creates OTel spans with [GenAI semantic convention](https://opentelemetry.io/docs/specs/semconv/gen-ai/) attributes
 - **`enrich()`** — add model, token usage, and other GenAI attributes to the active span from anywhere in your code
+- **`mark_agent_root()`** — mark the agent's span as the trace's agent root in OpenSearch Agent Traces
 - **Auto-instrumentation** — automatically discovers and activates installed instrumentor packages (OpenAI, Anthropic, Bedrock, LangChain, etc.)
 - **Scoring** — `score()` emits evaluation metrics as OTel spans at span, trace, or session level
 - **Benchmarks** — `evaluate()` runs your agent against a dataset with scorers; `Benchmark` uploads results from any eval framework (RAGAS, DeepEval, pytest)
@@ -278,6 +279,19 @@ def chat(prompt: str) -> str:
 | `max_tokens` | `gen_ai.request.max_tokens` | Max tokens setting |
 | `session_id` | `gen_ai.session.id` | Session/conversation ID |
 | `**extra` | As provided | Any additional key-value attributes |
+
+### `mark_agent_root()`
+
+Mark the current span as its trace's agent root. OpenSearch Agent Traces lists a trace by its root span when that span is a GenAI span, or by a span marked with `derived.gen_ai.is_root`. When the trace root is an HTTP handler that runs the agent, Data Prepper marks the outermost GenAI span for you, so you only need this to choose the span yourself.
+
+```python
+@observe(name="planner", op=Op.INVOKE_AGENT)
+def plan(query: str) -> str:
+    mark_agent_root()
+    ...
+```
+
+Without the SDK, set the span attribute `derived.gen_ai.is_root` to `true` on the agent's span.
 
 ### `score()`
 
