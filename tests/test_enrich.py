@@ -11,7 +11,11 @@
 
 import json
 
-from opensearch_genai_observability_sdk_py.enrich import enrich
+from opensearch_genai_observability_sdk_py.enrich import (
+    AGENT_ROOT_ATTRIBUTE,
+    enrich,
+    mark_agent_root,
+)
 from opensearch_genai_observability_sdk_py.observe import Op, observe
 
 # ---------------------------------------------------------------------------
@@ -181,3 +185,28 @@ class TestEnrichNoSpan:
         enrich(model="gpt-4.1", input_tokens=100)
         spans = exporter.get_finished_spans()
         assert len(spans) == 0
+
+
+# ---------------------------------------------------------------------------
+# mark_agent_root()
+# ---------------------------------------------------------------------------
+
+
+class TestMarkAgentRoot:
+    def test_marks_the_current_span(self, exporter):
+        @observe(name="planner", op=Op.INVOKE_AGENT)
+        def fn():
+            mark_agent_root()
+            with observe(name="chat", op=Op.CHAT):
+                pass
+            return "ok"
+
+        fn()
+        spans = {s.name: s for s in exporter.get_finished_spans()}
+        assert AGENT_ROOT_ATTRIBUTE == "derived.gen_ai.is_root"
+        assert spans["invoke_agent planner"].attributes[AGENT_ROOT_ATTRIBUTE] is True
+        assert AGENT_ROOT_ATTRIBUTE not in spans["chat chat"].attributes
+
+    def test_without_span_does_not_crash(self, exporter):
+        mark_agent_root()
+        assert exporter.get_finished_spans() == ()

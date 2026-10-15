@@ -211,23 +211,42 @@ class TestAWSSigV4OTLPExporterInit:
         """region= kwarg takes precedence over whatever botocore detects."""
         with self._mock_botocore(region="ap-southeast-1"):
             exporter = AWSSigV4OTLPExporter(endpoint=ENDPOINT, region="eu-west-1")
-        assert exporter._session._region == "eu-west-1"
+        assert exporter.signing_session._region == "eu-west-1"
 
     def test_session_is_sigv4_auth_session(self):
         """The exporter's internal session must be our signing session."""
         with self._mock_botocore():
             exporter = AWSSigV4OTLPExporter(endpoint=ENDPOINT)
-        assert isinstance(exporter._session, _SigV4AuthSession)
+        assert isinstance(exporter.signing_session, _SigV4AuthSession)
 
     def test_session_carries_correct_service(self):
         with self._mock_botocore():
             exporter = AWSSigV4OTLPExporter(endpoint=ENDPOINT, service="es")
-        assert exporter._session._service == "es"
+        assert exporter.signing_session._service == "es"
 
     def test_default_service_is_osis(self):
         with self._mock_botocore():
             exporter = AWSSigV4OTLPExporter(endpoint=ENDPOINT)
-        assert exporter._session._service == "osis"
+        assert exporter.signing_session._service == "osis"
+
+    def test_exports_through_the_signing_session(self):
+        """Every export goes through the SigV4 session, whatever the parent does with it."""
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+        with self._mock_botocore():
+            exporter = AWSSigV4OTLPExporter(endpoint=ENDPOINT)
+        response = MagicMock(status_code=200, ok=True)
+        with patch.object(
+            _SigV4AuthSession, "request", autospec=True, return_value=response
+        ) as request:
+            provider = TracerProvider()
+            provider.add_span_processor(SimpleSpanProcessor(exporter))
+            provider.get_tracer("test").start_span("span").end()
+            provider.shutdown()
+
+        assert request.call_count >= 1
+        assert request.call_args.args[0] is exporter.signing_session
 
 
 # ---------------------------------------------------------------------------

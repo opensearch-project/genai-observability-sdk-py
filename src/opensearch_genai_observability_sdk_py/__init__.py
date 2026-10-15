@@ -21,7 +21,7 @@ from opensearch_genai_observability_sdk_py.benchmark import (
     TestCaseResult,
     evaluate,
 )
-from opensearch_genai_observability_sdk_py.enrich import enrich
+from opensearch_genai_observability_sdk_py.enrich import enrich, mark_agent_root
 from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
 from opensearch_genai_observability_sdk_py.observe import Op, observe
 from opensearch_genai_observability_sdk_py.register import register
@@ -35,6 +35,7 @@ __all__ = [
     "observe",
     "Op",
     "enrich",
+    "mark_agent_root",
     # Scoring
     "score",
     # Benchmarks
