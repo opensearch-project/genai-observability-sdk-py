@@ -54,16 +54,19 @@ from opensearch_genai_observability_sdk_py import register, observe, Op, enrich,
 # 1. Initialize tracing (one line)
 register(endpoint="http://localhost:21890/opentelemetry/v1/traces")
 
+
 # 2. Trace your functions
 @observe(name="web_search", op=Op.EXECUTE_TOOL)
 def search(query: str) -> list[dict]:
     return [{"title": f"Result for: {query}"}]
+
 
 @observe(name="research_agent", op=Op.INVOKE_AGENT)
 def research(query: str) -> str:
     results = search(query)
     enrich(model="gpt-4.1", provider="openai", input_tokens=150, output_tokens=50)
     return f"Summary of: {results}"
+
 
 # 3. Use context managers for inline blocks
 @observe(name="qa_pipeline", op=Op.INVOKE_AGENT)
@@ -72,6 +75,7 @@ def run(question: str) -> str:
     with observe("safety_check", op="guardrail"):
         enrich(safe=True)
     return answer
+
 
 result = run("What is OpenSearch?")
 
@@ -137,7 +141,7 @@ Configures the OTel tracing pipeline. Call once at startup.
 register(
     endpoint="http://my-collector:4318/v1/traces",  # or use env vars
     service_name="my-app",
-    batch=True,            # BatchSpanProcessor (True) or Simple (False)
+    batch=True,  # BatchSpanProcessor (True) or Simple (False)
     auto_instrument=True,  # discover installed instrumentor packages
 )
 ```
@@ -193,10 +197,10 @@ def plan(query: str) -> str:
     enrich(model="gpt-4.1")
     return call_llm(query)
 
+
 # Without parentheses (uses function name, no op)
 @observe
-def my_function():
-    ...
+def my_function(): ...
 ```
 
 **As a context manager:**
@@ -346,12 +350,15 @@ Run a task against a dataset, score outputs, and record results as OTel spans. A
 ```python
 from opensearch_genai_observability_sdk_py import evaluate, EvalScore, observe, Op
 
+
 @observe(op=Op.INVOKE_AGENT)
 def my_agent(question: str) -> str:
     return call_llm(question)
 
+
 def accuracy(input, output, expected) -> EvalScore:
     return EvalScore(name="accuracy", value=1.0 if expected in output else 0.0)
+
 
 result = evaluate(
     name="rag-agent",
@@ -445,6 +452,7 @@ roots = retriever.list_root_spans(services=["my-agent"], max_results=10)
 
 # Filter by time
 from datetime import datetime
+
 roots = retriever.list_root_spans(services=["my-agent"], since=datetime(2026, 3, 16))
 
 # Check which traces already have evaluation spans
