@@ -93,7 +93,10 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext
 
 from opensearch_genai_observability_sdk_py._internal import (
     _RESERVED_KEYS,
+    AGENT_NAME_KEY,
+    AGENT_VERSION_KEY,
     get_event_logger,
+    resolve_agent,
     validate_metadata_keys,
 )
 from opensearch_genai_observability_sdk_py.score import (
@@ -392,6 +395,19 @@ def _io_attr(value: Any) -> str:
 
 
 _GROUPING_KEYS = ("test.suite.name", "test.suite.run.id", "test.case.id", "test.case.name")
+_AGENT_KEYS = (AGENT_NAME_KEY, AGENT_VERSION_KEY)
+
+
+def _run_agent(agents: list[dict[str, str]], declared: dict[str, str]) -> dict[str, str]:
+    """The run's agent: the declared one, else the one every case agreed on."""
+    out = dict(declared)
+    for key in _AGENT_KEYS:
+        if key in out:
+            continue
+        values = {a[key] for a in agents if key in a}
+        if len(values) == 1 and all(key in a for a in agents):
+            out[key] = values.pop()
+    return out
 
 
 def _grouping(suite: str, run_id: str, case_id: str, case_name: str | None) -> dict[str, Any]:
@@ -424,6 +440,8 @@ class _CaseScope:
 
     attributes: dict[str, Any]
     root: SpanContext | None = None
+    # The root span itself: its final attributes name the agent that ran.
+    root_span: Any = None
     lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
 
 
@@ -448,11 +466,16 @@ class _CaseRootStamper(SpanProcessor):
         parent = span.parent
         if parent is not None and parent.is_valid and not parent.is_remote:
             return
+        existing = span.attributes or {}
         for key, val in scope.attributes.items():
+            # The agent's own identity on its span wins over the declared one.
+            if key in _AGENT_KEYS and key in existing:
+                continue
             span.set_attribute(key, val)
         with scope.lock:
             if scope.root is None:
                 scope.root = span.get_span_context()
+                scope.root_span = span
 
     def on_end(self, span: Any) -> None:
         return None
@@ -551,6 +574,7 @@ def _emit_run_event(
     *,
     duration_ms: float,
     metadata: dict[str, Any] | None = None,
+    agent: dict[str, str] | None = None,
 ) -> str:
     """Emit the ``opensearch.test_suite_run.result`` event; return the run status."""
     error_count = statuses.count("error")
@@ -568,6 +592,8 @@ def _emit_run_event(
             "opensearch.test_suite_run.duration_ms": float(duration_ms),
         }
     )
+    if agent:
+        attrs.update(agent)
     _emit_sdk_event(TEST_SUITE_RUN_EVENT_NAME, attrs, _no_span_context())
     return run_status
 
@@ -697,6 +723,11 @@ class Benchmark:
         record_io: If ``True``, record input/output/expected as
             ``opensearch.test_case.input`` / ``.output`` / ``.expected`` on
             the case event. Default ``False`` (PII-safe).
+        agent_name: ``gen_ai.agent.name`` of the agent under test, stamped on
+            the evaluation, case and run events. Defaults to
+            ``register(agent_name=)``.
+        agent_version: ``agent.version`` of the agent under test, stamped the
+            same way. Defaults to ``register(agent_version=)``.
     """
 
     def __init__(
@@ -705,8 +736,12 @@ class Benchmark:
         *,
         metadata: dict[str, Any] | None = None,
         record_io: bool = False,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
     ) -> None:
         self._name = name
+        # Declared agent, else the register() default (never invented).
+        self._agent = resolve_agent(agent_name, agent_version)
         self._metadata = _safe_metadata(metadata or {}, context=f"Benchmark({name!r})")
         self._record_io = record_io
         self._run_id = _make_run_id()
@@ -796,7 +831,10 @@ class Benchmark:
         )
         result_status = status or ("fail" if error or verdict_failed else "pass")
 
-        grouping = _grouping(self._name, self._run_id, resolved_case_id, case_name)
+        grouping = {
+            **_grouping(self._name, self._run_id, resolved_case_id, case_name),
+            **self._agent,
+        }
 
         safe_case_meta = (
             _safe_metadata(metadata, context=f"Benchmark.log(case_id={resolved_case_id!r})")
@@ -880,6 +918,7 @@ class Benchmark:
             self._statuses,
             duration_ms=summary.duration_ms,
             metadata=self._metadata,
+            agent=self._agent,
         )
 
         print(str(summary))
@@ -908,6 +947,8 @@ def evaluate(
     scores: list[Callable[..., EvalScore | list[EvalScore] | float]],
     metadata: dict[str, Any] | None = None,
     record_io: bool = False,
+    agent_name: str | None = None,
+    agent_version: str | None = None,
 ) -> BenchmarkResult:
     """Run a task against a dataset, score outputs, and record results.
 
@@ -953,6 +994,12 @@ def evaluate(
         record_io: Record input/output/expected as
             ``opensearch.test_case.input`` / ``.output`` / ``.expected`` on
             the case event.
+        agent_name: ``gen_ai.agent.name`` of the agent under test. Stamped on
+            the agent root spans (unless the span names its own agent) and on
+            every evaluation, case and run event. When omitted, each case uses
+            the agent its root span names, else ``register(agent_name=)``.
+        agent_version: ``agent.version`` of the agent under test, resolved the
+            same way. Lets runs be compared version to version.
 
     Returns:
         ``BenchmarkResult`` with summary and per-case results.
@@ -965,6 +1012,8 @@ def evaluate(
 
     case_results: list[TestCaseResult] = []
     statuses: list[str] = []
+    declared_agent = resolve_agent(agent_name, agent_version)
+    case_agents: list[dict[str, str]] = []
 
     # Materialize iterable upfront so generators work
     data_list = list(data)
@@ -977,6 +1026,8 @@ def evaluate(
         case_name_val = item.get("case_name")
 
         grouping = _grouping(name, run_id, case_id, case_name_val)
+        # Root spans get the declared agent (where they name none themselves).
+        span_stamp = {**grouping, **declared_agent}
 
         io: dict[str, Any] = {}
         if record_io:
@@ -991,7 +1042,7 @@ def evaluate(
         error_type: str | None = None
         scope: _CaseScope | None = None
         try:
-            with _agent_run_scope(grouping) as scope:
+            with _agent_run_scope(span_stamp) as scope:
                 output_val = task(input_val)
         except Exception as exc:
             error_msg = str(exc)
@@ -1000,6 +1051,14 @@ def evaluate(
 
         if record_io and output_val is not None:
             io["opensearch.test_case.output"] = _io_attr(output_val)
+
+        # The agent that ran: declared, else named on its root span, else the
+        # register() default.
+        case_agent = resolve_agent(
+            agent_name, agent_version, span=scope.root_span if scope is not None else None
+        )
+        case_agents.append(case_agent)
+        grouping = {**grouping, **case_agent}
 
         # Case and score events are parented to the agent run's root span.
         event_ctx: Context
@@ -1117,7 +1176,25 @@ def evaluate(
         )
 
     summary = _compute_summary(name, run_id, case_results, start_time)
-    _emit_run_event(name, run_id, statuses, duration_ms=summary.duration_ms, metadata=safe_meta)
+    _emit_run_event(
+        name,
+        run_id,
+        statuses,
+        duration_ms=summary.duration_ms,
+        metadata=safe_meta,
+        # Explicit, else the agent every case agreed on, else register() defaults.
+        agent={
+            **resolve_agent(),
+            **_run_agent(
+                case_agents,
+                {
+                    k: v
+                    for k, v in ((AGENT_NAME_KEY, agent_name), (AGENT_VERSION_KEY, agent_version))
+                    if v
+                },
+            ),
+        },
+    )
 
     print(str(summary))
     logger.info("evaluate() completed: %s", run_id)

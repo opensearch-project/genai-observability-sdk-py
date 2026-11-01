@@ -52,8 +52,11 @@ from opentelemetry.context import Context
 from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
 from opensearch_genai_observability_sdk_py._internal import (
+    AGENT_NAME_KEY,
+    AGENT_VERSION_KEY,
     get_event_logger,
     parse_hex,
+    resolve_agent,
 )
 
 logger = logging.getLogger(__name__)
@@ -100,6 +103,7 @@ def score(
     score_max: float | None = None,
     conversation_id: str | None = None,
     agent_name: str | None = None,
+    agent_version: str | None = None,
     error_type: str | None = None,
     judge_trace_id: str | None = None,
     assessment: str | bool | None = None,
@@ -166,7 +170,12 @@ def score(
         score_min: Lower bound of the score scale.
         score_max: Upper bound of the score scale.
         conversation_id: ``gen_ai.conversation.id`` of the evaluated session.
-        agent_name: ``gen_ai.agent.name`` of the evaluated agent.
+        agent_name: ``gen_ai.agent.name`` of the evaluated agent. When omitted:
+            the evaluated span's own ``gen_ai.agent.name`` (inline scoring of
+            the active span), else the ``register(agent_name=)`` default,
+            else left out.
+        agent_version: ``agent.version`` of the evaluated agent, resolved the
+            same way.
         error_type: ``error.type`` when the evaluator itself failed.
         judge_trace_id: Trace id of the judge's own run, if traced.
         assessment: Explicit verdict, ``"pass"`` or ``"fail"`` (``True`` /
@@ -210,6 +219,10 @@ def score(
         )
     """
     ctx, has_span, target_trace_id = _resolve_target(trace_id, span_id)
+    # Inline scoring reads the agent from the active span itself; a stored
+    # span (trace_id + span_id) is not looked up.
+    active_span = trace.get_current_span() if ctx is None and has_span else None
+    agent = resolve_agent(agent_name, agent_version, span=active_span)
 
     resolved_level = level
     if resolved_level is None:
@@ -234,7 +247,8 @@ def score(
         score_min=score_min,
         score_max=score_max,
         conversation_id=conversation_id,
-        agent_name=agent_name,
+        agent_name=agent.get(AGENT_NAME_KEY),
+        agent_version=agent.get(AGENT_VERSION_KEY),
         error_type=error_type,
         judge_trace_id=judge_trace_id,
         target_trace_id=target_trace_id,
@@ -272,6 +286,7 @@ def build_evaluation_attributes(
     score_max: float | None = None,
     conversation_id: str | None = None,
     agent_name: str | None = None,
+    agent_version: str | None = None,
     error_type: str | None = None,
     judge_trace_id: str | None = None,
     target_trace_id: str | None = None,
@@ -303,7 +318,9 @@ def build_evaluation_attributes(
     if conversation_id:
         attrs["gen_ai.conversation.id"] = conversation_id
     if agent_name:
-        attrs["gen_ai.agent.name"] = agent_name
+        attrs[AGENT_NAME_KEY] = agent_name
+    if agent_version:
+        attrs[AGENT_VERSION_KEY] = agent_version
     if level:
         attrs["opensearch.evaluation.level"] = level
     if evaluator:

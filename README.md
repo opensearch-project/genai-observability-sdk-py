@@ -146,8 +146,22 @@ register(
     service_name="my-app",
     batch=True,  # BatchSpanProcessor (True) or Simple (False)
     auto_instrument=True,  # discover installed instrumentor packages
+    agent_name="travel_planner",  # optional: the agent this process evaluates
+    agent_version="v3",  # optional: its version
 )
 ```
+
+#### Agent identity
+
+`agent_name` / `agent_version` are stamped as `gen_ai.agent.name` and `agent.version` on every evaluation, test case and test suite run event the SDK emits. OpenSearch Dashboards uses them to scope the Evaluations page to one agent and to compare runs version to version. `agent.version` is an OpenSearch extension until OTel defines an agent version attribute.
+
+Per field, the SDK uses the first of:
+
+1. the explicit argument (`score(agent_name=, agent_version=)`, `evaluate(...)`, `Benchmark(...)`);
+2. the evaluated span's own attribute: the active span for inline `score()`, the agent root span for `evaluate()`;
+3. the `register()` default.
+
+An unknown agent is left out, never invented. `evaluate()` also stamps the agent on the agent root spans where the span names none itself, so traces can be filtered by agent version. The run event names the agent every case agreed on.
 
 **Endpoint resolution (priority order):**
 
@@ -425,7 +439,8 @@ score(
 | `threshold` | `float` | `opensearch.evaluation.score.threshold` | Pass threshold. `direction` defaults to `maximize` (recorded) |
 | `assessment` | `str` | `opensearch.evaluation.assessment` | Explicit verdict, `pass` or `fail` (`True`/`False` accepted; other values are dropped with a warning) |
 | `conversation_id` | `str` | `gen_ai.conversation.id` | Evaluated session |
-| `agent_name` | `str` | `gen_ai.agent.name` | Evaluated agent |
+| `agent_name` | `str` | `gen_ai.agent.name` | Evaluated agent. Default: the active span's, else `register(agent_name=)` |
+| `agent_version` | `str` | `agent.version` | Its version. Default: the active span's, else `register(agent_version=)` |
 | `error_type` | `str` | `error.type` | Set when the evaluator itself failed |
 | `judge_trace_id` | `str` | `opensearch.evaluation.judge.trace_id` | Trace of the judge's own run |
 | `attributes` | `dict` | as-is | Extra attributes, e.g. `test.*` grouping keys from [semantic-conventions-genai#79](https://github.com/open-telemetry/semantic-conventions-genai/issues/79) |
@@ -502,6 +517,7 @@ event opensearch.test_suite_run.result  no trace context: test.suite.name, test.
 All three event names are routed by Data Prepper to `otel-v1-genai-evaluation-*`; filter on `eventName`.
 
 - The `test.*` ids are stamped on every root span the task starts (a span with no local parent) by a span processor that `evaluate()` installs once on the global SDK `TracerProvider`. Spans started outside `evaluate()` are not touched. Instrument the agent with the global provider (for example `@observe()` after `register()`).
+- `agent_name=` / `agent_version=` name the agent under test (see [Agent identity](#agent-identity)). They go on the root spans that don't name an agent, and on every case, score and run event.
 - If the task starts no span, the case and score events carry no trace context (the `test.*` attributes are still set).
 - A task that raises does not stop the run: the case event has status `error` and `error.type` (the exception class), and the scorers for that case are skipped. A scorer that raises produces an evaluation event with `error.type` and no score value, and marks the case `error`. A run with any errored case has status `failure`.
 - Scorers run outside the agent trace, so a traced LLM judge gets its own trace.
@@ -554,7 +570,13 @@ When `trace_id` / `span_id` of the agent run are given, the case and score event
 from opensearch_genai_observability_sdk_py import Benchmark, EvalScore
 
 # Upload results from your eval pipeline
-with Benchmark(name="nightly-eval", metadata={"model": "gpt-4o"}, record_io=True) as b:
+with Benchmark(
+    name="nightly-eval",
+    metadata={"model": "gpt-4o"},
+    record_io=True,
+    agent_name="travel_planner",
+    agent_version="v3",
+) as b:
     b.log(input="What is Python?", output="A language", scores={"accuracy": 1.0})
     b.log(input="Capital of France?", output="Paris", scores={"accuracy": 1.0}, status="pass")
 

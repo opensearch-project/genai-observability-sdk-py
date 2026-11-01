@@ -109,7 +109,10 @@ from opentelemetry.sdk.trace.export import (
     SpanProcessor,
 )
 
-from opensearch_genai_observability_sdk_py._internal import derive_logs_endpoint
+from opensearch_genai_observability_sdk_py._internal import (
+    derive_logs_endpoint,
+    set_agent_defaults,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +141,8 @@ def register(
     enable_logs: bool = True,
     logs_endpoint: str | None = None,
     log_exporter: Any | None = None,
+    agent_name: str | None = None,
+    agent_version: str | None = None,
 ) -> TracerProvider:
     """Configure the OTel tracing pipeline for OpenSearch.
 
@@ -222,6 +227,13 @@ def register(
         log_exporter: Custom ``LogRecordExporter``. Required to export logs
             when a custom ``exporter`` other than ``AWSSigV4OTLPExporter``
             is passed.
+        agent_name: Name of the agent this process evaluates. Stamped as
+            ``gen_ai.agent.name`` on every evaluation, test case and test
+            suite run event the SDK emits, unless a call names its own agent
+            or the evaluated span carries one.
+        agent_version: Version of that agent (``agent.version``), stamped the
+            same way. Lets OpenSearch Dashboards compare runs version to
+            version.
 
     Returns:
         The configured ``TracerProvider``. Its ``force_flush()`` and
@@ -259,6 +271,7 @@ def register(
             logs_endpoint="https://logs-pipe.us-east-1.osis.amazonaws.com/v1/logs",
         )
     """
+    set_agent_defaults(agent_name, agent_version)
     resolved_endpoint = _resolve_endpoint(endpoint)
     resolved_protocol = _resolve_protocol(protocol)
 

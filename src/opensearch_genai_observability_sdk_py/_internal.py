@@ -42,6 +42,68 @@ SDK_SCOPE_ATTRIBUTES: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Agent identity on evaluation, test case and test suite run events
+# ---------------------------------------------------------------------------
+
+AGENT_NAME_KEY = "gen_ai.agent.name"
+# Our extension until OTel defines an agent version attribute.
+AGENT_VERSION_KEY = "agent.version"
+
+_agent_defaults: dict[str, str | None] = {"name": None, "version": None}
+
+
+def set_agent_defaults(name: str | None = None, version: str | None = None) -> None:
+    """Process-wide agent identity, set by ``register(agent_name=, agent_version=)``."""
+    _agent_defaults["name"] = name or None
+    _agent_defaults["version"] = version or None
+
+
+def agent_defaults() -> tuple[str | None, str | None]:
+    """The process-wide ``(agent name, agent version)``, or ``(None, None)``."""
+    return _agent_defaults["name"], _agent_defaults["version"]
+
+
+def span_agent(span: object) -> tuple[str | None, str | None]:
+    """``(gen_ai.agent.name, agent.version)`` read from a recording SDK span.
+
+    Best effort: only spans that expose their attributes (SDK spans) are read;
+    nothing is looked up elsewhere.
+    """
+    attrs = getattr(span, "attributes", None)
+    if not attrs:
+        return None, None
+    try:
+        name = attrs.get(AGENT_NAME_KEY)
+        ver = attrs.get(AGENT_VERSION_KEY)
+    except Exception:  # pragma: no cover - attribute views that are not mappings
+        return None, None
+    return (str(name) if name else None), (str(ver) if ver else None)
+
+
+def resolve_agent(
+    name: str | None = None,
+    version: str | None = None,
+    span: object | None = None,
+) -> dict[str, str]:
+    """Agent identity attributes for an SDK event (only the keys known).
+
+    Precedence per field: the explicit argument, then the evaluated span's own
+    attribute (the agent that actually ran), then the ``register()`` default.
+    Names are never invented: an unknown agent is left out.
+    """
+    span_name, span_version = span_agent(span) if span is not None else (None, None)
+    default_name, default_version = agent_defaults()
+    resolved_name = name or span_name or default_name
+    resolved_version = version or span_version or default_version
+    out: dict[str, str] = {}
+    if resolved_name:
+        out[AGENT_NAME_KEY] = resolved_name
+    if resolved_version:
+        out[AGENT_VERSION_KEY] = resolved_version
+    return out
+
+
 def event_scope(
     evaluator: str | None = None, evaluator_version: str | None = None
 ) -> tuple[str, str]:
