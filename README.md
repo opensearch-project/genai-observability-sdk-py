@@ -153,7 +153,7 @@ register(
 
 #### Agent identity
 
-`agent_name` / `agent_version` are stamped as `gen_ai.agent.name` and `agent.version` on every evaluation, test case and test suite run event the SDK emits. OpenSearch Dashboards uses them to scope the Evaluations page to one agent and to compare runs version to version. `agent.version` is an OpenSearch extension until OTel defines an agent version attribute.
+`agent_name` / `agent_version` are stamped as `gen_ai.agent.name` and `gen_ai.agent.version` on every evaluation, test case and test suite run event the SDK emits. OpenSearch Dashboards uses them to scope the Evaluations page to one agent and to compare runs version to version. Both are OpenTelemetry GenAI attributes (`gen_ai.agent.name`, `gen_ai.agent.version`).
 
 Per field, the SDK uses the first of:
 
@@ -440,7 +440,7 @@ score(
 | `assessment` | `str` | `opensearch.evaluation.assessment` | Explicit verdict, `pass` or `fail` (`True`/`False` accepted; other values are dropped with a warning) |
 | `conversation_id` | `str` | `gen_ai.conversation.id` | Evaluated session |
 | `agent_name` | `str` | `gen_ai.agent.name` | Evaluated agent. Default: the active span's, else `register(agent_name=)` |
-| `agent_version` | `str` | `agent.version` | Its version. Default: the active span's, else `register(agent_version=)` |
+| `agent_version` | `str` | `gen_ai.agent.version` | Its version. Default: the active span's, else `register(agent_version=)` |
 | `error_type` | `str` | `error.type` | Set when the evaluator itself failed |
 | `judge_trace_id` | `str` | `opensearch.evaluation.judge.trace_id` | Trace of the judge's own run |
 | `attributes` | `dict` | as-is | Extra attributes, e.g. `test.*` grouping keys from [semantic-conventions-genai#79](https://github.com/open-telemetry/semantic-conventions-genai/issues/79) |

@@ -48,7 +48,7 @@ SDK_SCOPE_ATTRIBUTES: dict[str, str] = {
 
 AGENT_NAME_KEY = "gen_ai.agent.name"
 # Our extension until OTel defines an agent version attribute.
-AGENT_VERSION_KEY = "agent.version"
+AGENT_VERSION_KEY = "gen_ai.agent.version"
 
 _agent_defaults: dict[str, str | None] = {"name": None, "version": None}
 
@@ -65,7 +65,7 @@ def agent_defaults() -> tuple[str | None, str | None]:
 
 
 def span_agent(span: object) -> tuple[str | None, str | None]:
-    """``(gen_ai.agent.name, agent.version)`` read from a recording SDK span.
+    """``(gen_ai.agent.name, gen_ai.agent.version)`` read from a recording SDK span.
 
     Best effort: only spans that expose their attributes (SDK spans) are read;
     nothing is looked up elsewhere.

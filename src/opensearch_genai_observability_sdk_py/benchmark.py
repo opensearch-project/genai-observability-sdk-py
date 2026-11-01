@@ -726,7 +726,7 @@ class Benchmark:
         agent_name: ``gen_ai.agent.name`` of the agent under test, stamped on
             the evaluation, case and run events. Defaults to
             ``register(agent_name=)``.
-        agent_version: ``agent.version`` of the agent under test, stamped the
+        agent_version: ``gen_ai.agent.version`` of the agent under test, stamped the
             same way. Defaults to ``register(agent_version=)``.
     """
 
@@ -998,7 +998,7 @@ def evaluate(
             the agent root spans (unless the span names its own agent) and on
             every evaluation, case and run event. When omitted, each case uses
             the agent its root span names, else ``register(agent_name=)``.
-        agent_version: ``agent.version`` of the agent under test, resolved the
+        agent_version: ``gen_ai.agent.version`` of the agent under test, resolved the
             same way. Lets runs be compared version to version.
 
     Returns:

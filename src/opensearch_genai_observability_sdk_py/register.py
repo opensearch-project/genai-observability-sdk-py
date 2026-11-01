@@ -231,7 +231,7 @@ def register(
             ``gen_ai.agent.name`` on every evaluation, test case and test
             suite run event the SDK emits, unless a call names its own agent
             or the evaluated span carries one.
-        agent_version: Version of that agent (``agent.version``), stamped the
+        agent_version: Version of that agent (``gen_ai.agent.version``), stamped the
             same way. Lets OpenSearch Dashboards compare runs version to
             version.
 

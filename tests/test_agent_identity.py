@@ -7,7 +7,7 @@
 # Modifications Copyright OpenSearch Contributors. See
 # GitHub history for details.
 
-"""Agent identity (``gen_ai.agent.name``, ``agent.version``) on SDK events."""
+"""Agent identity (``gen_ai.agent.name``, ``gen_ai.agent.version``) on SDK events."""
 
 import pytest
 from opentelemetry import trace
@@ -23,7 +23,7 @@ CASE_EVENT = "opensearch.test_case.result"
 RUN_EVENT = "opensearch.test_suite_run.result"
 EVALUATION = "gen_ai.evaluation.result"
 NAME = "gen_ai.agent.name"
-VERSION = "agent.version"
+VERSION = "gen_ai.agent.version"
 
 
 @pytest.fixture()

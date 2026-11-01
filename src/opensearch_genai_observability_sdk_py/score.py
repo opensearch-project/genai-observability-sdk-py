@@ -174,7 +174,7 @@ def score(
             the evaluated span's own ``gen_ai.agent.name`` (inline scoring of
             the active span), else the ``register(agent_name=)`` default,
             else left out.
-        agent_version: ``agent.version`` of the evaluated agent, resolved the
+        agent_version: ``gen_ai.agent.version`` of the evaluated agent, resolved the
             same way.
         error_type: ``error.type`` when the evaluator itself failed.
         judge_trace_id: Trace id of the judge's own run, if traced.
