@@ -272,10 +272,8 @@ class OpenSearchTraceRetriever:
         """Return the subset of trace_ids that already have an evaluation result.
 
         Looks for ``gen_ai.evaluation.result`` events in the evaluation index,
-        matched on ``traceId`` (or the legacy ``opensearch.evaluation.trace_id``
-        written by older SDKs). Test case
-        and run events in the same index are not evaluation results and are
-        ignored.
+        matched on ``traceId``. Test case and run events in the same index are
+        not evaluation results and are ignored.
         """
         if not trace_ids:
             return set()
@@ -283,22 +281,18 @@ class OpenSearchTraceRetriever:
 
     def _find_in_evaluation_index(self, trace_ids: list[str]) -> set[str]:
         """Trace ids with ``gen_ai.evaluation.result`` events in the evaluation index."""
-        target_field = "attributes.opensearch.evaluation.trace_id"
         body = {
             "size": 0,
             "query": {
                 "bool": {
-                    "filter": [{"term": {"eventName": EVALUATION_EVENT_NAME}}],
-                    "should": [
+                    "filter": [
+                        {"term": {"eventName": EVALUATION_EVENT_NAME}},
                         {"terms": {"traceId": trace_ids}},
-                        {"terms": {target_field: trace_ids}},
                     ],
-                    "minimum_should_match": 1,
                 }
             },
             "aggs": {
                 "by_trace": {"terms": {"field": "traceId", "size": len(trace_ids)}},
-                "by_target": {"terms": {"field": target_field, "size": len(trace_ids)}},
             },
         }
         try:
@@ -313,11 +307,7 @@ class OpenSearchTraceRetriever:
             return set()
         aggs = resp.get("aggregations", {})
         wanted = set(trace_ids)
-        found = {
-            b["key"]
-            for agg in ("by_trace", "by_target")
-            for b in aggs.get(agg, {}).get("buckets", [])
-        }
+        found = {b["key"] for b in aggs.get("by_trace", {}).get("buckets", [])}
         return found & wanted
 
     # --- queries ---

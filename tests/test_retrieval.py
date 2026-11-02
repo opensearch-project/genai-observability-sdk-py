@@ -449,8 +449,7 @@ class TestFindEvaluatedTraceIds:
     def test_event_results_from_evaluation_index(self, retriever):
         retriever._mock_client.search.return_value = {
             "aggregations": {
-                "by_trace": {"buckets": [{"key": "t1"}]},
-                "by_target": {"buckets": [{"key": "t2"}, {"key": "other"}]},
+                "by_trace": {"buckets": [{"key": "t1"}, {"key": "t2"}]},
             }
         }
         assert retriever.find_evaluated_trace_ids(["t1", "t2", "t3"]) == {"t1", "t2"}

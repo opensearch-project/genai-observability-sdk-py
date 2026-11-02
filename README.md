@@ -427,7 +427,7 @@ score(
 | `value` | `float` | `gen_ai.evaluation.score.value` | Numeric score |
 | `trace_id` | `str` | event `traceId` | Hex trace ID of the evaluated trace |
 | `span_id` | `str` | event `spanId` | Hex span ID of the evaluated span. Without it the result is trace-level |
-| `label` | `str` | `gen_ai.evaluation.score.label` | Low-cardinality label (`"pass"`, `"relevant"`) |
+| `label` | `str` | `gen_ai.evaluation.score.label` | Low-cardinality label (`"relevant"`). `"pass"` / `"fail"` (any case) is the verdict |
 | `explanation` | `str` | `gen_ai.evaluation.explanation` | Evaluator rationale. Kept whole up to 8192 characters (safety cap, ends with `...[truncated]` beyond) |
 | `response_id` | `str` | `gen_ai.response.id` | Completion ID of the evaluated response |
 | `level` | `str` | `opensearch.evaluation.level` | `span`, `trace`, `session`, or `tool_call`. Default: `span` with a span context, `trace` with only `trace_id`, `session` with only `conversation_id` |
@@ -437,7 +437,6 @@ score(
 | `direction` | `str` | `opensearch.evaluation.score.direction` | `maximize` or `minimize` |
 | `score_min` / `score_max` | `float` | `opensearch.evaluation.score.min` / `.max` | Scale bounds |
 | `threshold` | `float` | `opensearch.evaluation.score.threshold` | Pass threshold. `direction` defaults to `maximize` (recorded) |
-| `assessment` | `str` | `gen_ai.evaluation.score.label` | Explicit verdict, `pass` or `fail` (`True`/`False` accepted; other values are dropped with a warning). Recorded as the label, replacing `label` |
 | `conversation_id` | `str` | `gen_ai.conversation.id` | Evaluated session |
 | `agent_name` | `str` | `gen_ai.agent.name` | Evaluated agent. Default: the active span's, else `register(agent_name=)` |
 | `agent_version` | `str` | `gen_ai.agent.version` | Its version. Default: the active span's, else `register(agent_version=)` |
@@ -447,12 +446,12 @@ score(
 
 `opensearch.evaluation.*` names are extensions for proposals that have not merged upstream yet; they will move to `gen_ai.*` names when they do.
 
-**Verdicts.** OpenSearch Dashboards shows pass/fail only for a declared rule; a result without one is neutral ("Scored"). Declare the rule with `assessment` (explicit verdict) or `threshold` (+ `direction`). The verdict is recorded as `gen_ai.evaluation.score.label` = `pass` / `fail`, as in OTel's own examples. When `value` and `threshold` are given without `assessment` or `label`, the SDK computes it: `pass` if `value >= threshold` (`maximize`) or `value <= threshold` (`minimize`), else `fail`. An explicit `assessment` always wins; a `label` you set is kept over a computed verdict (readers recompute it from `threshold` + `direction`).
+**Verdicts.** OpenSearch Dashboards shows pass/fail only for a declared rule; a result without one is neutral ("Scored"). Declare the rule with `label="pass"` / `"fail"` (explicit verdict) or `threshold` (+ `direction`). The verdict is `gen_ai.evaluation.score.label` = `pass` / `fail`, as in OTel's own examples. When `value` and `threshold` are given without a `label`, the SDK computes it: `pass` if `value >= threshold` (`maximize`) or `value <= threshold` (`minimize`), else `fail`. A `label` you set is kept over a computed verdict (readers recompute it from `threshold` + `direction`).
 
 ```python
 score("answer_quality", 3.0, threshold=4, score_min=1, score_max=5)  # label=fail
 score("latency_s", 9.2, threshold=12, direction="minimize")          # label=pass
-score("tool_selection", 1.0, assessment="pass")
+score("tool_selection", 1.0, label="pass")
 ```
 
 If you configure OTel yourself instead of calling `register()`, install a global `LoggerProvider` with an OTLP log exporter, otherwise the events are dropped.
@@ -523,11 +522,11 @@ All three event names are routed by Data Prepper to `otel-v1-genai-evaluation-*`
 - If the task starts no span, the case and score events carry no trace context (the `test.*` attributes are still set).
 - A task that raises does not stop the run: the case event has status `error` and `error.type` (the exception class), and the scorers for that case are skipped. A scorer that raises produces an evaluation event with `error.type` and no score value, and marks the case `error`. A run with any errored case has status `failure`.
 - Scorers run outside the agent trace, so a traced LLM judge gets its own trace.
-- `TestCaseResult.status` keeps its historical values (`pass` / `fail`; a task or scorer error, or a `fail` verdict, is `fail`). New fields: `error_type`, `duration_ms`, `assessments` (evaluation name to verdict), and `trace_id` / `span_id` of the span the events are parented to.
+- `TestCaseResult.status` keeps its historical values (`pass` / `fail`; a task or scorer error, or a `fail` verdict, is `fail`). New fields: `error_type`, `duration_ms`, `verdicts` (evaluation name to verdict), and `trace_id` / `span_id` of the span the events are parented to.
 
 Each scorer is the evaluator: a named scorer function sets the grade event's `opensearch.evaluation.evaluator.name`. All events use the SDK instrumentation scope. `EvalScore.label`, `.explanation`, and `.metadata` go on the event.
 
-**Declaring rules.** Decorate a scorer with `@scorer(...)` to declare its evaluation name and pass rule up front. A scorer may also return a `bool` (a verdict) or an `EvalScore` with `assessment` (`"pass"` / `"fail"`), `passed`, `threshold`, `direction`, `score_min`, `score_max`; fields set on the `EvalScore` win over the declaration.
+**Declaring rules.** Decorate a scorer with `@scorer(...)` to declare its evaluation name and pass rule up front. A scorer may also return a `bool` (a verdict) or an `EvalScore` with `label` (`"pass"` / `"fail"`), `passed`, `threshold`, `direction`, `score_min`, `score_max`; fields set on the `EvalScore` win over the declaration.
 
 ```python
 from opensearch_genai_observability_sdk_py import scorer
@@ -547,7 +546,7 @@ def tools(input, output, expected):
 
 `@scorer` arguments: `name` (evaluation name of float/bool results and of the error grade; default the function name), `threshold`, `direction` (default `maximize` with a threshold), `score_min` / `score_max`, `evaluator` (`evaluator.name`; default the function name), `evaluator_type`. A scorer that raises emits its error grade under the declared `name`, so it lands on the same evaluation as its successful results.
 
-**Case status** (`test.case.result.status`): `error` if the task or any scorer raised; else `fail` if any score of the case has a `fail` verdict (explicit `assessment` / `passed`, or `threshold` + `direction`); else `pass`. Scores with no declared rule never fail a case, so without declarations the status is as before (`pass` unless something raised). The run status (`test.suite.run.status`) still reflects errors only.
+**Case status** (`test.case.result.status`): `error` if the task or any scorer raised; else `fail` if any score of the case has a `fail` verdict (a `pass` / `fail` `label`, `passed`, or `threshold` + `direction`); else `pass`. Scores with no declared rule never fail a case, so without declarations the status is as before (`pass` unless something raised). The run status (`test.suite.run.status`) still reflects errors only.
 
 **Parameters:**
 
@@ -566,7 +565,7 @@ Returns `BenchmarkResult` with `.summary` (aggregate stats) and `.cases` (per-ca
 
 Upload pre-computed evaluation results from any framework (RAGAS, DeepEval, pytest, custom) as the same events: one `opensearch.test_case.result` event per `log()`, one `gen_ai.evaluation.result` event per score, and one `opensearch.test_suite_run.result` event on `close()`. Use when you already have results and want to visualize them in agent-health or OpenSearch Dashboards.
 
-When `trace_id` / `span_id` of the agent run are given, the case and score events are parented to that span; otherwise they carry no trace context. `log()` also accepts `status` (`pass` / `fail` / `error`; default `error` when `error` / `error_type` is given, else `fail` when a score has a `fail` verdict, else `pass`), `error_type` and `duration_ms`. `scores` is `{name: value}` or a list of `EvalScore` (to declare `assessment` / `threshold` / bounds). `Benchmark` creates no spans. Test case content uses `opensearch.test_case.*` because `test.*` has no such names upstream.
+When `trace_id` / `span_id` of the agent run are given, the case and score events are parented to that span; otherwise they carry no trace context. `log()` also accepts `status` (`pass` / `fail` / `error`; default `error` when `error` / `error_type` is given, else `fail` when a score has a `fail` verdict, else `pass`), `error_type` and `duration_ms`. `scores` is `{name: value}` or a list of `EvalScore` (to declare `label` / `threshold` / bounds). `Benchmark` creates no spans. Test case content uses `opensearch.test_case.*` because `test.*` has no such names upstream.
 
 ```python
 from opensearch_genai_observability_sdk_py import Benchmark, EvalScore
@@ -599,7 +598,7 @@ with Benchmark(name="judged-eval") as b:
         output="answer",
         scores=[
             EvalScore(name="answer_quality", value=3.0, threshold=4, score_min=1, score_max=5),
-            EvalScore(name="tool_selection", value=1.0, assessment="pass"),
+            EvalScore(name="tool_selection", value=1.0, label="pass"),
         ],
     )
 ```

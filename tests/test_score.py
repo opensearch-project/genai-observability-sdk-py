@@ -9,7 +9,6 @@
 
 """Tests for opensearch_genai_observability_sdk_py.score."""
 
-import pytest
 from opentelemetry import trace
 from opentelemetry._logs import SeverityNumber
 
@@ -133,7 +132,6 @@ class TestEventParenting:
         lr = _one_event(eval_events).log_record
         assert format(lr.trace_id, "032x") == TRACE_ID
         assert lr.span_id == 0
-        assert "opensearch.evaluation.trace_id" not in lr.attributes
         assert lr.attributes["opensearch.evaluation.level"] == "trace"
 
     def test_trace_only_never_derives_root_span_id(self, eval_events, exporter):
@@ -164,7 +162,6 @@ class TestEventParenting:
         score(name="test", value=0.5, trace_id="not-hex!", span_id=SPAN_ID)
         lr = _one_event(eval_events).log_record
         assert lr.trace_id == 0
-        assert "opensearch.evaluation.trace_id" not in lr.attributes
 
     def test_invalid_span_id_falls_back_to_trace_level(self, eval_events):
         score(name="test", value=0.5, trace_id=TRACE_ID, span_id="not-hex!")
@@ -288,10 +285,10 @@ class TestEventAttributes:
 
 
 # ---------------------------------------------------------------------------
-# Verdict: assessment and threshold
+# Verdict: label and threshold
 # ---------------------------------------------------------------------------
 
-ASSESSMENT = "gen_ai.evaluation.score.label"
+LABEL = "gen_ai.evaluation.score.label"
 THRESHOLD = "opensearch.evaluation.score.threshold"
 DIRECTION = "opensearch.evaluation.score.direction"
 
@@ -300,24 +297,13 @@ class TestVerdict:
     def test_no_rule_no_verdict(self, eval_events):
         score(name="relevance", value=0.9)
         a = _one_event(eval_events).log_record.attributes
-        assert ASSESSMENT not in a
+        assert LABEL not in a
         assert THRESHOLD not in a
         assert DIRECTION not in a
 
-    def test_explicit_assessment(self, eval_events):
-        score(name="tool_selection", value=0.5, assessment="pass")
-        assert _one_event(eval_events).log_record.attributes[ASSESSMENT] == "pass"
-
-    def test_assessment_normalized(self, eval_events):
-        score(name="a", assessment=" FAIL ")
-        score(name="b", assessment=True)
-        values = [r.log_record.attributes[ASSESSMENT] for r in eval_events()]
-        assert values == ["fail", "pass"]
-
-    def test_invalid_assessment_dropped_with_warning(self, eval_events, caplog):
-        score(name="a", value=1.0, assessment="maybe")
-        assert ASSESSMENT not in _one_event(eval_events).log_record.attributes
-        assert "assessment" in caplog.text
+    def test_explicit_label(self, eval_events):
+        score(name="tool_selection", value=0.5, label="pass")
+        assert _one_event(eval_events).log_record.attributes[LABEL] == "pass"
 
     def test_threshold_maximize_default(self, eval_events):
         score(name="q", value=4.0, threshold=4)
@@ -326,28 +312,27 @@ class TestVerdict:
         assert a[THRESHOLD] == 4.0
         assert isinstance(a[THRESHOLD], float)
         assert a[DIRECTION] == "maximize"
-        assert a[ASSESSMENT] == "pass"
-        assert b[ASSESSMENT] == "fail"
+        assert a[LABEL] == "pass"
+        assert b[LABEL] == "fail"
 
     def test_threshold_minimize(self, eval_events):
         score(name="latency", value=12.0, threshold=12, direction="minimize")
         score(name="latency", value=12.5, threshold=12, direction="minimize")
         a, b = (r.log_record.attributes for r in eval_events())
         assert a[DIRECTION] == "minimize"
-        assert a[ASSESSMENT] == "pass"
-        assert b[ASSESSMENT] == "fail"
+        assert a[LABEL] == "pass"
+        assert b[LABEL] == "fail"
 
-    def test_explicit_assessment_wins_over_threshold(self, eval_events):
-        score(name="q", value=1.0, threshold=4, assessment="pass")
+    def test_explicit_label_wins_over_threshold(self, eval_events):
+        score(name="q", value=1.0, threshold=4, label="pass")
         a = _one_event(eval_events).log_record.attributes
-        assert a[ASSESSMENT] == "pass"
+        assert a[LABEL] == "pass"
         assert a[THRESHOLD] == 4.0
 
-    def test_verdict_is_the_label_and_no_assessment_attribute(self, eval_events):
+    def test_verdict_is_the_label(self, eval_events):
         score(name="q", value=5.0, threshold=4)
         a = _one_event(eval_events).log_record.attributes
         assert a["gen_ai.evaluation.score.label"] == "pass"
-        assert "opensearch.evaluation.assessment" not in a
 
     def test_explicit_label_is_kept_over_the_verdict(self, eval_events):
         score(name="q", value=2.0, threshold=4, label="partially_correct")
@@ -355,35 +340,19 @@ class TestVerdict:
         assert a["gen_ai.evaluation.score.label"] == "partially_correct"
         assert a[THRESHOLD] == 4.0
 
-    def test_explicit_assessment_wins_over_a_label(self, eval_events, caplog):
-        score(name="q", value=2.0, label="partially_correct", assessment="pass")
-        a = _one_event(eval_events).log_record.attributes
-        assert a["gen_ai.evaluation.score.label"] == "pass"
-        assert "replaces label" in caplog.text
-
     def test_threshold_without_value_no_verdict(self, eval_events):
         score(name="q", threshold=4, error_type="TimeoutError")
         a = _one_event(eval_events).log_record.attributes
         assert a[THRESHOLD] == 4.0
-        assert ASSESSMENT not in a
+        assert LABEL not in a
 
 
 # ---------------------------------------------------------------------------
-# No span carrier
+# Evaluations are events, not spans
 # ---------------------------------------------------------------------------
 
 
-class TestNoSpanCarrier:
-    def test_carrier_parameter_removed(self):
-        with pytest.raises(TypeError):
-            score(name="t", carrier="span")  # type: ignore[call-arg]
-
-    def test_legacy_env_var_ignored(self, monkeypatch, exporter, eval_events):
-        monkeypatch.setenv("OPENSEARCH_GENAI_EVAL_CARRIER", "span")
-        score(name="t", value=0.5, trace_id=TRACE_ID, span_id=SPAN_ID)
-        assert exporter.get_finished_spans() == ()
-        assert len(eval_events()) == 1
-
+class TestEventOnly:
     def test_active_span_gets_no_child_or_event(self, exporter, eval_events):
         tracer = trace.get_tracer("test")
         with tracer.start_as_current_span("chat"):

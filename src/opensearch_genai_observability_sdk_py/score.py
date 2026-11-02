@@ -33,11 +33,10 @@ instrumentation library as OTel defines it. The evaluator identity is in the
 Dashboards derive the result source from the scope name.
 
 Verdicts: readers show pass/fail only for a declared rule, otherwise the
-result is neutral ("Scored"). Declare it with ``assessment`` (explicit
-``pass`` / ``fail``) or ``threshold`` (+ ``direction``). The verdict is
-recorded as ``gen_ai.evaluation.score.label`` = ``pass`` / ``fail`` (OTel's
-own examples). An explicit ``assessment`` replaces a ``label``; a verdict
-computed from ``threshold`` yields to a ``label`` (see ``resolve_assessment``).
+result is neutral ("Scored"). Declare it with ``label="pass"`` / ``"fail"``
+(``gen_ai.evaluation.score.label``, OTel's own examples) or with
+``threshold`` (+ ``direction``): with no label, the SDK writes the verdict
+the threshold gives as the label (see ``threshold_verdict``).
 """
 
 from __future__ import annotations
@@ -72,7 +71,7 @@ _TRUNCATION_MARKER = "...[truncated]"
 _VALID_LEVELS = ("span", "trace", "session", "tool_call")
 _VALID_EVALUATOR_TYPES = ("llm_judge", "code", "human", "external")
 _VALID_DIRECTIONS = ("maximize", "minimize")
-VALID_ASSESSMENTS = ("pass", "fail")
+VALID_VERDICTS = ("pass", "fail")
 
 
 def _no_span_context() -> Context:
@@ -106,7 +105,6 @@ def score(
     agent_version: str | None = None,
     error_type: str | None = None,
     judge_trace_id: str | None = None,
-    assessment: str | bool | None = None,
     threshold: float | None = None,
 ) -> None:
     """Record an evaluation result as a ``gen_ai.evaluation.result`` event.
@@ -141,13 +139,12 @@ def score(
       ``.score.min``, ``.score.max``, ``.score.threshold``,
       ``.judge.trace_id``.
 
-    Verdict: recorded as ``gen_ai.evaluation.score.label`` (``pass`` /
-    ``fail``). It is ``assessment`` when given (replacing ``label``).
-    Otherwise, when both ``value`` and ``threshold`` are given and no
-    ``label`` is, it is computed: ``pass`` if ``value >= threshold`` (``direction="maximize"``,
-    the default with a threshold) or ``value <= threshold``
-    (``direction="minimize"``), else ``fail``. With neither, no verdict is
-    recorded and readers show the result as neutral.
+    Verdict: ``gen_ai.evaluation.score.label`` = ``pass`` / ``fail``. Pass it
+    as ``label``. Otherwise, when both ``value`` and ``threshold`` are given
+    and no ``label`` is, the SDK writes it: ``pass`` if ``value >= threshold``
+    (``direction="maximize"``, the default with a threshold) or
+    ``value <= threshold`` (``direction="minimize"``), else ``fail``. With
+    neither, no verdict is recorded and readers show the result as neutral.
 
     Args:
         name: Evaluation metric name (e.g., ``"relevance"``, ``"factuality"``).
@@ -155,7 +152,8 @@ def score(
         trace_id: Hex trace ID of the evaluated trace.
         span_id: Hex span ID of the evaluated span. Without it the result is
             trace-level (no span id is ever derived from the trace id).
-        label: Low-cardinality label (e.g., ``"pass"``, ``"relevant"``).
+        label: Low-cardinality label (e.g., ``"relevant"``). ``"pass"`` /
+            ``"fail"`` is the verdict.
         explanation: Evaluator rationale. Kept whole up to
             ``EXPLANATION_MAX_CHARS`` (8192) characters.
         response_id: Completion ID of the evaluated LLM response.
@@ -179,8 +177,6 @@ def score(
             same way.
         error_type: ``error.type`` when the evaluator itself failed.
         judge_trace_id: Trace id of the judge's own run, if traced.
-        assessment: Explicit verdict, ``"pass"`` or ``"fail"`` (``True`` /
-            ``False`` are accepted). Other values are dropped with a warning.
         threshold: Pass threshold (``opensearch.evaluation.score.threshold``).
             ``direction`` defaults to ``"maximize"`` and is recorded.
 
@@ -204,11 +200,11 @@ def score(
             direction="maximize",
         )
 
-        # Declared rule: 1-5 judge, pass at 4 or more (assessment computed)
+        # Declared rule: 1-5 judge, pass at 4 or more (the SDK writes the label)
         score("answer_quality", 4.0, threshold=4, score_min=1, score_max=5)
 
         # Explicit verdict from a code check
-        score("tool_selection", 1.0, assessment="pass", evaluator="tool_check")
+        score("tool_selection", 1.0, label="pass", evaluator="tool_check")
 
         # Trace-level with benchmark grouping
         score(
@@ -253,7 +249,6 @@ def score(
         error_type=error_type,
         judge_trace_id=judge_trace_id,
         target_trace_id=target_trace_id,
-        assessment=assessment,
         threshold=threshold,
         extra=attributes,
     )
@@ -291,7 +286,6 @@ def build_evaluation_attributes(
     error_type: str | None = None,
     judge_trace_id: str | None = None,
     target_trace_id: str | None = None,
-    assessment: str | bool | None = None,
     threshold: float | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -301,27 +295,14 @@ def build_evaluation_attributes(
     _check_enum("direction", direction, _VALID_DIRECTIONS)
     if threshold is not None and direction is None:
         direction = "maximize"
-    verdict = resolve_assessment(
-        value, assessment=assessment, threshold=threshold, direction=direction
-    )
+    verdict = threshold_verdict(value, threshold=threshold, direction=direction)
 
     attrs: dict[str, Any] = {"gen_ai.evaluation.name": name}
     if value is not None:
         attrs["gen_ai.evaluation.score.value"] = float(value)
-    # The verdict is the label (OTel examples "pass" / "fail"). An explicit verdict wins
-    # over a label; a verdict computed from the threshold yields to one (readers recompute
-    # it from threshold + direction).
-    explicit_verdict = verdict if assessment is not None else None
-    if label and explicit_verdict and label.lower() != explicit_verdict:
-        logger.warning(
-            "score %r: assessment=%r replaces label=%r (the verdict is the label)",
-            name,
-            explicit_verdict,
-            label,
-        )
-    if explicit_verdict:
-        attrs["gen_ai.evaluation.score.label"] = explicit_verdict
-    elif label:
+    # The verdict is the label (OTel examples "pass" / "fail"). A label the caller set
+    # wins; without one, the verdict the threshold gives is written as the label.
+    if label:
         attrs["gen_ai.evaluation.score.label"] = label
     elif verdict:
         attrs["gen_ai.evaluation.score.label"] = verdict
@@ -360,44 +341,26 @@ def build_evaluation_attributes(
     return attrs
 
 
-def normalize_assessment(assessment: str | bool | None) -> str | None:
-    """Return ``"pass"`` / ``"fail"`` for a valid assessment, else ``None``.
-
-    Accepts ``"pass"`` / ``"fail"`` (any case, surrounding spaces ignored)
-    and ``True`` / ``False``. Other values are dropped with a warning.
-    """
-    if assessment is None:
+def label_verdict(label: str | None) -> str | None:
+    """``"pass"`` / ``"fail"`` when the label is a verdict (any case), else ``None``."""
+    if not label:
         return None
-    if isinstance(assessment, bool):
-        return "pass" if assessment else "fail"
-    if isinstance(assessment, str):
-        normalized = assessment.strip().lower()
-        if normalized in VALID_ASSESSMENTS:
-            return normalized
-    logger.warning(
-        "score(): assessment=%r is not one of %s; not recording it", assessment, VALID_ASSESSMENTS
-    )
-    return None
+    normalized = label.strip().lower()
+    return normalized if normalized in VALID_VERDICTS else None
 
 
-def resolve_assessment(
+def threshold_verdict(
     value: float | None,
     *,
-    assessment: str | bool | None = None,
     threshold: float | None = None,
     direction: str | None = None,
 ) -> str | None:
-    """Resolve the verdict of one result: ``"pass"``, ``"fail"`` or ``None``.
+    """The verdict a pass rule gives: ``"pass"``, ``"fail"`` or ``None``.
 
-    1. A valid explicit ``assessment`` wins.
-    2. Else, with both ``value`` and ``threshold``: ``pass`` when
-       ``value >= threshold`` (``direction`` ``"maximize"``, the default) or
-       ``value <= threshold`` (``"minimize"``), else ``fail``.
-    3. Else ``None``: no declared rule, readers show the result as neutral.
+    With both ``value`` and ``threshold``: ``pass`` when ``value >= threshold``
+    (``direction`` ``"maximize"``, the default) or ``value <= threshold``
+    (``"minimize"``), else ``fail``. Else ``None``: no declared rule.
     """
-    explicit = normalize_assessment(assessment)
-    if explicit is not None:
-        return explicit
     if value is None or threshold is None:
         return None
     if direction == "minimize":
