@@ -44,6 +44,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 EXIT_OK = 0
 EXIT_REGRESSION = 1
@@ -160,14 +161,10 @@ def setup_telemetry(args: argparse.Namespace) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def rison_string(value: str) -> str:
-    """Quote a string for a rison ``_a`` app state (``'`` and ``!`` are escaped)."""
-    return "'" + value.replace("!", "!!").replace("'", "!'") + "'"
-
-
 def run_url(dashboards_url: str, run_id: str) -> str:
+    """The run's page in OpenSearch Dashboards: ``#/runs/<test.suite.run.id>``."""
     base = dashboards_url.rstrip("/")
-    return f"{base}/app/agentTraces/evaluations#/?_a=(tab:runs,run:{rison_string(run_id)})"
+    return f"{base}/app/agentTraces/evaluations#/runs/{quote(run_id, safe='')}"
 
 
 def evaluator_stats(results: list[Any], pass_threshold: float) -> dict[str, EvaluatorStats]:

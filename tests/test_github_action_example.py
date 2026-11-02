@@ -70,12 +70,11 @@ class TestRunUrl:
     def test_deep_link_shape(self):
         url = rs.run_url("https://osd.example.com/", "run_20261028_010101_abcd1234")
         assert url == (
-            "https://osd.example.com/app/agentTraces/evaluations#/"
-            "?_a=(tab:runs,run:'run_20261028_010101_abcd1234')"
+            "https://osd.example.com/app/agentTraces/evaluations#/runs/run_20261028_010101_abcd1234"
         )
 
-    def test_rison_escaping(self):
-        assert rs.rison_string("it's!") == "'it!'s!!'"
+    def test_run_id_is_path_encoded(self):
+        assert rs.run_url("https://osd", "a/b c").endswith("#/runs/a%2Fb%20c")
 
 
 class TestReport:
@@ -100,7 +99,7 @@ class TestReport:
             thresholds={"exact": 0.9},
             problems=rs.check_regressions(stats, {"exact": 0.9}),
         )
-        assert f"run:'{result.summary.run_id}'" in text
+        assert f"#/runs/{result.summary.run_id}" in text
         assert "| `exact` | 0.500 | 1 | 1 | 2 | FAIL (min 0.9) |" in text
         assert "Regression check failed" in text
 
@@ -142,7 +141,7 @@ class TestMain:
         monkeypatch.chdir(tmp_path)
         code, summary, output = self._run(tmp_path, "--fail-on-regression", "answer_length=0.1")
         assert code == 0
-        assert "/app/agentTraces/evaluations#/?_a=(tab:runs,run:'run_" in summary
+        assert "/app/agentTraces/evaluations#/runs/run_" in summary
         assert "Regression check passed." in summary
         assert output.startswith("run-id=run_")
         assert "run-url=http://osd:5601/app/agentTraces/evaluations" in output

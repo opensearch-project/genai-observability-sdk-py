@@ -2,7 +2,7 @@
 
 A reusable composite action that runs your `evaluate()` suite on every pull request, sends the agent traces and evaluation events to OpenSearch, and reports the result in the job summary:
 
-- a link to the run in OpenSearch Dashboards: `<dashboards_url>/app/agentTraces/evaluations#/?_a=(tab:runs,run:'<test.suite.run.id>')`
+- a link to the run in OpenSearch Dashboards: `<dashboards_url>/app/agentTraces/evaluations#/runs/<test.suite.run.id>`
 - a markdown table of per-evaluator means and pass/fail counts
 - an optional regression gate that fails the job when an evaluator's mean drops below a minimum
 
