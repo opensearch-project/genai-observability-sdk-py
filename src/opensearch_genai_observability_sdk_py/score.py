@@ -21,23 +21,23 @@ Scoring levels:
 
 - **Span-level:** ``trace_id`` + ``span_id``, or call ``score()`` while the
   evaluated span is active. The event carries that span's ids.
-- **Trace-level:** ``trace_id`` only. The event has no span context and
-  carries ``opensearch.evaluation.trace_id`` instead. No span id is derived.
+- **Trace-level:** ``trace_id`` only. The event's own trace id is that trace
+  and it has no span id (none is derived).
 - **Session-level:** ``conversation_id`` (``gen_ai.conversation.id``) with
   ``level="session"``.
 
-The instrumentation scope of every event is the evaluator identity
-(``evaluator`` / ``evaluator_version``), or the SDK scope
-(``opensearch-genai-observability-sdk-py`` and the SDK version) when no
-evaluator is named. The scope also carries the attributes
-``opensearch.genai.sdk.name`` / ``opensearch.genai.sdk.version``. Data
-Prepper and OpenSearch Dashboards derive the grade source from the scope.
+The instrumentation scope of every event is the SDK
+(``opensearch-genai-observability-sdk-py`` and the SDK version), the
+instrumentation library as OTel defines it. The evaluator identity is in the
+``opensearch.evaluation.evaluator.*`` attributes. Data Prepper and OpenSearch
+Dashboards derive the result source from the scope name.
 
 Verdicts: readers show pass/fail only for a declared rule, otherwise the
 result is neutral ("Scored"). Declare it with ``assessment`` (explicit
-``pass`` / ``fail``) or ``threshold`` (+ ``direction``). With a value and a
-threshold but no assessment, the SDK computes the assessment and records it
-too (see ``resolve_assessment``).
+``pass`` / ``fail``) or ``threshold`` (+ ``direction``). The verdict is
+recorded as ``gen_ai.evaluation.score.label`` = ``pass`` / ``fail`` (OTel's
+own examples). An explicit ``assessment`` replaces a ``label``; a verdict
+computed from ``threshold`` yields to a ``label`` (see ``resolve_assessment``).
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ from typing import Any
 from opentelemetry import trace
 from opentelemetry._logs import SeverityNumber
 from opentelemetry.context import Context
-from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+from opentelemetry.trace import INVALID_SPAN_ID, NonRecordingSpan, SpanContext, TraceFlags
 
 from opensearch_genai_observability_sdk_py._internal import (
     AGENT_NAME_KEY,
@@ -118,13 +118,13 @@ def score(
     - ``trace_id`` + ``span_id`` given: that span (works for spans that have
       already ended, for example offline or async evaluation).
     - nothing given: the currently active span, if any (inline evaluation).
-    - ``trace_id`` only: no span context; ``opensearch.evaluation.trace_id``
-      holds the target trace and the level defaults to ``trace``.
+    - ``trace_id`` only: the record's own trace id is that trace, with no
+      span id, and the level defaults to ``trace``.
 
-    The instrumentation scope is always set: ``evaluator`` /
-    ``evaluator_version`` when given, otherwise the SDK scope
-    ``opensearch-genai-observability-sdk-py`` with the SDK version. Data
-    Prepper and OpenSearch Dashboards derive the grade source from it.
+    The instrumentation scope is always the SDK
+    (``opensearch-genai-observability-sdk-py`` with the SDK version); the
+    evaluator is named in ``opensearch.evaluation.evaluator.*``. Data Prepper
+    and OpenSearch Dashboards derive the result source from the scope.
 
     ``register()`` configures the OTLP logs pipeline. With your own OTel
     setup, configure a global ``LoggerProvider`` or the events are dropped.
@@ -138,12 +138,13 @@ def score(
     - Extensions (until the upstream proposals merge):
       ``opensearch.evaluation.level``, ``.evaluator.name``,
       ``.evaluator.version``, ``.evaluator.type``, ``.score.direction``,
-      ``.score.min``, ``.score.max``, ``.score.threshold``, ``.assessment``,
-      ``.judge.trace_id``, ``.trace_id``.
+      ``.score.min``, ``.score.max``, ``.score.threshold``,
+      ``.judge.trace_id``.
 
-    Verdict: ``opensearch.evaluation.assessment`` is ``assessment`` when
-    given. Otherwise, when both ``value`` and ``threshold`` are given, it is
-    computed: ``pass`` if ``value >= threshold`` (``direction="maximize"``,
+    Verdict: recorded as ``gen_ai.evaluation.score.label`` (``pass`` /
+    ``fail``). It is ``assessment`` when given (replacing ``label``).
+    Otherwise, when both ``value`` and ``threshold`` are given and no
+    ``label`` is, it is computed: ``pass`` if ``value >= threshold`` (``direction="maximize"``,
     the default with a threshold) or ``value <= threshold``
     (``direction="minimize"``), else ``fail``. With neither, no verdict is
     recorded and readers show the result as neutral.
@@ -307,8 +308,23 @@ def build_evaluation_attributes(
     attrs: dict[str, Any] = {"gen_ai.evaluation.name": name}
     if value is not None:
         attrs["gen_ai.evaluation.score.value"] = float(value)
-    if label:
+    # The verdict is the label (OTel examples "pass" / "fail"). An explicit verdict wins
+    # over a label; a verdict computed from the threshold yields to one (readers recompute
+    # it from threshold + direction).
+    explicit_verdict = verdict if assessment is not None else None
+    if label and explicit_verdict and label.lower() != explicit_verdict:
+        logger.warning(
+            "score %r: assessment=%r replaces label=%r (the verdict is the label)",
+            name,
+            explicit_verdict,
+            label,
+        )
+    if explicit_verdict:
+        attrs["gen_ai.evaluation.score.label"] = explicit_verdict
+    elif label:
         attrs["gen_ai.evaluation.score.label"] = label
+    elif verdict:
+        attrs["gen_ai.evaluation.score.label"] = verdict
     if explanation:
         attrs["gen_ai.evaluation.explanation"] = _truncate(explanation, EXPLANATION_MAX_CHARS)
     if response_id:
@@ -337,12 +353,8 @@ def build_evaluation_attributes(
         attrs["opensearch.evaluation.score.max"] = float(score_max)
     if threshold is not None:
         attrs["opensearch.evaluation.score.threshold"] = float(threshold)
-    if verdict:
-        attrs["opensearch.evaluation.assessment"] = verdict
     if judge_trace_id:
         attrs["opensearch.evaluation.judge.trace_id"] = judge_trace_id
-    if target_trace_id:
-        attrs["opensearch.evaluation.trace_id"] = target_trace_id
     if extra:
         attrs.update(extra)
     return attrs
@@ -403,9 +415,7 @@ def emit_evaluation_event(
     """Emit one ``gen_ai.evaluation.result`` LogRecord via the global LoggerProvider.
 
     ``context`` carries the evaluated span (``None`` means the current
-    context, i.e. the active span). The scope is the evaluator identity, or
-    the SDK scope when no evaluator is named, and always carries the
-    ``opensearch.genai.sdk.name`` / ``.version`` scope attributes.
+    context, i.e. the active span). The scope is always the SDK.
     """
     otel_logger = get_event_logger(evaluator, evaluator_version)
     otel_logger.emit(
@@ -415,6 +425,21 @@ def emit_evaluation_event(
         attributes=attributes,
         context=context,
     )
+
+
+def _trace_only_context(trace_id_int: int) -> Context:
+    """A Context whose span carries ``trace_id`` and no span id (invalid span id).
+
+    The OTel log record takes the trace id from it and leaves the span id empty,
+    so a trace-level result sits on its trace without inventing a span.
+    """
+    sc = SpanContext(
+        trace_id=trace_id_int,
+        span_id=INVALID_SPAN_ID,
+        is_remote=True,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    return trace.set_span_in_context(NonRecordingSpan(sc))
 
 
 def span_context_for(trace_id: str, span_id: str) -> Context | None:
@@ -476,9 +501,9 @@ def _resolve_target(
             "score(): invalid span_id '%s', recording a trace-level result instead", span_id
         )
 
-    # Trace-level: never invent a span id. Emit with a span-less context so the
-    # active span (if any) is not picked up, and carry the target trace id.
-    return _no_span_context(), False, normalized_trace_id
+    # Trace-level: never invent a span id. The record's own trace id is the
+    # target trace and its span id stays empty.
+    return _trace_only_context(trace_id_int), False, normalized_trace_id
 
 
 def _truncate(value: str, limit: int) -> str:

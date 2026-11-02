@@ -78,6 +78,18 @@ Copy [`example-workflow.yml`](example-workflow.yml) to `.github/workflows/agent-
 
 The job fails (exit code 1) when a `fail-on-regression` evaluator mean is below its minimum or the evaluator produced no scores. Exit code 2 means a configuration error.
 
+### CI/CD attributes
+
+Inside GitHub Actions the SDK stamps the OTel `cicd.pipeline.*` attributes on the run event, the case and score events and the agent root spans, from the job's environment:
+
+| Attribute | From |
+|---|---|
+| `cicd.pipeline.name` | `GITHUB_WORKFLOW` |
+| `cicd.pipeline.run.id` | `GITHUB_RUN_ID` |
+| `cicd.pipeline.run.url.full` | `$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID` |
+
+So every evaluation run links back to the workflow run that produced it. Nothing is added when you run the suite locally.
+
 ## Run locally
 
 The script reads the same settings from flags (or `EVAL_*` env vars), so you can try a suite against a local collector before wiring CI:

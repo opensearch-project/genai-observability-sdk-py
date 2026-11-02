@@ -62,7 +62,7 @@ score(
 
 
 # --- Trace-level: only a trace id is known. No span id is invented; the
-# event carries opensearch.evaluation.trace_id and level=trace. ---
+# event carries the trace id as its own traceId (no spanId) and level=trace. ---
 score(
     name="quality",
     value=0.88,
@@ -105,8 +105,7 @@ provider.force_flush()
 #
 #   event_name     = "gen_ai.evaluation.result"
 #   trace_id/span_id = the evaluated span
-#   scope          = relevance_judge 1.0.0   (SDK name/version if no evaluator)
-#   scope attrs    = opensearch.genai.sdk.name / opensearch.genai.sdk.version
+#   scope          = opensearch-genai-observability-sdk-py <SDK version>
 #   attributes:
 #     gen_ai.evaluation.name                 = "relevance"
 #     gen_ai.evaluation.score.value          = 0.95

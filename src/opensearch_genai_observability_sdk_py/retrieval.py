@@ -272,7 +272,8 @@ class OpenSearchTraceRetriever:
         """Return the subset of trace_ids that already have an evaluation result.
 
         Looks for ``gen_ai.evaluation.result`` events in the evaluation index,
-        matched on ``traceId`` or ``opensearch.evaluation.trace_id``. Test case
+        matched on ``traceId`` (or the legacy ``opensearch.evaluation.trace_id``
+        written by older SDKs). Test case
         and run events in the same index are not evaluation results and are
         ignored.
         """

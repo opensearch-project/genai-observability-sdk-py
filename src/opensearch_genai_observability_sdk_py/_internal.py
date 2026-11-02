@@ -15,6 +15,7 @@ Not part of the public API — subject to change without notice.
 from __future__ import annotations
 
 import logging
+import os
 from importlib.metadata import PackageNotFoundError, version
 from urllib.parse import urlparse, urlunparse
 
@@ -32,14 +33,46 @@ except PackageNotFoundError:  # pragma: no cover - only when running from a bare
     SDK_VERSION = "0.0.0+unknown"
 
 
-# Instrumentation scope attributes set on every logger the SDK uses for
-# evaluation, test case and test suite run events. Data Prepper derives
-# ``derived.evaluation.source = opensearch-sdk`` from them, even when the scope
-# name is a user-named evaluator.
-SDK_SCOPE_ATTRIBUTES: dict[str, str] = {
-    "opensearch.genai.sdk.name": SDK_SCOPE_NAME,
-    "opensearch.genai.sdk.version": SDK_VERSION,
-}
+# OTel CI/CD attributes (semantic-conventions ``cicd.*`` registry) stamped on
+# test suite runs when they run inside a CI system.
+CICD_PIPELINE_NAME_KEY = "cicd.pipeline.name"
+CICD_PIPELINE_RUN_ID_KEY = "cicd.pipeline.run.id"
+CICD_PIPELINE_RUN_URL_KEY = "cicd.pipeline.run.url.full"
+CICD_KEYS = (CICD_PIPELINE_NAME_KEY, CICD_PIPELINE_RUN_ID_KEY, CICD_PIPELINE_RUN_URL_KEY)
+
+
+def ci_pipeline_attributes(
+    override: dict[str, str] | None = None, environ: dict[str, str] | None = None
+) -> dict[str, str]:
+    """``cicd.pipeline.*`` for the CI pipeline run this process runs in.
+
+    Read from the CI environment (GitHub Actions, GitLab CI, Jenkins); empty
+    outside CI. ``override`` (keys from ``CICD_KEYS``) sets or replaces values,
+    for CI systems not detected here.
+    """
+    env = os.environ if environ is None else environ
+    out: dict[str, str] = {}
+    if env.get("GITHUB_ACTIONS") == "true":
+        run_id = env.get("GITHUB_RUN_ID", "")
+        out[CICD_PIPELINE_NAME_KEY] = env.get("GITHUB_WORKFLOW", "")
+        out[CICD_PIPELINE_RUN_ID_KEY] = run_id
+        server, repo = env.get("GITHUB_SERVER_URL", ""), env.get("GITHUB_REPOSITORY", "")
+        if server and repo and run_id:
+            out[CICD_PIPELINE_RUN_URL_KEY] = f"{server}/{repo}/actions/runs/{run_id}"
+    elif env.get("GITLAB_CI") == "true":
+        out[CICD_PIPELINE_NAME_KEY] = env.get("CI_PIPELINE_NAME") or env.get("CI_PROJECT_PATH", "")
+        out[CICD_PIPELINE_RUN_ID_KEY] = env.get("CI_PIPELINE_ID", "")
+        out[CICD_PIPELINE_RUN_URL_KEY] = env.get("CI_PIPELINE_URL", "")
+    elif env.get("JENKINS_URL") and env.get("BUILD_ID"):
+        out[CICD_PIPELINE_NAME_KEY] = env.get("JOB_NAME", "")
+        out[CICD_PIPELINE_RUN_ID_KEY] = env.get("BUILD_ID", "")
+        out[CICD_PIPELINE_RUN_URL_KEY] = env.get("BUILD_URL", "")
+    for key, value in (override or {}).items():
+        if key in CICD_KEYS and value:
+            out[key] = str(value)
+        elif key not in CICD_KEYS:
+            logger.warning("ci_pipeline: %r is not one of %s; ignoring it", key, CICD_KEYS)
+    return {k: v for k, v in out.items() if v}
 
 
 # ---------------------------------------------------------------------------
@@ -109,21 +142,22 @@ def event_scope(
 ) -> tuple[str, str]:
     """Instrumentation scope ``(name, version)`` for an SDK-emitted event.
 
-    The evaluator identity when an evaluator is named, otherwise the SDK
-    scope. Data Prepper and OpenSearch Dashboards derive the grade source
-    from the scope, so it is always set.
+    Always the SDK (the instrumentation library, as OTel defines the scope).
+    The evaluator identity is carried in the event attributes
+    (``opensearch.evaluation.evaluator.*``). Data Prepper and OpenSearch
+    Dashboards derive the result source from the scope name. The arguments
+    are kept for compatibility and ignored.
     """
-    if evaluator:
-        return evaluator, evaluator_version or ""
+    del evaluator, evaluator_version
     return SDK_SCOPE_NAME, SDK_VERSION
 
 
 def get_event_logger(
     evaluator: str | None = None, evaluator_version: str | None = None
 ) -> _logs.Logger:
-    """OTel Logger for SDK events: ``event_scope()`` plus ``SDK_SCOPE_ATTRIBUTES``."""
+    """OTel Logger for SDK events, with the SDK as the instrumentation scope."""
     name, scope_version = event_scope(evaluator, evaluator_version)
-    return _logs.get_logger(name, scope_version, attributes=SDK_SCOPE_ATTRIBUTES)
+    return _logs.get_logger(name, scope_version)
 
 
 # Exact attribute keys written by the SDK — user metadata must not use these.
@@ -135,6 +169,9 @@ _RESERVED_KEYS = frozenset(
         "test.case.id",
         "test.case.name",
         "test.case.result.status",
+        "cicd.pipeline.name",
+        "cicd.pipeline.run.id",
+        "cicd.pipeline.run.url.full",
         "opensearch.test_case.input",
         "opensearch.test_case.output",
         "opensearch.test_case.expected",

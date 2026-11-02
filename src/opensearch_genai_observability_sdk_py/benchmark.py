@@ -60,11 +60,19 @@ trace context (the ``test.*`` attributes are still set).
 - Test case content lives under ``opensearch.test_case.*``; ``test.*`` is
   owned by the OTel CICD SIG and has no names for it.
 
-Scope: score events use the scorer (evaluator) name when it is a named
-function, else the SDK scope; case and run events always use the SDK scope
-``opensearch-genai-observability-sdk-py`` with the SDK version. Every scope
-carries ``opensearch.genai.sdk.name`` / ``opensearch.genai.sdk.version``
-scope attributes.
+Scope: every event uses the SDK scope ``opensearch-genai-observability-sdk-py``
+with the SDK version (the instrumentation library); the scorer is named in
+``opensearch.evaluation.evaluator.*``.
+
+CI/CD: inside a CI system (GitHub Actions, GitLab CI, Jenkins) the run event,
+the case events and the agent root spans also carry the OTel
+``cicd.pipeline.name``, ``cicd.pipeline.run.id`` and
+``cicd.pipeline.run.url.full``; ``ci_pipeline`` overrides them. Never set
+outside CI.
+
+``test.suite.run.id`` and ``test.case.id`` are proposed OTel names
+(semantic-conventions#1262, semantic-conventions-genai#79), not yet in the
+registry.
 """
 
 from __future__ import annotations
@@ -95,6 +103,7 @@ from opensearch_genai_observability_sdk_py._internal import (
     _RESERVED_KEYS,
     AGENT_NAME_KEY,
     AGENT_VERSION_KEY,
+    ci_pipeline_attributes,
     get_event_logger,
     resolve_agent,
     validate_metadata_keys,
@@ -137,7 +146,8 @@ class EvalScore:
     ``@scorer(...)`` declaration):
 
     - ``assessment`` (``"pass"`` / ``"fail"``) or ``passed`` (bool): explicit
-      verdict, recorded as ``opensearch.evaluation.assessment``.
+      verdict, recorded as ``gen_ai.evaluation.score.label`` (pass / fail) when
+      the score has no label.
       ``assessment`` wins when both are set.
     - ``threshold`` + ``direction``: rule the SDK applies to ``value`` when no
       explicit verdict is given.
@@ -575,6 +585,7 @@ def _emit_run_event(
     duration_ms: float,
     metadata: dict[str, Any] | None = None,
     agent: dict[str, str] | None = None,
+    ci: dict[str, str] | None = None,
 ) -> str:
     """Emit the ``opensearch.test_suite_run.result`` event; return the run status."""
     error_count = statuses.count("error")
@@ -594,6 +605,8 @@ def _emit_run_event(
     )
     if agent:
         attrs.update(agent)
+    if ci:
+        attrs.update(ci)
     _emit_sdk_event(TEST_SUITE_RUN_EVENT_NAME, attrs, _no_span_context())
     return run_status
 
@@ -728,6 +741,10 @@ class Benchmark:
             ``register(agent_name=)``.
         agent_version: ``gen_ai.agent.version`` of the agent under test, stamped the
             same way. Defaults to ``register(agent_version=)``.
+        ci_pipeline: OTel ``cicd.pipeline.name`` / ``cicd.pipeline.run.id`` /
+            ``cicd.pipeline.run.url.full`` overrides, for CI systems the SDK does
+            not detect. Detected automatically on GitHub Actions, GitLab CI and
+            Jenkins; never set outside CI.
     """
 
     def __init__(
@@ -738,8 +755,11 @@ class Benchmark:
         record_io: bool = False,
         agent_name: str | None = None,
         agent_version: str | None = None,
+        ci_pipeline: dict[str, str] | None = None,
     ) -> None:
         self._name = name
+        # OTel cicd.pipeline.* of the CI run this runs in (empty outside CI).
+        self._ci = ci_pipeline_attributes(ci_pipeline)
         # Declared agent, else the register() default (never invented).
         self._agent = resolve_agent(agent_name, agent_version)
         self._metadata = _safe_metadata(metadata or {}, context=f"Benchmark({name!r})")
@@ -834,6 +854,7 @@ class Benchmark:
         grouping = {
             **_grouping(self._name, self._run_id, resolved_case_id, case_name),
             **self._agent,
+            **self._ci,
         }
 
         safe_case_meta = (
@@ -919,6 +940,7 @@ class Benchmark:
             duration_ms=summary.duration_ms,
             metadata=self._metadata,
             agent=self._agent,
+            ci=self._ci,
         )
 
         print(str(summary))
@@ -949,6 +971,7 @@ def evaluate(
     record_io: bool = False,
     agent_name: str | None = None,
     agent_version: str | None = None,
+    ci_pipeline: dict[str, str] | None = None,
 ) -> BenchmarkResult:
     """Run a task against a dataset, score outputs, and record results.
 
@@ -1000,6 +1023,10 @@ def evaluate(
             the agent its root span names, else ``register(agent_name=)``.
         agent_version: ``gen_ai.agent.version`` of the agent under test, resolved the
             same way. Lets runs be compared version to version.
+        ci_pipeline: OTel ``cicd.pipeline.name`` / ``cicd.pipeline.run.id`` /
+            ``cicd.pipeline.run.url.full`` overrides, for CI systems the SDK does
+            not detect. Detected automatically on GitHub Actions, GitLab CI and
+            Jenkins; never set outside CI.
 
     Returns:
         ``BenchmarkResult`` with summary and per-case results.
@@ -1014,6 +1041,8 @@ def evaluate(
     statuses: list[str] = []
     declared_agent = resolve_agent(agent_name, agent_version)
     case_agents: list[dict[str, str]] = []
+    # OTel cicd.pipeline.* of the CI run this runs in (empty outside CI).
+    ci = ci_pipeline_attributes(ci_pipeline)
 
     # Materialize iterable upfront so generators work
     data_list = list(data)
@@ -1025,7 +1054,7 @@ def evaluate(
         case_id = item.get("case_id") or _make_case_id(input_val)
         case_name_val = item.get("case_name")
 
-        grouping = _grouping(name, run_id, case_id, case_name_val)
+        grouping = {**_grouping(name, run_id, case_id, case_name_val), **ci}
         # Root spans get the declared agent (where they name none themselves).
         span_stamp = {**grouping, **declared_agent}
 
@@ -1182,6 +1211,7 @@ def evaluate(
         statuses,
         duration_ms=summary.duration_ms,
         metadata=safe_meta,
+        ci=ci,
         # Explicit, else the agent every case agreed on, else register() defaults.
         agent={
             **resolve_agent(),

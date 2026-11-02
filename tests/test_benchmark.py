@@ -335,30 +335,25 @@ class TestBenchmarkSummary:
 
 
 class TestEventScope:
-    def _sdk_attrs(self, rec):
-        return dict(rec.instrumentation_scope.attributes or {})
+    """The scope is the instrumentation library (the SDK); no invented scope attributes."""
 
-    def test_named_scorer_scope_and_sdk_attributes(self, events):
+    def test_named_scorer_is_an_attribute_and_scope_is_sdk(self, events):
         def judge(i, o, e):
             return 1.0
 
         evaluate(name="scope", task=lambda x: x, data=[{"input": "q1"}], scores=[judge])
         grade = events(EVALUATION)[0]
-        assert grade.instrumentation_scope.name == "judge"
+        assert grade.log_record.attributes["opensearch.evaluation.evaluator.name"] == "judge"
         for rec in (grade, events(CASE_EVENT)[0], events(RUN_EVENT)[0]):
-            attrs = self._sdk_attrs(rec)
-            assert attrs["opensearch.genai.sdk.name"] == SDK_SCOPE
-            assert attrs["opensearch.genai.sdk.version"] == SDK_VERSION
-        for rec in (events(CASE_EVENT)[0], events(RUN_EVENT)[0]):
             assert rec.instrumentation_scope.name == SDK_SCOPE
             assert rec.instrumentation_scope.version == SDK_VERSION
+            assert not rec.instrumentation_scope.attributes
 
     def test_anonymous_scorer_uses_sdk_scope(self, events):
         evaluate(name="anon", task=lambda x: x, data=[{"input": "q1"}], scores=[lambda i, o, e: 1])
         rec = events(EVALUATION)[0]
         assert rec.instrumentation_scope.name == SDK_SCOPE
         assert rec.instrumentation_scope.version == SDK_VERSION
-        assert self._sdk_attrs(rec)["opensearch.genai.sdk.name"] == SDK_SCOPE
 
     def test_benchmark_events_use_sdk_scope(self, events):
         with Benchmark(name="b-scope") as b:
@@ -366,7 +361,7 @@ class TestEventScope:
         for name in (EVALUATION, CASE_EVENT, RUN_EVENT):
             rec = events(name)[0]
             assert rec.instrumentation_scope.name == SDK_SCOPE
-            assert self._sdk_attrs(rec)["opensearch.genai.sdk.version"] == SDK_VERSION
+            assert rec.instrumentation_scope.version == SDK_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +465,7 @@ class TestEvaluate:
         assert a["test.case.id"] == "c1"
         assert a["test.case.name"] == "first"
         assert a["opensearch.evaluation.evaluator.name"] == "judge"
-        assert rec.instrumentation_scope.name == "judge"
+        assert rec.instrumentation_scope.name == SDK_SCOPE
 
     def test_evaluate_scorer_error_emits_error_event(self, eval_events):
         def bad_scorer(input_val, output, expected):
@@ -598,7 +593,7 @@ class TestEvaluateEvents:
             assert a[key] == root.attributes[key]
         assert a["opensearch.evaluation.level"] == "span"
         assert a["gen_ai.evaluation.score.label"] == "relevant"
-        assert score_rec.instrumentation_scope.name == "judge"
+        assert score_rec.instrumentation_scope.name == SDK_SCOPE
         case = result.cases[0]
         assert case.trace_id == format(root.context.trace_id, "032x")
         assert case.span_id == format(root.context.span_id, "016x")
@@ -860,7 +855,7 @@ class TestBenchmarkEvents:
 # Declared scorer rules and verdicts
 # ---------------------------------------------------------------------------
 
-ASSESSMENT = "opensearch.evaluation.assessment"
+ASSESSMENT = "gen_ai.evaluation.score.label"
 THRESHOLD = "opensearch.evaluation.score.threshold"
 
 
@@ -920,7 +915,7 @@ class TestScorerDecorator:
         assert a["opensearch.evaluation.evaluator.name"] == "quality_judge"
         assert a["opensearch.evaluation.evaluator.type"] == "llm_judge"
         assert a[ASSESSMENT] == "fail"
-        assert rec.instrumentation_scope.name == "quality_judge"
+        assert rec.instrumentation_scope.name == SDK_SCOPE
         assert result.cases[0].scores == {"answer_quality": 3.0}
         assert result.cases[0].assessments == {"answer_quality": "fail"}
 

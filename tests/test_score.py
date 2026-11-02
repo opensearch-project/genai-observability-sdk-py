@@ -74,19 +74,15 @@ class TestEventEmission:
         assert scope.name == SDK_SCOPE_NAME == "opensearch-genai-observability-sdk-py"
         assert scope.version == SDK_VERSION
         assert scope.version
-        assert dict(scope.attributes) == {
-            "opensearch.genai.sdk.name": "opensearch-genai-observability-sdk-py",
-            "opensearch.genai.sdk.version": SDK_VERSION,
-        }
+        # No invented scope attributes: the scope name is the SDK identity.
+        assert not scope.attributes
 
-    def test_evaluator_is_scope(self, eval_events):
+    def test_evaluator_is_an_attribute_not_the_scope(self, eval_events):
         score(name="relevance", value=0.9, evaluator="relevance_judge", evaluator_version="3.1")
         rec = _one_event(eval_events)
-        assert rec.instrumentation_scope.name == "relevance_judge"
-        assert rec.instrumentation_scope.version == "3.1"
-        # The SDK identity is still on the scope as attributes
-        assert rec.instrumentation_scope.attributes["opensearch.genai.sdk.name"] == SDK_SCOPE_NAME
-        assert rec.instrumentation_scope.attributes["opensearch.genai.sdk.version"] == SDK_VERSION
+        # The scope is the instrumentation library (the SDK), as OTel defines it.
+        assert rec.instrumentation_scope.name == SDK_SCOPE_NAME
+        assert rec.instrumentation_scope.version == SDK_VERSION
         assert (
             rec.log_record.attributes["opensearch.evaluation.evaluator.name"] == "relevance_judge"
         )
@@ -111,7 +107,6 @@ class TestEventParenting:
         rec = _one_event(eval_events)
         assert _ids(rec) == (TRACE_ID, SPAN_ID)
         assert rec.log_record.attributes["opensearch.evaluation.level"] == "span"
-        assert "opensearch.evaluation.trace_id" not in rec.log_record.attributes
 
     def test_explicit_ids_accept_0x_and_uppercase(self, eval_events):
         score(name="accuracy", trace_id="0x" + TRACE_ID.upper(), span_id=SPAN_ID.upper())
@@ -133,12 +128,12 @@ class TestEventParenting:
             score(name="relevance", trace_id=TRACE_ID, span_id=SPAN_ID)
         assert _ids(_one_event(eval_events)) == (TRACE_ID, SPAN_ID)
 
-    def test_trace_only_has_no_span_context(self, eval_events):
+    def test_trace_only_sets_the_record_trace_id_and_no_span_id(self, eval_events):
         score(name="relevance", value=0.92, trace_id=TRACE_ID)
         lr = _one_event(eval_events).log_record
-        assert lr.trace_id == 0
+        assert format(lr.trace_id, "032x") == TRACE_ID
         assert lr.span_id == 0
-        assert lr.attributes["opensearch.evaluation.trace_id"] == TRACE_ID
+        assert "opensearch.evaluation.trace_id" not in lr.attributes
         assert lr.attributes["opensearch.evaluation.level"] == "trace"
 
     def test_trace_only_never_derives_root_span_id(self, eval_events, exporter):
@@ -152,13 +147,12 @@ class TestEventParenting:
         with tracer.start_as_current_span("unrelated"):
             score(name="relevance", trace_id=TRACE_ID)
         lr = _one_event(eval_events).log_record
-        assert lr.trace_id == 0 and lr.span_id == 0
-        assert lr.attributes["opensearch.evaluation.trace_id"] == TRACE_ID
+        assert format(lr.trace_id, "032x") == TRACE_ID and lr.span_id == 0
 
     def test_trace_id_normalized(self, eval_events):
         score(name="relevance", trace_id="0x" + TRACE_ID.upper())
         lr = _one_event(eval_events).log_record
-        assert lr.attributes["opensearch.evaluation.trace_id"] == TRACE_ID
+        assert format(lr.trace_id, "032x") == TRACE_ID
 
     def test_no_context_no_level(self, eval_events):
         score(name="test", value=0.5)
@@ -176,7 +170,7 @@ class TestEventParenting:
         score(name="test", value=0.5, trace_id=TRACE_ID, span_id="not-hex!")
         lr = _one_event(eval_events).log_record
         assert lr.span_id == 0
-        assert lr.attributes["opensearch.evaluation.trace_id"] == TRACE_ID
+        assert format(lr.trace_id, "032x") == TRACE_ID
         assert lr.attributes["opensearch.evaluation.level"] == "trace"
 
     def test_span_id_without_trace_id_ignored(self, eval_events):
@@ -297,7 +291,7 @@ class TestEventAttributes:
 # Verdict: assessment and threshold
 # ---------------------------------------------------------------------------
 
-ASSESSMENT = "opensearch.evaluation.assessment"
+ASSESSMENT = "gen_ai.evaluation.score.label"
 THRESHOLD = "opensearch.evaluation.score.threshold"
 DIRECTION = "opensearch.evaluation.score.direction"
 
@@ -348,6 +342,24 @@ class TestVerdict:
         a = _one_event(eval_events).log_record.attributes
         assert a[ASSESSMENT] == "pass"
         assert a[THRESHOLD] == 4.0
+
+    def test_verdict_is_the_label_and_no_assessment_attribute(self, eval_events):
+        score(name="q", value=5.0, threshold=4)
+        a = _one_event(eval_events).log_record.attributes
+        assert a["gen_ai.evaluation.score.label"] == "pass"
+        assert "opensearch.evaluation.assessment" not in a
+
+    def test_explicit_label_is_kept_over_the_verdict(self, eval_events):
+        score(name="q", value=2.0, threshold=4, label="partially_correct")
+        a = _one_event(eval_events).log_record.attributes
+        assert a["gen_ai.evaluation.score.label"] == "partially_correct"
+        assert a[THRESHOLD] == 4.0
+
+    def test_explicit_assessment_wins_over_a_label(self, eval_events, caplog):
+        score(name="q", value=2.0, label="partially_correct", assessment="pass")
+        a = _one_event(eval_events).log_record.attributes
+        assert a["gen_ai.evaluation.score.label"] == "pass"
+        assert "replaces label" in caplog.text
 
     def test_threshold_without_value_no_verdict(self, eval_events):
         score(name="q", threshold=4, error_type="TimeoutError")
