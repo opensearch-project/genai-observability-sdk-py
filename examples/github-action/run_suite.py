@@ -187,7 +187,7 @@ def evaluator_stats(results: list[Any], pass_threshold: float) -> dict[str, Eval
 
 
 def case_counts(result: Any) -> tuple[int, int, int]:
-    """(pass, fail, error) case counts, matching the run event."""
+    """(pass, fail, error) case counts, matching the local summary."""
     passed = failed = errors = 0
     for c in result.cases:
         if c.error or c.scorer_errors or c.status == "error":

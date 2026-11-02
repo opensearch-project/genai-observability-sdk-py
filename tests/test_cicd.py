@@ -1,4 +1,4 @@
-"""OTel ``cicd.pipeline.*`` on test suite runs inside CI, never outside it."""
+"""OTel ``cicd.pipeline.*`` on evaluation results inside CI, never outside it."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def _ci_env(monkeypatch):
         monkeypatch.setenv(k, v)
 
 
-def test_run_event_case_event_and_root_span_carry_cicd(monkeypatch, events, exporter):
+def test_evaluation_events_and_root_span_carry_cicd(monkeypatch, events, exporter):
     from opensearch_genai_observability_sdk_py import observe
 
     @observe(name="agent")
@@ -82,10 +82,9 @@ def test_run_event_case_event_and_root_span_carry_cicd(monkeypatch, events, expo
 
     _ci_env(monkeypatch)
     evaluate(name="ci", task=agent, data=[{"input": "q1"}], scores=[lambda i, o, e: 1.0])
-    for name in ("opensearch.test_suite_run.result", "opensearch.test_case.result"):
-        attrs = events(name)[0].log_record.attributes
-        assert attrs["cicd.pipeline.run.id"] == "120912"
-        assert attrs["cicd.pipeline.name"] == "agent-evals"
+    attrs = events("gen_ai.evaluation.result")[0].log_record.attributes
+    assert attrs["cicd.pipeline.run.id"] == "120912"
+    assert attrs["cicd.pipeline.name"] == "agent-evals"
     roots = [s for s in exporter.get_finished_spans() if s.parent is None]
     assert roots and all(s.attributes["cicd.pipeline.run.id"] == "120912" for s in roots)
 
@@ -94,5 +93,16 @@ def test_outside_ci_events_have_no_cicd(monkeypatch, events):
     for k in ("GITHUB_ACTIONS", "GITLAB_CI", "JENKINS_URL"):
         monkeypatch.delenv(k, raising=False)
     evaluate(name="local", task=lambda x: x, data=[{"input": "q1"}], scores=[lambda i, o, e: 1.0])
-    attrs = events("opensearch.test_suite_run.result")[0].log_record.attributes
+    attrs = events("gen_ai.evaluation.result")[0].log_record.attributes
     assert not any(k.startswith("cicd.") for k in attrs)
+
+
+def test_benchmark_score_events_carry_cicd(monkeypatch, events):
+    from opensearch_genai_observability_sdk_py import Benchmark
+
+    _ci_env(monkeypatch)
+    with Benchmark(name="ci-upload") as b:
+        b.log(input="q1", scores={"a": 1.0})
+    attrs = events("gen_ai.evaluation.result")[0].log_record.attributes
+    assert attrs["cicd.pipeline.run.id"] == "120912"
+    assert attrs["cicd.pipeline.run.url.full"].endswith("/actions/runs/120912")

@@ -67,5 +67,4 @@ def suite():
             "vcs.ref.head.revision": os.environ.get("GITHUB_SHA", "local"),
             "vcs.ref.head.name": os.environ.get("GITHUB_REF_NAME", "local"),
         },
-        record_io=True,
     )

@@ -84,13 +84,13 @@ class TestEvalScore:
 
 
 # ---------------------------------------------------------------------------
-# Benchmark: run, case and score events (no spans)
+# Benchmark: score events only (no spans, no case or run events)
 # ---------------------------------------------------------------------------
 
-CASE_EVENT = "opensearch.test_case.result"
-RUN_EVENT = "opensearch.test_suite_run.result"
 EVALUATION = "gen_ai.evaluation.result"
 SDK_SCOPE = "opensearch-genai-observability-sdk-py"
+# Attributes that must never be emitted.
+REMOVED_KEYS = ("test.case.result.status", "test.suite.run.status")
 
 
 @pytest.fixture()
@@ -103,89 +103,162 @@ def events(log_exporter):
     return _get
 
 
+def _assert_only_evaluation_events(log_exporter):
+    """Every record is a gen_ai.evaluation.result without removed attributes."""
+    for r in log_exporter.get_finished_logs():
+        assert r.log_record.event_name == EVALUATION
+        a = r.log_record.attributes
+        assert not [k for k in a if k in REMOVED_KEYS]
+        assert not [
+            k for k in a if k.startswith(("opensearch.test_case.", "opensearch.test_suite_run."))
+        ]
+
+
 class TestBenchmarkRun:
-    def test_run_event_attributes(self, events):
+    def test_no_run_event(self, log_exporter):
         with Benchmark(name="my-bench") as b:
             pass
-        a = events(RUN_EVENT)[0].log_record.attributes
-        assert a["test.suite.name"] == "my-bench"
-        assert a["test.suite.run.id"] == b.run_id
         assert b.run_id.startswith("run_")
-        assert a["test.suite.run.status"] == "success"
-        assert "gen_ai.operation.name" not in a
+        assert log_exporter.get_finished_logs() == ()
 
-    def test_failure_status(self, events):
-        with Benchmark(name="fail-bench") as b:
-            b.log(error="boom")
-        a = events(RUN_EVENT)[0].log_record.attributes
-        assert a["test.suite.run.status"] == "failure"
-
-    def test_metadata_on_run_event(self, events):
-        with Benchmark(name="meta-bench", metadata={"model": "gpt-4"}):
-            pass
-        assert events(RUN_EVENT)[0].log_record.attributes["model"] == "gpt-4"
+    def test_run_metadata_on_score_events(self, events):
+        with Benchmark(name="meta-bench", metadata={"model": "gpt-4"}) as b:
+            b.log(input="q1", scores={"a": 1.0, "b": 0.5})
+        recs = events(EVALUATION)
+        assert len(recs) == 2
+        assert all(r.log_record.attributes["model"] == "gpt-4" for r in recs)
 
     def test_reserved_metadata_filtered(self, events):
-        with Benchmark(name="reserved-bench", metadata={"test.suite.name": "oops", "m": "x"}):
-            pass
-        a = events(RUN_EVENT)[0].log_record.attributes
+        with Benchmark(name="reserved-bench", metadata={"test.suite.name": "oops", "m": "x"}) as b:
+            b.log(input="q1", scores={"a": 1.0})
+        a = events(EVALUATION)[0].log_record.attributes
         assert a["test.suite.name"] == "reserved-bench"
         assert a["m"] == "x"
 
     def test_custom_test_prefix_allowed(self, events):
         """User metadata with test.* prefix is allowed if not an SDK key."""
-        with Benchmark(name="custom-test", metadata={"test.custom_field": "hello"}):
-            pass
-        assert events(RUN_EVENT)[0].log_record.attributes["test.custom_field"] == "hello"
+        with Benchmark(name="custom-test", metadata={"test.custom_field": "hello"}) as b:
+            b.log(input="q1", scores={"a": 1.0})
+        assert events(EVALUATION)[0].log_record.attributes["test.custom_field"] == "hello"
 
     def test_properties(self):
         b = Benchmark(name="prop-test")
         assert b.name == "prop-test"
         b.close()
 
+    def test_record_io_removed(self):
+        with pytest.raises(TypeError):
+            Benchmark(name="io", record_io=True)
+
+
+class TestRunId:
+    def test_benchmark_run_id_used_as_given(self, events):
+        with Benchmark(name="shard", run_id="  ci-123  ") as b:
+            b.log(input="q1", scores={"a": 1.0})
+        assert b.run_id == "  ci-123  "
+        assert events(EVALUATION)[0].log_record.attributes["test.suite.run.id"] == "  ci-123  "
+
+    def test_evaluate_run_id_used_as_given(self, exporter, events):
+        result = evaluate(
+            name="shard",
+            task=_traced_agent(),
+            data=[{"input": "q1"}],
+            scores=[lambda i, o, e: 1.0],
+            run_id="ci-456",
+        )
+        assert result.summary.run_id == "ci-456"
+        assert events(EVALUATION)[0].log_record.attributes["test.suite.run.id"] == "ci-456"
+        assert _spans_named(exporter, "agent")[0].attributes["test.suite.run.id"] == "ci-456"
+
+    @pytest.mark.parametrize("bad", ["", "   ", "\t\n"])
+    def test_empty_run_id_raises(self, bad):
+        with pytest.raises(ValueError, match="run_id"):
+            Benchmark(name="b", run_id=bad)
+        with pytest.raises(ValueError, match="run_id"):
+            evaluate(name="e", task=lambda x: x, data=[{"input": "q"}], scores=[], run_id=bad)
+
+    def test_generated_when_none(self):
+        first = Benchmark(name="gen", run_id=None)
+        second = Benchmark(name="gen")
+        assert first.run_id.startswith("run_")
+        assert first.run_id != second.run_id
+        first.close()
+        second.close()
+
 
 class TestBenchmarkLog:
-    def test_case_event_attributes(self, events):
+    def test_score_event_attributes(self, events):
         with Benchmark(name="attr-test") as b:
             b.log(input="What is Python?", scores={"accuracy": 0.9}, case_name="python_q")
-        a = events(CASE_EVENT)[0].log_record.attributes
+        a = events(EVALUATION)[0].log_record.attributes
         assert a["test.suite.name"] == "attr-test"
         assert a["test.suite.run.id"] == b.run_id
         assert a["test.case.id"] == _make_case_id("What is Python?")
         assert a["test.case.name"] == "python_q"
-        assert a["test.case.result.status"] == "pass"
 
     def test_explicit_case_id(self, events):
         with Benchmark(name="id-test") as b:
             b.log(case_id="custom_123", scores={"a": 1.0})
-        assert events(CASE_EVENT)[0].log_record.attributes["test.case.id"] == "custom_123"
+        assert events(EVALUATION)[0].log_record.attributes["test.case.id"] == "custom_123"
 
-    def test_error_is_error_event_and_fail_result(self, events):
-        with Benchmark(name="err-test") as b:
-            b.log(input="q1", error="something broke")
-        a = events(CASE_EVENT)[0].log_record.attributes
-        assert a["test.case.result.status"] == "error"
-        # The error message is not recorded as an attribute
-        assert "opensearch.test_case.error" not in a
+    def test_error_is_local_error_status_only(self, log_exporter):
+        b = Benchmark(name="err-test")
+        b.log(input="q1", error="something broke")
+        b.close()
+        assert b._cases[0].status == "error"
+        # No scores: nothing emitted, and the message is never an attribute.
+        assert log_exporter.get_finished_logs() == ()
 
-    def test_multiple_cases(self, events):
+    def test_multiple_cases(self, events, log_exporter):
         with Benchmark(name="multi") as b:
             b.log(input="q1", scores={"a": 1.0})
             b.log(input="q2", scores={"a": 0.5})
             b.log(input="q3", scores={"a": 0.0})
-        assert len(events(CASE_EVENT)) == 3
         assert len(events(EVALUATION)) == 3
+        _assert_only_evaluation_events(log_exporter)
 
-    def test_case_reserved_metadata_filtered(self, events):
-        with Benchmark(name="res-meta") as b:
+    def test_case_metadata_over_run_metadata(self, events):
+        with Benchmark(name="res-meta", metadata={"model": "gpt-4", "split": "test"}) as b:
             b.log(
                 input="q1",
                 scores={"a": 1.0},
-                metadata={"test.case.result.status": "oops", "model": "gpt-4"},
+                metadata={"test.case.id": "oops", "split": "dev"},
             )
-        a = events(CASE_EVENT)[0].log_record.attributes
-        assert a["test.case.result.status"] == "pass"
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["test.case.id"] == _make_case_id("q1")
         assert a["model"] == "gpt-4"
+        assert a["split"] == "dev"
+
+    def test_metadata_precedence(self, events):
+        with Benchmark(
+            name="prec", agent_name="real_agent", metadata={"k": "run", "gen_ai.agent.name": "x"}
+        ) as b:
+            b.log(
+                input="q1",
+                metadata={"k": "case", "j": "case"},
+                scores=[
+                    EvalScore(
+                        name="acc",
+                        value=1.0,
+                        metadata={
+                            "j": "score",
+                            "gen_ai.agent.name": "y",
+                            "gen_ai.evaluation.name": "z",
+                        },
+                    )
+                ],
+            )
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["k"] == "case"
+        assert a["j"] == "score"
+        # Agent attribute beats score metadata; score fields beat everything.
+        assert a["gen_ai.agent.name"] == "real_agent"
+        assert a["gen_ai.evaluation.name"] == "acc"
+
+    def test_duration_ms_param_removed(self):
+        with Benchmark(name="no-dur") as b:
+            with pytest.raises(TypeError):
+                b.log(input="q1", duration_ms=1.0)
 
     def test_log_after_close_raises(self):
         b = Benchmark(name="closed")
@@ -211,9 +284,38 @@ class TestBenchmarkLog:
 
     def test_invalid_ids_emit_without_trace_context(self, events):
         with Benchmark(name="bad-link") as b:
-            b.log(input="q1", trace_id="not-hex!", span_id=SPAN_ID)
-        lr = events(CASE_EVENT)[0].log_record
+            b.log(input="q1", scores={"a": 1.0}, trace_id="not-hex!", span_id=SPAN_ID)
+        lr = events(EVALUATION)[0].log_record
         assert lr.trace_id == 0 and lr.span_id == 0
+
+    def test_error_type_makes_error_results(self, events):
+        b = Benchmark(name="err-type")
+        b.log(
+            input="q1",
+            scores=[
+                EvalScore(name="acc", value=0.0, threshold=0.5, explanation="timed out"),
+                EvalScore(name="tone", value=1.0, label="pass"),
+            ],
+            error_type="TimeoutError",
+            trace_id=TRACE_ID,
+            span_id=SPAN_ID,
+        )
+        summary = b.close()
+        grades = _grades(events)
+        assert set(grades) == {"acc", "tone"}
+        for rec in grades.values():
+            a = rec.log_record.attributes
+            assert a["error.type"] == "TimeoutError"
+            assert "gen_ai.evaluation.score.value" not in a
+            assert LABEL not in a
+            assert format(rec.log_record.span_id, "016x") == SPAN_ID
+        assert grades["acc"].log_record.attributes["gen_ai.evaluation.explanation"] == "timed out"
+        case = b._cases[0]
+        assert case.status == "error"
+        assert case.scores == {}
+        assert case.verdicts is None
+        assert summary.error_count == 1
+        assert summary.scores == {}
 
 
 class TestBenchmarkScoreEvents:
@@ -242,40 +344,17 @@ class TestBenchmarkScoreEvents:
         assert format(lr.span_id, "016x") == SPAN_ID
         assert lr.attributes["opensearch.evaluation.level"] == "span"
 
-    def test_no_scores_no_events(self, eval_events):
+    def test_no_scores_no_events(self, log_exporter):
         with Benchmark(name="no-score") as b:
             b.log(input="q1")
-        assert eval_events() == []
+        assert log_exporter.get_finished_logs() == ()
 
-
-class TestBenchmarkRecordIO:
-    def test_record_io_false_by_default(self, events):
+    def test_io_never_recorded(self, events):
         with Benchmark(name="no-io") as b:
-            b.log(input="secret", output="answer", expected="truth")
-        a = events(CASE_EVENT)[0].log_record.attributes
-        assert not [k for k in a if k.startswith("opensearch.test_case.") and "duration" not in k]
-        assert "test.case.input" not in a
-
-    def test_record_io_true(self, events):
-        with Benchmark(name="with-io", record_io=True) as b:
-            b.log(input="question", output="answer", expected="truth")
-        a = events(CASE_EVENT)[0].log_record.attributes
-        assert a["opensearch.test_case.input"] == '"question"'
-        assert a["opensearch.test_case.output"] == '"answer"'
-        assert a["opensearch.test_case.expected"] == '"truth"'
-        assert "test.case.input" not in a
-
-    def test_record_io_dict_input(self, events):
-        with Benchmark(name="dict-io", record_io=True) as b:
-            b.log(input={"q": "hello"}, output="world")
-        assert '"q"' in events(CASE_EVENT)[0].log_record.attributes["opensearch.test_case.input"]
-
-    def test_record_io_truncation_marker(self, events):
-        with Benchmark(name="trunc-io", record_io=True) as b:
-            b.log(input="x" * 20_000, output="short")
-        value = events(CASE_EVENT)[0].log_record.attributes["opensearch.test_case.input"]
-        assert value.endswith("...[truncated]")
-        assert len(value) <= 10_000
+            b.log(input="secret", output="answer", expected="truth", scores={"a": 1.0})
+        a = events(EVALUATION)[0].log_record.attributes
+        assert "secret" not in str(dict(a))
+        assert not [k for k in a if k.startswith(("opensearch.test_case.", "test.case.input"))]
 
 
 class TestBenchmarkSummary:
@@ -288,6 +367,7 @@ class TestBenchmarkSummary:
         assert isinstance(summary, BenchmarkSummary)
         assert summary.benchmark_name == "sum-test"
         assert summary.total_cases == 2
+        assert summary.pass_count == 2
         assert summary.error_count == 0
         assert summary.scores["accuracy"].avg == 0.75
         assert summary.scores["accuracy"].min == 0.5
@@ -295,19 +375,22 @@ class TestBenchmarkSummary:
         assert summary.scores["accuracy"].count == 2
         assert summary.scores["relevance"].avg == pytest.approx(0.85)
 
-    def test_summary_with_errors(self):
+    def test_summary_counts(self):
         b = Benchmark(name="err-sum")
         b.log(input="q1", scores={"a": 1.0})
-        b.log(input="q2", error="failed")
+        b.log(input="q2", status="fail")
+        b.log(input="q3", error="failed")
+        b.log(input="q4", error_type="TimeoutError")
         summary = b.close()
-        assert summary.error_count == 1
-        assert summary.total_cases == 2
+        assert summary.total_cases == 4
+        assert (summary.pass_count, summary.fail_count, summary.error_count) == (1, 1, 2)
 
     def test_summary_str_format(self):
         b = Benchmark(name="fmt-test")
         b.log(input="q1", scores={"accuracy": 0.9})
         text = str(b.close())
         assert "BENCHMARK: fmt-test" in text
+        assert "Pass: 1 | Fail: 0 | Errors: 0" in text
         assert "accuracy" in text
         assert "avg=0.90" in text
 
@@ -326,17 +409,17 @@ class TestBenchmarkSummary:
 class TestEventScope:
     """The scope is the instrumentation library (the SDK); no invented scope attributes."""
 
-    def test_named_scorer_is_an_attribute_and_scope_is_sdk(self, events):
+    def test_named_scorer_is_an_attribute_and_scope_is_sdk(self, events, log_exporter):
         def judge(i, o, e):
             return 1.0
 
         evaluate(name="scope", task=lambda x: x, data=[{"input": "q1"}], scores=[judge])
+        _assert_only_evaluation_events(log_exporter)
         grade = events(EVALUATION)[0]
         assert grade.log_record.attributes["opensearch.evaluation.evaluator.name"] == "judge"
-        for rec in (grade, events(CASE_EVENT)[0], events(RUN_EVENT)[0]):
-            assert rec.instrumentation_scope.name == SDK_SCOPE
-            assert rec.instrumentation_scope.version == SDK_VERSION
-            assert not rec.instrumentation_scope.attributes
+        assert grade.instrumentation_scope.name == SDK_SCOPE
+        assert grade.instrumentation_scope.version == SDK_VERSION
+        assert not grade.instrumentation_scope.attributes
 
     def test_anonymous_scorer_uses_sdk_scope(self, events):
         evaluate(name="anon", task=lambda x: x, data=[{"input": "q1"}], scores=[lambda i, o, e: 1])
@@ -347,10 +430,9 @@ class TestEventScope:
     def test_benchmark_events_use_sdk_scope(self, events):
         with Benchmark(name="b-scope") as b:
             b.log(input="q1", scores={"a": 1.0})
-        for name in (EVALUATION, CASE_EVENT, RUN_EVENT):
-            rec = events(name)[0]
-            assert rec.instrumentation_scope.name == SDK_SCOPE
-            assert rec.instrumentation_scope.version == SDK_VERSION
+        rec = events(EVALUATION)[0]
+        assert rec.instrumentation_scope.name == SDK_SCOPE
+        assert rec.instrumentation_scope.version == SDK_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +466,7 @@ class TestEvaluate:
 
         result = evaluate(name="err-eval", task=failing_task, data=[{"input": "q1"}], scores=[])
         assert result.summary.error_count == 1
-        assert result.cases[0].status == "fail"
+        assert result.cases[0].status == "error"
         assert result.cases[0].error == "boom"
 
     def test_evaluate_scorer_returns_float(self):
@@ -410,9 +492,9 @@ class TestEvaluate:
             name="cid-eval",
             task=lambda x: x,
             data=[{"input": "q1", "case_id": "my_custom_id"}],
-            scores=[],
+            scores=[lambda i, o, e: 1.0],
         )
-        assert events(CASE_EVENT)[0].log_record.attributes["test.case.id"] == "my_custom_id"
+        assert events(EVALUATION)[0].log_record.attributes["test.case.id"] == "my_custom_id"
 
     def test_evaluate_prints_summary_to_stdout(self, capsys):
         evaluate(name="print-eval", task=lambda x: x, data=[{"input": "q1"}], scores=[])
@@ -425,7 +507,7 @@ class TestEvaluate:
         result = evaluate(
             name="scorer-err", task=lambda x: x, data=[{"input": "q1"}], scores=[bad_scorer]
         )
-        assert result.cases[0].status == "fail"
+        assert result.cases[0].status == "error"
         assert result.cases[0].scorer_errors is not None
         assert any("scorer broke" in e for e in result.cases[0].scorer_errors)
 
@@ -468,21 +550,29 @@ class TestEvaluate:
         result = evaluate(name="gen-eval", task=lambda x: x, data=gen(), scores=[])
         assert result.summary.total_cases == 2
 
-    def test_evaluate_reserved_metadata_filtered(self, events):
+    def test_evaluate_metadata_on_score_events(self, events):
         evaluate(
             name="res-meta-eval",
             task=lambda x: x,
-            data=[{"input": "q1"}],
-            scores=[],
-            metadata={"test.suite.name": "oops", "model": "gpt-4"},
+            data=[{"input": "q1"}, {"input": "q2"}],
+            scores=[lambda i, o, e: EvalScore(name="a", value=1.0, metadata={"m": "score"})],
+            metadata={"test.suite.name": "oops", "model": "gpt-4", "m": "run"},
         )
-        a = events(RUN_EVENT)[0].log_record.attributes
-        assert a["test.suite.name"] == "res-meta-eval"
-        assert a["model"] == "gpt-4"
+        recs = events(EVALUATION)
+        assert len(recs) == 2
+        for r in recs:
+            a = r.log_record.attributes
+            assert a["test.suite.name"] == "res-meta-eval"
+            assert a["model"] == "gpt-4"
+            assert a["m"] == "score"
+
+    def test_record_io_removed(self):
+        with pytest.raises(TypeError):
+            evaluate(name="io", task=lambda x: x, data=[], scores=[], record_io=True)
 
 
 # ---------------------------------------------------------------------------
-# Offline runs: agent trace + case and run events
+# Offline runs: agent trace + score events
 # ---------------------------------------------------------------------------
 
 GROUPING = ("test.suite.name", "test.suite.run.id", "test.case.id", "test.case.name")
@@ -550,10 +640,15 @@ class TestEvaluateEvents:
         assert not [k for k in child.attributes if k.startswith("test.")]
 
     def test_case_name_omitted_when_absent(self, exporter, events):
-        evaluate(name="no-name", task=_traced_agent(), data=[{"input": "q1"}], scores=[])
+        evaluate(
+            name="no-name",
+            task=_traced_agent(),
+            data=[{"input": "q1"}],
+            scores=[lambda i, o, e: 1.0],
+        )
         root = _spans_named(exporter, "agent")[0]
         assert "test.case.name" not in root.attributes
-        assert "test.case.name" not in events(CASE_EVENT)[0].log_record.attributes
+        assert "test.case.name" not in events(EVALUATION)[0].log_record.attributes
 
     def test_events_parented_to_agent_root(self, exporter, events):
         def judge(i, o, e):
@@ -566,11 +661,9 @@ class TestEvaluateEvents:
             scores=[judge],
         )
         root = _spans_named(exporter, "agent")[0]
-        score_rec = events("gen_ai.evaluation.result")[0]
-        case_rec = events(CASE_EVENT)[0]
-        for rec in (score_rec, case_rec):
-            assert rec.log_record.trace_id == root.context.trace_id
-            assert rec.log_record.span_id == root.context.span_id
+        score_rec = events(EVALUATION)[0]
+        assert score_rec.log_record.trace_id == root.context.trace_id
+        assert score_rec.log_record.span_id == root.context.span_id
         a = score_rec.log_record.attributes
         for key in GROUPING:
             assert a[key] == root.attributes[key]
@@ -581,7 +674,7 @@ class TestEvaluateEvents:
         assert case.trace_id == format(root.context.trace_id, "032x")
         assert case.span_id == format(root.context.span_id, "016x")
 
-    def test_case_event_shape(self, events):
+    def test_score_event_shape(self, events, log_exporter):
         evaluate(
             name="shape",
             task=_traced_agent(),
@@ -589,63 +682,84 @@ class TestEvaluateEvents:
             scores=[lambda i, o, e: 1.0],
             metadata={"model": "gpt-4", "test.suite.name": "oops"},
         )
-        rec = events(CASE_EVENT)[0]
+        _assert_only_evaluation_events(log_exporter)
+        rec = events(EVALUATION)[0]
         lr = rec.log_record
         a = lr.attributes
         assert a["test.suite.name"] == "shape"
         assert a["test.case.id"] == "c1"
-        assert a["test.case.result.status"] == "pass"
         assert "error.type" not in a
-        assert isinstance(a["opensearch.test_case.duration_ms"], float)
         assert a["model"] == "gpt-4"
-        # record_io is off by default
-        assert not [
-            k for k in a if k in ("opensearch.test_case.input", "opensearch.test_case.output")
-        ]
+        assert not [k for k in a if "input" in k or "output" in k]
         assert lr.timestamp is not None
         assert lr.severity_number.value == 9
         assert rec.instrumentation_scope.name == "opensearch-genai-observability-sdk-py"
 
-    def test_case_event_record_io(self, events):
-        evaluate(
-            name="io",
-            task=_traced_agent(),
-            data=[{"input": "question", "expected": "answer"}],
-            scores=[],
-            record_io=True,
-        )
-        a = events(CASE_EVENT)[0].log_record.attributes
-        assert a["opensearch.test_case.input"] == '"question"'
-        assert a["opensearch.test_case.expected"] == '"answer"'
-        assert a["opensearch.test_case.output"] == '"answer: question"'
+    def test_crashed_case_emits_error_result_per_scorer(self, exporter, events):
+        @scorer(name="answer_quality", threshold=4, evaluator="judge", evaluator_type="llm_judge")
+        def quality(i, o, e):
+            return 5.0
 
-    def test_crashed_case_gets_error_event_and_run_continues(self, exporter, events):
+        def exact(i, o, e):
+            return 1.0
+
         result = evaluate(
             name="crash",
             task=_traced_agent(),
             data=[{"input": "boom", "case_id": "bad"}, {"input": "q2", "case_id": "good"}],
-            scores=[lambda i, o, e: 1.0],
+            scores=[quality, exact, lambda i, o, e: 1.0],
+            metadata={"model": "gpt-4"},
         )
         assert [c.case_id for c in result.cases] == ["bad", "good"]
-        assert result.cases[0].error == "task broke"
-        assert result.cases[0].status == "fail"  # historical value
-        assert result.cases[0].error_type == "ValueError"
+        bad_case = result.cases[0]
+        assert bad_case.error == "task broke"
+        assert bad_case.status == "error"
+        assert bad_case.error_type == "ValueError"
+        assert bad_case.scores == {}
+        assert result.cases[1].status == "pass"
 
-        by_case = {
-            r.log_record.attributes["test.case.id"]: r.log_record for r in events(CASE_EVENT)
-        }
-        bad = by_case["bad"]
-        assert bad.attributes["test.case.result.status"] == "error"
-        assert bad.attributes["error.type"] == "ValueError"
-        # Still parented to the crashed agent run's root span
         bad_root = next(
             s for s in _spans_named(exporter, "agent") if s.attributes["test.case.id"] == "bad"
         )
-        assert bad.span_id == bad_root.context.span_id
-        assert by_case["good"].attributes["test.case.result.status"] == "pass"
-        # Scorers are skipped for the crashed case only
-        scored = [r.log_record.attributes["test.case.id"] for r in events(EVALUATION)]
-        assert scored == ["good"]
+        bad = [
+            r.log_record
+            for r in events(EVALUATION)
+            if r.log_record.attributes["test.case.id"] == "bad"
+        ]
+        assert sorted(lr.attributes["gen_ai.evaluation.name"] for lr in bad) == [
+            "<lambda>",
+            "answer_quality",
+            "exact",
+        ]
+        for lr in bad:
+            a = lr.attributes
+            assert a["error.type"] == "ValueError"
+            assert "gen_ai.evaluation.score.value" not in a
+            assert LABEL not in a
+            assert "gen_ai.evaluation.explanation" not in a
+            assert a["model"] == "gpt-4"
+            assert a["test.suite.name"] == "crash"
+            # Still parented to the crashed agent run's root span
+            assert lr.trace_id == bad_root.context.trace_id
+            assert lr.span_id == bad_root.context.span_id
+        by_name = {lr.attributes["gen_ai.evaluation.name"]: lr.attributes for lr in bad}
+        assert by_name["answer_quality"]["opensearch.evaluation.evaluator.name"] == "judge"
+        assert by_name["answer_quality"]["opensearch.evaluation.evaluator.type"] == "llm_judge"
+        assert by_name["answer_quality"][THRESHOLD] == 4.0
+        assert by_name["exact"]["opensearch.evaluation.evaluator.name"] == "exact"
+        assert "opensearch.evaluation.evaluator.name" not in by_name["<lambda>"]
+        good = [r for r in events(EVALUATION) if r.log_record.attributes["test.case.id"] == "good"]
+        assert len(good) == 3
+        assert all("error.type" not in r.log_record.attributes for r in good)
+
+    def test_crashed_untraced_case_has_no_trace_context(self, events):
+        def boom(x):
+            raise KeyError("x")
+
+        evaluate(name="crash2", task=boom, data=[{"input": "q"}], scores=[lambda i, o, e: 1.0])
+        lr = events(EVALUATION)[0].log_record
+        assert lr.trace_id == 0 and lr.span_id == 0
+        assert lr.attributes["error.type"] == "KeyError"
 
     def test_scorer_error_marks_case_error(self, events):
         def bad_scorer(i, o, e):
@@ -657,20 +771,17 @@ class TestEvaluateEvents:
             data=[{"input": "q1"}],
             scores=[lambda i, o, e: 1.0, bad_scorer],
         )
-        assert result.cases[0].status == "fail"
+        assert result.cases[0].status == "error"
+        assert result.cases[0].error_type == "RuntimeError"
         assert result.cases[0].scorer_errors
-        a = events(CASE_EVENT)[0].log_record.attributes
-        assert a["test.case.result.status"] == "error"
-        assert a["error.type"] == "RuntimeError"
         failed = [
             r.log_record.attributes
             for r in events(EVALUATION)
             if r.log_record.attributes["gen_ai.evaluation.name"] == "bad_scorer"
         ]
         assert failed[0]["error.type"] == "RuntimeError"
-        run = events(RUN_EVENT)[0].log_record.attributes
-        assert run["test.suite.run.status"] == "failure"
-        assert run["opensearch.test_suite_run.error_count"] == 1
+        assert failed[0]["gen_ai.evaluation.explanation"] == "scorer broke"
+        assert result.summary.error_count == 1
 
     def test_untraced_task_events_without_trace_context(self, exporter, events):
         result = evaluate(
@@ -680,20 +791,20 @@ class TestEvaluateEvents:
             scores=[lambda i, o, e: 1.0],
         )
         assert exporter.get_finished_spans() == ()
-        case_lr = events(CASE_EVENT)[0].log_record
         score_lr = events(EVALUATION)[0].log_record
-        for lr in (case_lr, score_lr):
-            assert lr.trace_id == 0 and lr.span_id == 0
-            assert lr.attributes["test.case.id"] == "c1"
-            assert lr.attributes["test.suite.name"] == "untraced"
+        assert score_lr.trace_id == 0 and score_lr.span_id == 0
+        assert score_lr.attributes["test.case.id"] == "c1"
+        assert score_lr.attributes["test.suite.name"] == "untraced"
         assert "opensearch.evaluation.level" not in score_lr.attributes
         assert result.cases[0].trace_id is None
 
     def test_untraced_task_ignores_ambient_span(self, events):
         tracer = trace.get_tracer("test")
         with tracer.start_as_current_span("outer"):
-            evaluate(name="ambient", task=lambda x: x, data=[{"input": "q1"}], scores=[])
-        lr = events(CASE_EVENT)[0].log_record
+            evaluate(
+                name="ambient", task=lambda x: x, data=[{"input": "q1"}], scores=[lambda i, o, e: 1]
+            )
+        lr = events(EVALUATION)[0].log_record
         assert lr.trace_id == 0 and lr.span_id == 0
 
     def test_agent_run_is_own_trace_inside_active_span(self, exporter):
@@ -705,8 +816,8 @@ class TestEvaluateEvents:
         assert agent.context.trace_id != outer.get_span_context().trace_id
         assert agent.attributes["test.suite.name"] == "nested"
 
-    def test_run_event_counts(self, events):
-        def scorer(i, o, e):
+    def test_summary_counts(self, log_exporter):
+        def scorer_fn(i, o, e):
             if i == "q3":
                 raise RuntimeError("nope")
             return 1.0
@@ -715,30 +826,14 @@ class TestEvaluateEvents:
             name="counts",
             task=_traced_agent(),
             data=[{"input": "q1"}, {"input": "boom"}, {"input": "q3"}, {"input": "q4"}],
-            scores=[scorer],
-            metadata={"agent_version": "v2"},
+            scores=[scorer_fn],
         )
-        recs = events(RUN_EVENT)
-        assert len(recs) == 1
-        lr = recs[0].log_record
-        a = lr.attributes
-        assert lr.trace_id == 0 and lr.span_id == 0
-        assert a["test.suite.name"] == "counts"
-        assert a["test.suite.run.id"] == result.summary.run_id
-        assert a["test.suite.run.status"] == "failure"
-        assert a["opensearch.test_suite_run.case_count"] == 4
-        assert a["opensearch.test_suite_run.pass_count"] == 2
-        assert a["opensearch.test_suite_run.fail_count"] == 0
-        assert a["opensearch.test_suite_run.error_count"] == 2
-        assert isinstance(a["opensearch.test_suite_run.duration_ms"], float)
-        assert a["agent_version"] == "v2"
-        assert len(events(CASE_EVENT)) == 4
-
-    def test_run_event_success(self, events):
-        evaluate(name="ok", task=lambda x: x, data=[{"input": "q1"}], scores=[])
-        a = events(RUN_EVENT)[0].log_record.attributes
-        assert a["test.suite.run.status"] == "success"
-        assert a["opensearch.test_suite_run.pass_count"] == 1
+        s = result.summary
+        assert (s.total_cases, s.pass_count, s.fail_count, s.error_count) == (4, 2, 0, 2)
+        assert [c.status for c in result.cases] == ["pass", "error", "error", "pass"]
+        # One evaluation result per case (the scorer), nothing else.
+        assert len(log_exporter.get_finished_logs()) == 4
+        _assert_only_evaluation_events(log_exporter)
 
     def test_spans_outside_evaluate_not_stamped(self, exporter):
         evaluate(name="before", task=_traced_agent(), data=[{"input": "q1"}], scores=[])
@@ -760,7 +855,7 @@ class TestEvaluateEvents:
         assert lr.span_id == span.get_span_context().span_id
         assert not [k for k in lr.attributes if k.startswith("test.")]
         assert not [k for k in exporter.get_finished_spans()[0].attributes if k.startswith("test.")]
-        assert events(CASE_EVENT) == []
+        assert len(log_exporter.get_finished_logs()) == 1
 
 
 class TestBenchmarkEvents:
@@ -769,8 +864,8 @@ class TestBenchmarkEvents:
             b.log(input="q1", scores={"a": 1.0})
         assert exporter.get_finished_spans() == ()
 
-    def test_case_and_score_events_without_link(self, events):
-        with Benchmark(name="b-evt", metadata={"model": "gpt-4"}, record_io=True) as b:
+    def test_score_events_without_link(self, events, log_exporter):
+        with Benchmark(name="b-evt", metadata={"model": "gpt-4"}) as b:
             b.log(
                 input="q1",
                 output="a1",
@@ -779,54 +874,34 @@ class TestBenchmarkEvents:
                 case_name="one",
                 scores={"accuracy": 0.9},
                 metadata={"split": "dev"},
-                duration_ms=12.5,
             )
-        case_lr = events(CASE_EVENT)[0].log_record
-        score_lr = events(EVALUATION)[0].log_record
-        for lr in (case_lr, score_lr):
-            assert lr.trace_id == 0 and lr.span_id == 0
-            assert lr.attributes["test.suite.run.id"] == b.run_id
-            assert lr.attributes["test.case.id"] == "c1"
-            assert lr.attributes["test.case.name"] == "one"
-        a = case_lr.attributes
-        assert a["test.case.result.status"] == "pass"
-        assert a["opensearch.test_case.input"] == '"q1"'
-        assert a["opensearch.test_case.output"] == '"a1"'
-        assert a["opensearch.test_case.expected"] == '"e1"'
-        assert a["opensearch.test_case.duration_ms"] == 12.5
+        _assert_only_evaluation_events(log_exporter)
+        lr = events(EVALUATION)[0].log_record
+        assert lr.trace_id == 0 and lr.span_id == 0
+        a = lr.attributes
+        assert a["test.suite.run.id"] == b.run_id
+        assert a["test.case.id"] == "c1"
+        assert a["test.case.name"] == "one"
         assert a["model"] == "gpt-4"
         assert a["split"] == "dev"
-        # Case content never goes on score events
-        assert not [k for k in score_lr.attributes if k.startswith("opensearch.test_case.")]
 
     def test_events_parented_to_linked_span(self, events):
         with Benchmark(name="b-link") as b:
             b.log(input="q1", scores={"a": 1.0}, trace_id=TRACE_ID, span_id=SPAN_ID)
-        for lr in (events(CASE_EVENT)[0].log_record, events(EVALUATION)[0].log_record):
-            assert format(lr.trace_id, "032x") == TRACE_ID
-            assert format(lr.span_id, "016x") == SPAN_ID
+        lr = events(EVALUATION)[0].log_record
+        assert format(lr.trace_id, "032x") == TRACE_ID
+        assert format(lr.span_id, "016x") == SPAN_ID
 
-    def test_status_and_run_event(self, events):
+    def test_local_statuses(self, log_exporter):
         b = Benchmark(name="b-status")
         b.log(input="q1", scores={"a": 1.0})
         b.log(input="q2", status="fail")
         b.log(input="q3", error="boom", error_type="TimeoutError")
         summary = b.close()
-        statuses = {
-            r.log_record.attributes["test.case.id"]: r.log_record.attributes
-            for r in events(CASE_EVENT)
-        }
-        err = statuses[_make_case_id("q3")]
-        assert err["test.case.result.status"] == "error"
-        assert err["error.type"] == "TimeoutError"
-        assert statuses[_make_case_id("q2")]["test.case.result.status"] == "fail"
-        run = events(RUN_EVENT)[0].log_record.attributes
-        assert run["test.suite.run.status"] == "failure"
-        assert run["opensearch.test_suite_run.case_count"] == 3
-        assert run["opensearch.test_suite_run.pass_count"] == 1
-        assert run["opensearch.test_suite_run.fail_count"] == 1
-        assert run["opensearch.test_suite_run.error_count"] == 1
-        assert summary.error_count == 1
+        assert [c.status for c in b._cases] == ["pass", "fail", "error"]
+        assert b._cases[2].error_type == "TimeoutError"
+        assert (summary.pass_count, summary.fail_count, summary.error_count) == (1, 1, 1)
+        _assert_only_evaluation_events(log_exporter)
 
     def test_invalid_status_raises(self):
         with Benchmark(name="b-bad-status") as b:
@@ -949,7 +1024,6 @@ class TestCaseStatusFromVerdicts:
         )
         assert result.cases[0].status == "pass"
         assert result.cases[0].verdicts is None
-        assert events(CASE_EVENT)[0].log_record.attributes["test.case.result.status"] == "pass"
         assert LABEL not in events(EVALUATION)[0].log_record.attributes
 
     def test_fail_verdict_fails_case(self, events):
@@ -964,28 +1038,20 @@ class TestCaseStatusFromVerdicts:
             scores=[quality],
         )
         assert [c.status for c in result.cases] == ["pass", "fail"]
-        by_case = {
-            r.log_record.attributes["test.case.id"]: r.log_record.attributes
-            for r in events(CASE_EVENT)
-        }
-        assert by_case["g"]["test.case.result.status"] == "pass"
-        assert by_case["b"]["test.case.result.status"] == "fail"
-        run = events(RUN_EVENT)[0].log_record.attributes
-        assert run["opensearch.test_suite_run.pass_count"] == 1
-        assert run["opensearch.test_suite_run.fail_count"] == 1
-        assert run["test.suite.run.status"] == "success"  # only errors fail the run
+        assert (result.summary.pass_count, result.summary.fail_count) == (1, 1)
+        assert result.summary.error_count == 0
 
     def test_error_beats_fail_verdict(self, events):
         def bad(i, o, e):
             raise RuntimeError("judge down")
 
-        evaluate(
+        result = evaluate(
             name="err-first",
             task=lambda x: x,
             data=[{"input": "q"}],
             scores=[lambda i, o, e: EvalScore(name="x", value=0.0, passed=False), bad],
         )
-        assert events(CASE_EVENT)[0].log_record.attributes["test.case.result.status"] == "error"
+        assert result.cases[0].status == "error"
 
 
 class TestScorerErrorGradeName:
@@ -1031,15 +1097,15 @@ class TestBenchmarkVerdicts:
         assert quality[LABEL] == "fail"
         assert quality["opensearch.evaluation.score.max"] == 5.0
         assert grades["tool_selection"].log_record.attributes[LABEL] == "pass"
-        assert events(CASE_EVENT)[0].log_record.attributes["test.case.result.status"] == "fail"
+        assert b._cases[0].status == "fail"
 
     def test_dict_scores_unchanged(self, events):
         with Benchmark(name="bench-dict") as b:
             b.log(input="q", scores={"accuracy": 0.0})
-        assert events(CASE_EVENT)[0].log_record.attributes["test.case.result.status"] == "pass"
+        assert b._cases[0].status == "pass"
         assert LABEL not in events(EVALUATION)[0].log_record.attributes
 
     def test_explicit_status_wins(self, events):
         with Benchmark(name="bench-status") as b:
             b.log(input="q", scores=[EvalScore(name="x", value=0.0, passed=False)], status="pass")
-        assert events(CASE_EVENT)[0].log_record.attributes["test.case.result.status"] == "pass"
+        assert b._cases[0].status == "pass"

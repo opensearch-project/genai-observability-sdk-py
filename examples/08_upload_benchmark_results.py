@@ -13,12 +13,12 @@ Most teams already have eval pipelines (RAGAS, DeepEval, pytest, custom).
 This example shows how to upload those results to OpenSearch via the SDK,
 so you can visualize and compare them in the agent-health UI.
 
-Each b.log() emits one opensearch.test_case.result log event and one
-gen_ai.evaluation.result event per score; closing the Benchmark emits one
-opensearch.test_suite_run.result event with the run status and case counts.
-All are exported to /v1/logs and indexed in otel-v1-genai-evaluation-*. With
-trace_id/span_id the case and score events are parented to that agent span;
-without them they carry no trace context. Benchmark creates no spans.
+Each b.log() emits one gen_ai.evaluation.result log event per score, with
+the test.* ids, the agent and the run and case metadata. Closing the
+Benchmark returns the local summary and sends nothing. The events are
+exported to /v1/logs and indexed in otel-v1-genai-evaluation-*. With
+trace_id/span_id the score events are parented to that agent span; without
+them they carry no trace context. Benchmark creates no spans.
 
 Three patterns:
     A. Upload from a list of dicts (any eval framework)
@@ -79,7 +79,6 @@ def upload_custom_results():
     with Benchmark(
         name="custom-eval",
         metadata={"framework": "custom", "model": "gpt-4o-mini"},
-        record_io=True,
     ) as b:
         for r in results:
             b.log(
@@ -117,7 +116,6 @@ def upload_ragas_results():
     # with Benchmark(
     #     name="ragas-eval",
     #     metadata={"framework": "ragas", "model": "gpt-4o"},
-    #     record_io=True,
     # ) as b:
     #     for _, row in df.iterrows():
     #         b.log(
@@ -166,7 +164,6 @@ def upload_with_trace_links():
     with Benchmark(
         name="ci-nightly",
         metadata={"framework": "pytest", "commit": "abc123", "branch": "main"},
-        record_io=True,
     ) as b:
         for r in ci_results:
             b.log(
@@ -175,7 +172,7 @@ def upload_with_trace_links():
                 scores={"accuracy": r["accuracy"]},
                 status="pass" if r["accuracy"] >= 0.9 else "fail",
                 trace_id=r["trace_id"],  # The original agent trace
-                span_id=r["span_id"],    # Case and score events are parented to this span
+                span_id=r["span_id"],    # Score events are parented to this span
                 case_id=r["question"][:20].replace(" ", "_").lower(),
             )
 

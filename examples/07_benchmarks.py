@@ -15,11 +15,10 @@ and scores stored in OpenSearch for comparison.
 Telemetry: no harness spans. Each case's agent run is its own trace, and its
 root span gets test.suite.name, test.suite.run.id, test.case.id and
 test.case.name. Per case the SDK emits one gen_ai.evaluation.result log event
-per score and one opensearch.test_case.result event (status pass/fail/error,
-duration, and with record_io=True opensearch.test_case.input / .expected /
-.output), both parented to the agent run's root span. At the end it emits one
-opensearch.test_suite_run.result event with the run status and case counts.
-Data Prepper routes all three to the otel-v1-genai-evaluation-* index.
+per score, parented to the agent run's root span, with the test.* ids, the
+agent and the run metadata. A case whose task raises gets one error result per
+scorer (error.type, no score). Data Prepper routes the events to the
+otel-v1-genai-evaluation-* index.
 
 Usage:
     AGENT_VERSION=v1 python examples/07_benchmarks.py
@@ -102,8 +101,7 @@ if __name__ == "__main__":
         task=my_agent,
         data=TEST_CASES,
         scores=[correctness, has_source],
-        metadata={"agent_version": AGENT_VERSION},
-        record_io=True,
+        metadata={"app.variant": AGENT_VERSION},
     )
 
     for case in result.cases:

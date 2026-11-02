@@ -34,7 +34,7 @@ except PackageNotFoundError:  # pragma: no cover - only when running from a bare
 
 
 # OTel CI/CD attributes (semantic-conventions ``cicd.*`` registry) stamped on
-# test suite runs when they run inside a CI system.
+# evaluation results and agent root spans when they run inside a CI system.
 CICD_PIPELINE_NAME_KEY = "cicd.pipeline.name"
 CICD_PIPELINE_RUN_ID_KEY = "cicd.pipeline.run.id"
 CICD_PIPELINE_RUN_URL_KEY = "cicd.pipeline.run.url.full"
@@ -76,7 +76,7 @@ def ci_pipeline_attributes(
 
 
 # ---------------------------------------------------------------------------
-# Agent identity on evaluation, test case and test suite run events
+# Agent identity on evaluation result events
 # ---------------------------------------------------------------------------
 
 AGENT_NAME_KEY = "gen_ai.agent.name"
@@ -165,22 +165,11 @@ _RESERVED_KEYS = frozenset(
     {
         "test.suite.name",
         "test.suite.run.id",
-        "test.suite.run.status",
         "test.case.id",
         "test.case.name",
-        "test.case.result.status",
         "cicd.pipeline.name",
         "cicd.pipeline.run.id",
         "cicd.pipeline.run.url.full",
-        "opensearch.test_case.input",
-        "opensearch.test_case.output",
-        "opensearch.test_case.expected",
-        "opensearch.test_case.duration_ms",
-        "opensearch.test_suite_run.case_count",
-        "opensearch.test_suite_run.pass_count",
-        "opensearch.test_suite_run.fail_count",
-        "opensearch.test_suite_run.error_count",
-        "opensearch.test_suite_run.duration_ms",
     }
 )
 

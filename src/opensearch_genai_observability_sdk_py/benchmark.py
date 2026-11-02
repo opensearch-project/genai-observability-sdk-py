@@ -39,33 +39,23 @@ Telemetry shape::
 
     LogRecord gen_ai.evaluation.result       one per score, parented to the
                                              agent run's root span, test.* copied
-    LogRecord opensearch.test_case.result    one per case, parented to the
-                                             agent run's root span:
-        test.suite.name, test.suite.run.id, test.case.id, test.case.name,
-        test.case.result.status (pass | fail | error), error.type,
-        opensearch.test_case.input / .expected / .output (record_io),
-        opensearch.test_case.duration_ms
-    LogRecord opensearch.test_suite_run.result   one per run, no trace context:
-        test.suite.name, test.suite.run.id, test.suite.run.status,
-        opensearch.test_suite_run.case_count / .pass_count / .fail_count /
-        .error_count / .duration_ms
 
-If the task starts no span, the case event and the score events carry no
-trace context (the ``test.*`` attributes are still set).
+If the task starts no span, the score events carry no trace context (the
+``test.*`` attributes are still set). If the task raises, one
+``gen_ai.evaluation.result`` per scorer is emitted with ``error.type`` and no
+score.
 
 - ``test.*`` follows the proposed test conventions
   (semantic-conventions-genai#79, semantic-conventions#1262).
 - ``gen_ai.evaluation.result`` follows the GenAI events spec
   (https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-events/).
-- Test case content lives under ``opensearch.test_case.*``; ``test.*`` is
-  owned by the OTel CICD SIG and has no names for it.
 
 Scope: every event uses the SDK scope ``opensearch-genai-observability-sdk-py``
 with the SDK version (the instrumentation library); the scorer is named in
 ``opensearch.evaluation.evaluator.*``.
 
-CI/CD: inside a CI system (GitHub Actions, GitLab CI, Jenkins) the run event,
-the case events and the agent root spans also carry the OTel
+CI/CD: inside a CI system (GitHub Actions, GitLab CI, Jenkins) the evaluation
+events and the agent root spans also carry the OTel
 ``cicd.pipeline.name``, ``cicd.pipeline.run.id`` and
 ``cicd.pipeline.run.url.full``; ``ci_pipeline`` overrides them. Never set
 outside CI.
@@ -93,7 +83,6 @@ from contextvars import ContextVar
 from typing import Any
 
 from opentelemetry import trace
-from opentelemetry._logs import SeverityNumber
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import Span as SdkSpan
 from opentelemetry.sdk.trace import SpanProcessor
@@ -104,7 +93,6 @@ from opensearch_genai_observability_sdk_py._internal import (
     AGENT_NAME_KEY,
     AGENT_VERSION_KEY,
     ci_pipeline_attributes,
-    get_event_logger,
     resolve_agent,
     validate_metadata_keys,
 )
@@ -120,12 +108,6 @@ from opensearch_genai_observability_sdk_py.score import (
 )
 
 logger = logging.getLogger(__name__)
-
-TEST_CASE_EVENT_NAME = "opensearch.test_case.result"
-TEST_SUITE_RUN_EVENT_NAME = "opensearch.test_suite_run.result"
-
-_IO_TRUNCATION_LIMIT = 10_000
-_TRUNCATION_MARKER = "...[truncated]"
 
 _CASE_STATUSES = ("pass", "fail", "error")
 
@@ -313,6 +295,8 @@ class BenchmarkSummary:
     benchmark_name: str
     run_id: str
     total_cases: int
+    pass_count: int
+    fail_count: int
     error_count: int
     duration_ms: float
     scores: dict[str, ScoreSummary]
@@ -323,6 +307,7 @@ class BenchmarkSummary:
             "=" * width,
             f"  BENCHMARK: {self.benchmark_name}",
             f"  Run: {self.run_id} | Cases: {self.total_cases}"
+            f" | Pass: {self.pass_count} | Fail: {self.fail_count}"
             f" | Errors: {self.error_count}"
             f" | Duration: {self.duration_ms / 1000:.1f}s",
             "",
@@ -337,17 +322,15 @@ class BenchmarkSummary:
 
 @dataclasses.dataclass
 class TestCaseResult:
-    """Per-case result.
+    """Per-case result, returned to the caller (not telemetry).
 
-    ``status`` keeps its historical values (``"pass"`` / ``"fail"``; a task or
-    scorer error is ``"fail"``). The ``opensearch.test_case.result`` event
-    reports ``pass`` / ``fail`` / ``error`` and ``error_type`` holds the
-    exception class name when the task or a scorer raised. ``trace_id`` /
-    ``span_id`` (hex) identify the span the case and score events are
-    parented to (the agent run's root span), or are ``None`` when the task
-    started no span. ``verdicts`` maps evaluation name to the declared
-    verdict (``pass`` / ``fail``) for scores that have one; a ``fail``
-    verdict makes ``status`` ``"fail"``.
+    ``status`` is ``"error"`` if the task raised or any result errored, else
+    ``"fail"`` if any result has a ``fail`` verdict, else ``"pass"``.
+    ``error_type`` holds the exception class name when the task or a scorer
+    raised. ``trace_id`` / ``span_id`` (hex) identify the span the score
+    events are parented to (the agent run's root span), or are ``None`` when
+    the task started no span. ``verdicts`` maps evaluation name to the
+    declared verdict (``pass`` / ``fail``) for scores that have one.
     """
 
     case_id: str
@@ -390,31 +373,17 @@ def _make_run_id() -> str:
     return f"run_{ts}_{short_uuid}"
 
 
-def _truncate_io(value: str) -> str:
-    """Truncate a serialized IO string, appending a marker if truncated."""
-    if len(value) <= _IO_TRUNCATION_LIMIT:
-        return value
-    return value[: _IO_TRUNCATION_LIMIT - len(_TRUNCATION_MARKER)] + _TRUNCATION_MARKER
-
-
-def _io_attr(value: Any) -> str:
-    return _truncate_io(json.dumps(value, default=str))
+def _resolve_run_id(run_id: str | None) -> str:
+    """The caller's run id, else a generated one. Empty strings are rejected."""
+    if run_id is None:
+        return _make_run_id()
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError(f"run_id must be a non-empty string; got {run_id!r}")
+    return run_id
 
 
 _GROUPING_KEYS = ("test.suite.name", "test.suite.run.id", "test.case.id", "test.case.name")
 _AGENT_KEYS = (AGENT_NAME_KEY, AGENT_VERSION_KEY)
-
-
-def _run_agent(agents: list[dict[str, str]], declared: dict[str, str]) -> dict[str, str]:
-    """The run's agent: the declared one, else the one every case agreed on."""
-    out = dict(declared)
-    for key in _AGENT_KEYS:
-        if key in out:
-            continue
-        values = {a[key] for a in agents if key in a}
-        if len(values) == 1 and all(key in a for a in agents):
-            out[key] = values.pop()
-    return out
 
 
 def _grouping(suite: str, run_id: str, case_id: str, case_name: str | None) -> dict[str, Any]:
@@ -461,8 +430,8 @@ class _CaseRootStamper(SpanProcessor):
     """Stamps ``test.*`` ids on root spans started while a test case runs.
 
     A root span here is a span without a local parent (no parent, or a remote
-    one). The first such span is captured as the agent run's root: the case
-    and score events are parented to it. Spans outside ``evaluate()`` are not
+    one). The first such span is captured as the agent run's root: the score
+    events are parented to it. Spans outside ``evaluate()`` are not
     touched.
     """
 
@@ -539,75 +508,6 @@ def _agent_run_scope(grouping: dict[str, Any]) -> Iterator[_CaseScope]:
 # ---------------------------------------------------------------------------
 
 
-def _emit_sdk_event(event_name: str, attributes: dict[str, Any], context: Context) -> None:
-    """Emit one LogRecord event with the SDK instrumentation scope."""
-    otel_logger = get_event_logger()
-    otel_logger.emit(
-        event_name=event_name,
-        timestamp=time.time_ns(),
-        severity_number=SeverityNumber.INFO,
-        attributes=attributes,
-        context=context,
-    )
-
-
-def _emit_case_event(
-    grouping: dict[str, Any],
-    *,
-    status: str,
-    context: Context,
-    error_type: str | None = None,
-    io: dict[str, Any] | None = None,
-    duration_ms: float | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> None:
-    """Emit the ``opensearch.test_case.result`` event for one case."""
-    attrs: dict[str, Any] = dict(metadata or {})
-    attrs.update(grouping)
-    attrs["test.case.result.status"] = status
-    if error_type:
-        attrs["error.type"] = error_type
-    if io:
-        attrs.update(io)
-    if duration_ms is not None:
-        attrs["opensearch.test_case.duration_ms"] = float(duration_ms)
-    _emit_sdk_event(TEST_CASE_EVENT_NAME, attrs, context)
-
-
-def _emit_run_event(
-    suite: str,
-    run_id: str,
-    statuses: list[str],
-    *,
-    duration_ms: float,
-    metadata: dict[str, Any] | None = None,
-    agent: dict[str, str] | None = None,
-    ci: dict[str, str] | None = None,
-) -> str:
-    """Emit the ``opensearch.test_suite_run.result`` event; return the run status."""
-    error_count = statuses.count("error")
-    run_status = "failure" if error_count else "success"
-    attrs: dict[str, Any] = dict(metadata or {})
-    attrs.update(
-        {
-            "test.suite.name": suite,
-            "test.suite.run.id": run_id,
-            "test.suite.run.status": run_status,
-            "opensearch.test_suite_run.case_count": len(statuses),
-            "opensearch.test_suite_run.pass_count": statuses.count("pass"),
-            "opensearch.test_suite_run.fail_count": statuses.count("fail"),
-            "opensearch.test_suite_run.error_count": error_count,
-            "opensearch.test_suite_run.duration_ms": float(duration_ms),
-        }
-    )
-    if agent:
-        attrs.update(agent)
-    if ci:
-        attrs.update(ci)
-    _emit_sdk_event(TEST_SUITE_RUN_EVENT_NAME, attrs, _no_span_context())
-    return run_status
-
-
 def _emit_scores(
     grouping: dict[str, Any],
     scores: Iterable[EvalScore | _FailedScore],
@@ -616,21 +516,26 @@ def _emit_scores(
     evaluator: str | None = None,
     evaluator_type: str | None = None,
     error_type: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Emit one ``gen_ai.evaluation.result`` event per score.
 
-    Each event is parented to ``context`` (the evaluated span, or no span)
-    and carries the ``test.*`` grouping attributes and the verdict.
+    Each event is parented to ``context`` (the evaluated span, or no span).
+    Attribute precedence, lowest first: ``metadata`` (run, then case), the
+    score's own metadata, the ``test.*`` / agent / CI ``grouping``, then the
+    evaluation fields. With ``error_type`` every score is an evaluator error
+    result: ``error.type`` set, no value and no label.
     """
     has_span = trace.get_current_span(context).get_span_context().is_valid
     for s in scores:
-        extra = dict(grouping)
+        extra = dict(metadata or {})
         if s.metadata:
             extra.update(_safe_metadata(s.metadata, context=f"EvalScore({s.name!r})"))
+        extra.update(grouping)
         attrs = build_evaluation_attributes(
             name=s.name,
-            value=s.value,
-            label=s.label or _verdict(s),
+            value=None if error_type else s.value,
+            label=None if error_type else (s.label or _verdict(s)),
             explanation=s.explanation,
             level="span" if has_span else None,
             evaluator=evaluator,
@@ -640,9 +545,8 @@ def _emit_scores(
             score_max=s.score_max,
             threshold=s.threshold,
             error_type=error_type,
-            extra=extra,
         )
-        emit_evaluation_event(attrs, context=context, evaluator=evaluator)
+        emit_evaluation_event({**extra, **attrs}, context=context, evaluator=evaluator)
 
 
 def _verdicts(scores: Iterable[EvalScore | _FailedScore]) -> dict[str, str]:
@@ -653,6 +557,26 @@ def _verdicts(scores: Iterable[EvalScore | _FailedScore]) -> dict[str, str]:
         if verdict is not None:
             out[s.name] = verdict
     return out
+
+
+def _case_status(*, errored: bool, verdicts: dict[str, str]) -> str:
+    """Local case status: ``error`` > ``fail`` (a ``fail`` verdict) > ``pass``."""
+    if errored:
+        return "error"
+    return "fail" if "fail" in verdicts.values() else "pass"
+
+
+def _error_score(
+    name: str, spec: ScorerSpec | None, explanation: str | None = None
+) -> _FailedScore:
+    """An evaluator-error result (no score value) under the scorer's declared rule."""
+    failed = _FailedScore(name=name, explanation=explanation)
+    if spec is not None:
+        failed.direction = spec.direction
+        failed.threshold = spec.threshold
+        failed.score_min = spec.score_min
+        failed.score_max = spec.score_max
+    return failed
 
 
 def _safe_metadata(metadata: dict[str, Any], *, context: str = "") -> dict[str, Any]:
@@ -669,11 +593,8 @@ def _compute_summary(
 ) -> BenchmarkSummary:
     """Compute aggregate score statistics from case records."""
     score_values: dict[str, list[float]] = defaultdict(list)
-    error_count = 0
 
     for case in cases:
-        if case.error:
-            error_count += 1
         for name, value in case.scores.items():
             score_values[name].append(value)
 
@@ -691,7 +612,9 @@ def _compute_summary(
         benchmark_name=benchmark_name,
         run_id=run_id,
         total_cases=len(cases),
-        error_count=error_count,
+        pass_count=sum(c.status == "pass" for c in cases),
+        fail_count=sum(c.status == "fail" for c in cases),
+        error_count=sum(c.status == "error" for c in cases),
         duration_ms=(time.monotonic() - start_time) * 1000,
         scores=score_summaries,
     )
@@ -705,12 +628,10 @@ def _compute_summary(
 class Benchmark:
     """Upload evaluation results as OTel log events.
 
-    Each ``log()`` call emits one ``opensearch.test_case.result`` event and
-    one ``gen_ai.evaluation.result`` event per score; ``close()`` emits one
-    ``opensearch.test_suite_run.result`` event. When ``trace_id`` /
-    ``span_id`` of the agent run are given, the case and score events are
-    parented to that span; otherwise they carry no trace context. No spans
-    are created.
+    Each ``log()`` call emits one ``gen_ai.evaluation.result`` event per
+    score. When ``trace_id`` / ``span_id`` of the agent run are given, the
+    events are parented to that span; otherwise they carry no trace context.
+    No spans are created. ``close()`` returns the local summary.
 
     Use as a context manager::
 
@@ -725,22 +646,25 @@ class Benchmark:
 
     Args:
         name: Benchmark name (``test.suite.name``). Stable across runs.
-        metadata: Arbitrary run metadata, added to the case and run events.
-            Keys reserved
-            by the SDK (``test.suite.name`` etc.) are filtered out with a
-            warning.
-        record_io: If ``True``, record input/output/expected as
-            ``opensearch.test_case.input`` / ``.output`` / ``.expected`` on
-            the case event. Default ``False`` (PII-safe).
+        metadata: Run metadata, added to every ``gen_ai.evaluation.result``
+            event of the run (case and score metadata and the SDK attributes
+            win). Keys reserved by the SDK (``test.suite.name`` etc.) are
+            filtered out with a warning.
+        run_id: ``test.suite.run.id`` of the run, used exactly as given.
+            Default: a generated id. Pass the same id from every CI shard so
+            they report into one run, or the id of an existing run to re-score
+            it.
         agent_name: ``gen_ai.agent.name`` of the agent under test, stamped on
-            the evaluation, case and run events. Defaults to
-            ``register(agent_name=)``.
+            every evaluation event. Defaults to ``register(agent_name=)``.
         agent_version: ``gen_ai.agent.version`` of the agent under test, stamped the
             same way. Defaults to ``register(agent_version=)``.
         ci_pipeline: OTel ``cicd.pipeline.name`` / ``cicd.pipeline.run.id`` /
             ``cicd.pipeline.run.url.full`` overrides, for CI systems the SDK does
             not detect. Detected automatically on GitHub Actions, GitLab CI and
             Jenkins; never set outside CI.
+
+    Raises:
+        ValueError: ``run_id`` is empty or whitespace.
     """
 
     def __init__(
@@ -748,22 +672,20 @@ class Benchmark:
         name: str,
         *,
         metadata: dict[str, Any] | None = None,
-        record_io: bool = False,
+        run_id: str | None = None,
         agent_name: str | None = None,
         agent_version: str | None = None,
         ci_pipeline: dict[str, str] | None = None,
     ) -> None:
         self._name = name
+        self._run_id = _resolve_run_id(run_id)
         # OTel cicd.pipeline.* of the CI run this runs in (empty outside CI).
         self._ci = ci_pipeline_attributes(ci_pipeline)
         # Declared agent, else the register() default (never invented).
         self._agent = resolve_agent(agent_name, agent_version)
         self._metadata = _safe_metadata(metadata or {}, context=f"Benchmark({name!r})")
-        self._record_io = record_io
-        self._run_id = _make_run_id()
         self._start_time = time.monotonic()
         self._cases: list[TestCaseResult] = []
-        self._statuses: list[str] = []
         self._closed = False
 
         logger.info("Benchmark started: name=%s run_id=%s", name, self._run_id)
@@ -791,40 +713,39 @@ class Benchmark:
         span_id: str | None = None,
         status: str | None = None,
         error_type: str | None = None,
-        duration_ms: float | None = None,
     ) -> None:
         """Log a single test case result.
 
-        Emits one ``opensearch.test_case.result`` event and one
-        ``gen_ai.evaluation.result`` event per score, with the ``test.*``
-        ids set.
+        Emits one ``gen_ai.evaluation.result`` event per score, with the
+        ``test.*`` ids, the agent, the CI pipeline and the run and case
+        metadata set.
 
         Args:
-            input: Test case input data.
-            output: Actual output from the agent/system.
-            expected: Expected/ground-truth output.
+            input: Test case input data (kept on the local result only).
+            output: Actual output from the agent/system (local result only).
+            expected: Expected/ground-truth output (local result only).
             scores: Pre-computed scores: ``{name: value}``, or a list of
                 ``EvalScore`` to declare verdicts (``label`` / ``passed``
                 or ``threshold`` + ``direction``) and scale bounds.
-            metadata: Arbitrary case-level metadata. Keys reserved by the
-                SDK are filtered out with a warning.
-            error: Error message. The case event status becomes ``"error"``
-                (``TestCaseResult.status`` stays ``"fail"`` as before).
+            metadata: Case metadata, added to the case's evaluation events
+                over the run metadata. Keys reserved by the SDK are filtered
+                out with a warning.
+            error: Error message, kept on the local result. The local status
+                becomes ``"error"``.
             case_id: Explicit ``test.case.id``. If omitted, derived
                 from a hash of ``input``.
             case_name: Human-readable ``test.case.name``.
             trace_id: Hex trace ID of the agent run that produced ``output``.
             span_id: Hex span ID of the agent run's root span. Required when
-                ``trace_id`` is provided. The case and score events are
-                parented to it.
-            status: Explicit case status, ``"pass"``, ``"fail"`` or
+                ``trace_id`` is provided. The score events are parented to it.
+            status: Explicit local case status, ``"pass"``, ``"fail"`` or
                 ``"error"``. Defaults to ``"error"`` when ``error`` or
                 ``error_type`` is given, else ``"fail"`` when any score has a
                 ``fail`` verdict, else ``"pass"``.
             error_type: ``error.type`` for an errored case (exception class
-                name or other low-cardinality error identifier).
-            duration_ms: Case duration, recorded as
-                ``opensearch.test_case.duration_ms``.
+                name or other low-cardinality error identifier). Every score
+                in ``scores`` is then emitted as an evaluator error result:
+                ``error.type`` set, no score value and no label.
         """
         if self._closed:
             raise RuntimeError("Benchmark is already closed")
@@ -837,15 +758,15 @@ class Benchmark:
             eval_scores = [EvalScore(name=n, value=v) for n, v in scores.items()]
         else:
             eval_scores = [s for s in (scores or []) if isinstance(s, EvalScore)]
-        score_values = {s.name: s.value for s in eval_scores if s.value is not None}
-        verdicts = _verdicts(eval_scores)
+        if error_type:
+            score_values: dict[str, float] = {}
+            verdicts: dict[str, str] = {}
+        else:
+            score_values = {s.name: s.value for s in eval_scores if s.value is not None}
+            verdicts = _verdicts(eval_scores)
         resolved_case_id = case_id or _make_case_id(input)
 
-        verdict_failed = "fail" in verdicts.values()
-        event_status = status or (
-            "error" if error or error_type else ("fail" if verdict_failed else "pass")
-        )
-        result_status = status or ("fail" if error or verdict_failed else "pass")
+        case_status = status or _case_status(errored=bool(error or error_type), verdicts=verdicts)
 
         grouping = {
             **_grouping(self._name, self._run_id, resolved_case_id, case_name),
@@ -858,16 +779,6 @@ class Benchmark:
             if metadata
             else {}
         )
-        case_meta = {**self._metadata, **safe_case_meta}
-
-        io: dict[str, Any] = {}
-        if self._record_io:
-            if input is not None:
-                io["opensearch.test_case.input"] = _io_attr(input)
-            if output is not None:
-                io["opensearch.test_case.output"] = _io_attr(output)
-            if expected is not None:
-                io["opensearch.test_case.expected"] = _io_attr(expected)
 
         event_ctx: Context = _no_span_context()
         if trace_id and span_id:
@@ -882,19 +793,15 @@ class Benchmark:
                     span_id,
                 )
 
-        _emit_scores(grouping, eval_scores, context=event_ctx)
-        _emit_case_event(
+        _emit_scores(
             grouping,
-            status=event_status,
+            eval_scores,
             context=event_ctx,
             error_type=error_type,
-            io=io,
-            duration_ms=duration_ms,
-            metadata=case_meta,
+            metadata={**self._metadata, **safe_case_meta},
         )
 
         ev_trace_id, ev_span_id = _span_ids(event_ctx)
-        self._statuses.append(event_status)
         self._cases.append(
             TestCaseResult(
                 case_id=resolved_case_id,
@@ -904,9 +811,8 @@ class Benchmark:
                 expected=expected,
                 scores=score_values,
                 error=error,
-                status=result_status,
+                status=case_status,
                 error_type=error_type,
-                duration_ms=duration_ms,
                 trace_id=ev_trace_id,
                 span_id=ev_span_id,
                 verdicts=verdicts or None,
@@ -914,10 +820,10 @@ class Benchmark:
         )
 
     def close(self) -> BenchmarkSummary:
-        """Finalize the benchmark and return a summary.
+        """Finalize the benchmark and return the local summary.
 
-        Emits the ``opensearch.test_suite_run.result`` event, computes aggregate
-        statistics, and prints a formatted summary.
+        Computes aggregate statistics and prints a formatted summary. Emits
+        no telemetry.
 
         Returns:
             ``BenchmarkSummary`` with aggregate score statistics.
@@ -928,16 +834,6 @@ class Benchmark:
         self._closed = True
 
         summary = _compute_summary(self._name, self._run_id, self._cases, self._start_time)
-
-        _emit_run_event(
-            self._name,
-            self._run_id,
-            self._statuses,
-            duration_ms=summary.duration_ms,
-            metadata=self._metadata,
-            agent=self._agent,
-            ci=self._ci,
-        )
 
         print(str(summary))
         logger.info("Benchmark completed: %s", self._run_id)
@@ -964,31 +860,30 @@ def evaluate(
     data: list[dict[str, Any]] | Iterable[dict[str, Any]],
     scores: list[Callable[..., EvalScore | list[EvalScore] | float]],
     metadata: dict[str, Any] | None = None,
-    record_io: bool = False,
+    run_id: str | None = None,
     agent_name: str | None = None,
     agent_version: str | None = None,
     ci_pipeline: dict[str, str] | None = None,
 ) -> BenchmarkResult:
-    """Run a task against a dataset, score outputs, and record results.
+    """Run a task against a dataset, score outputs, and record the results.
 
     Each case's task call is its own trace, exactly like production: the
     SDK adds no span around it. The root span(s) the task starts get
     ``test.suite.name``, ``test.suite.run.id``, ``test.case.id`` and
     ``test.case.name`` (stamped by a span processor installed on the global
     SDK ``TracerProvider``). Per case the SDK then emits one
-    ``gen_ai.evaluation.result`` event per score and one
-    ``opensearch.test_case.result`` event, both parented to that root span
-    (or without trace context when the task started no span). At the end it
-    emits one ``opensearch.test_suite_run.result`` event.
+    ``gen_ai.evaluation.result`` event per score, parented to that root span
+    (or without trace context when the task started no span).
 
-    A task that raises does not stop the run: its case event has status
-    ``error`` and ``error.type`` = the exception class, and its scorers are
-    skipped. A scorer that raises emits an evaluation event with
-    ``error.type``, named after the scorer's declared ``@scorer(name=...)``
-    (else the function name), and marks the case ``error``.
+    A task that raises does not stop the run: its scorers are not called,
+    and each scorer emits one ``gen_ai.evaluation.result`` with
+    ``error.type`` = the exception class and no value, label or
+    explanation. A scorer that raises emits an evaluation event with
+    ``error.type``. Either way the result is named after the scorer's
+    declared ``@scorer(name=...)`` (else the function name).
 
-    Case status (``test.case.result.status``): ``error`` if the task or a
-    scorer raised; else ``fail`` if any score has a ``fail`` verdict
+    Local case status (``TestCaseResult.status``): ``error`` if the task or
+    a scorer raised; else ``fail`` if any score has a ``fail`` verdict
     (a ``pass`` / ``fail`` ``label`` or ``passed``, or ``threshold`` + ``direction``
     from the score or its ``@scorer`` declaration); else ``pass``. Scores
     without a declared rule never fail a case.
@@ -1008,15 +903,17 @@ def evaluate(
             ``@scorer(...)`` to declare the evaluation name and pass rule.
             Scorers run outside the agent trace, so a traced LLM judge gets
             its own trace.
-        metadata: Run metadata added to the case and run events. Keys
-            reserved by the SDK are filtered out with a warning.
-        record_io: Record input/output/expected as
-            ``opensearch.test_case.input`` / ``.output`` / ``.expected`` on
-            the case event.
+        metadata: Run metadata, added to every ``gen_ai.evaluation.result``
+            event of the run (score metadata and the SDK attributes win).
+            Keys reserved by the SDK are filtered out with a warning.
+        run_id: ``test.suite.run.id`` of the run, used exactly as given.
+            Default: a generated id. Pass the same id from every CI shard so
+            they report into one run, or the id of an existing run to re-score
+            it.
         agent_name: ``gen_ai.agent.name`` of the agent under test. Stamped on
             the agent root spans (unless the span names its own agent) and on
-            every evaluation, case and run event. When omitted, each case uses
-            the agent its root span names, else ``register(agent_name=)``.
+            every evaluation event. When omitted, each case uses the agent its
+            root span names, else ``register(agent_name=)``.
         agent_version: ``gen_ai.agent.version`` of the agent under test, resolved the
             same way. Lets runs be compared version to version.
         ci_pipeline: OTel ``cicd.pipeline.name`` / ``cicd.pipeline.run.id`` /
@@ -1026,17 +923,18 @@ def evaluate(
 
     Returns:
         ``BenchmarkResult`` with summary and per-case results.
+
+    Raises:
+        ValueError: ``run_id`` is empty or whitespace.
     """
-    run_id = _make_run_id()
+    resolved_run_id = _resolve_run_id(run_id)
     start_time = time.monotonic()
 
     safe_meta = _safe_metadata(metadata or {}, context=f"evaluate({name!r})")
     _ensure_root_stamper()
 
     case_results: list[TestCaseResult] = []
-    statuses: list[str] = []
     declared_agent = resolve_agent(agent_name, agent_version)
-    case_agents: list[dict[str, str]] = []
     # OTel cicd.pipeline.* of the CI run this runs in (empty outside CI).
     ci = ci_pipeline_attributes(ci_pipeline)
 
@@ -1050,16 +948,9 @@ def evaluate(
         case_id = item.get("case_id") or _make_case_id(input_val)
         case_name_val = item.get("case_name")
 
-        grouping = {**_grouping(name, run_id, case_id, case_name_val), **ci}
+        grouping = {**_grouping(name, resolved_run_id, case_id, case_name_val), **ci}
         # Root spans get the declared agent (where they name none themselves).
         span_stamp = {**grouping, **declared_agent}
-
-        io: dict[str, Any] = {}
-        if record_io:
-            if input_val is not None:
-                io["opensearch.test_case.input"] = _io_attr(input_val)
-            if expected_val is not None:
-                io["opensearch.test_case.expected"] = _io_attr(expected_val)
 
         # Run the task as its own trace and capture its root span.
         output_val = None
@@ -1074,18 +965,14 @@ def evaluate(
             error_type = type(exc).__qualname__
             logger.warning("Task failed for case %s: %s", case_id, exc)
 
-        if record_io and output_val is not None:
-            io["opensearch.test_case.output"] = _io_attr(output_val)
-
         # The agent that ran: declared, else named on its root span, else the
         # register() default.
         case_agent = resolve_agent(
             agent_name, agent_version, span=scope.root_span if scope is not None else None
         )
-        case_agents.append(case_agent)
         grouping = {**grouping, **case_agent}
 
-        # Case and score events are parented to the agent run's root span.
+        # Score events are parented to the agent run's root span.
         event_ctx: Context
         if scope is not None and scope.root is not None:
             event_ctx = trace.set_span_in_context(NonRecordingSpan(scope.root))
@@ -1097,90 +984,80 @@ def evaluate(
         case_scores: dict[str, float] = {}
         case_verdicts: dict[str, str] = {}
         scorer_errors: list[str] = []
-        if error_msg is None:
-            for scorer_fn in scores:
-                spec: ScorerSpec | None = getattr(scorer_fn, "scorer_spec", None)
-                scorer_name = getattr(scorer_fn, "__name__", str(scorer_fn))
-                # Evaluation name of float results and of the error grade.
-                eval_name = (spec.name if spec else None) or scorer_name
-                # Named scorers identify the evaluator; lambdas etc. do not.
-                evaluator = (spec.evaluator if spec else None) or (
-                    scorer_name if scorer_name.isidentifier() else None
-                )
-                evaluator_type = spec.evaluator_type if spec else None
-                try:
-                    result = scorer_fn(input_val, output_val, expected_val)
-                except Exception as exc:
-                    msg = f"Scorer {scorer_name} failed: {exc}"
-                    scorer_errors.append(msg)
-                    error_type = error_type or type(exc).__qualname__
-                    logger.warning(
-                        "Scorer %s failed for case %s: %s",
-                        scorer_name,
-                        case_id,
-                        exc,
-                    )
-                    # Record the evaluator failure (error.type, no score value),
-                    # under the evaluation name the scorer would have produced.
-                    failed = _FailedScore(name=eval_name, explanation=str(exc))
-                    if spec is not None:
-                        failed.direction = spec.direction
-                        failed.threshold = spec.threshold
-                        failed.score_min = spec.score_min
-                        failed.score_max = spec.score_max
-                    _emit_scores(
-                        grouping,
-                        [failed],
-                        context=event_ctx,
-                        evaluator=evaluator,
-                        evaluator_type=evaluator_type,
-                        error_type=type(exc).__qualname__,
-                    )
-                    continue
+        for scorer_fn in scores:
+            spec: ScorerSpec | None = getattr(scorer_fn, "scorer_spec", None)
+            scorer_name = getattr(scorer_fn, "__name__", str(scorer_fn))
+            # Evaluation name of float results and of the error result.
+            eval_name = (spec.name if spec else None) or scorer_name
+            # Named scorers identify the evaluator; lambdas etc. do not.
+            evaluator = (spec.evaluator if spec else None) or (
+                scorer_name if scorer_name.isidentifier() else None
+            )
+            evaluator_type = spec.evaluator_type if spec else None
 
-                produced: list[EvalScore] = []
-                if isinstance(result, EvalScore):
-                    produced.append(result)
-                elif isinstance(result, list):
-                    produced.extend(s for s in result if isinstance(s, EvalScore))
-                elif isinstance(result, bool):
-                    produced.append(EvalScore(name=eval_name, value=float(result), passed=result))
-                elif isinstance(result, (int, float)):
-                    produced.append(EvalScore(name=eval_name, value=float(result)))
-                produced = [_apply_spec(s, spec) for s in produced]
-                for s in produced:
-                    if s.value is not None:
-                        case_scores[s.name] = s.value
-                case_verdicts.update(_verdicts(produced))
+            if error_msg is not None:
+                # The task raised: one error result per scorer, without the
+                # exception message.
                 _emit_scores(
                     grouping,
-                    produced,
+                    [_error_score(eval_name, spec)],
                     context=event_ctx,
                     evaluator=evaluator,
                     evaluator_type=evaluator_type,
+                    error_type=error_type,
+                    metadata=safe_meta,
                 )
+                continue
 
-        # Case status: error on any task or scorer error (TestCaseResult.status
-        # "fail"), else fail when any score has a fail verdict (explicit
-        # label, passed or threshold), else pass. No declared verdicts: pass.
-        errored = error_msg is not None or bool(scorer_errors)
-        verdict_failed = "fail" in case_verdicts.values()
-        result_status = "fail" if errored or verdict_failed else "pass"
-        event_status = "error" if errored else ("fail" if verdict_failed else "pass")
-        duration_ms = (time.monotonic() - case_start) * 1000
+            try:
+                result = scorer_fn(input_val, output_val, expected_val)
+            except Exception as exc:
+                msg = f"Scorer {scorer_name} failed: {exc}"
+                scorer_errors.append(msg)
+                error_type = error_type or type(exc).__qualname__
+                logger.warning(
+                    "Scorer %s failed for case %s: %s",
+                    scorer_name,
+                    case_id,
+                    exc,
+                )
+                # Record the evaluator failure (error.type, no score value),
+                # under the evaluation name the scorer would have produced.
+                _emit_scores(
+                    grouping,
+                    [_error_score(eval_name, spec, explanation=str(exc))],
+                    context=event_ctx,
+                    evaluator=evaluator,
+                    evaluator_type=evaluator_type,
+                    error_type=type(exc).__qualname__,
+                    metadata=safe_meta,
+                )
+                continue
 
-        _emit_case_event(
-            grouping,
-            status=event_status,
-            context=event_ctx,
-            error_type=error_type,
-            io=io,
-            duration_ms=duration_ms,
-            metadata=safe_meta,
-        )
+            produced: list[EvalScore] = []
+            if isinstance(result, EvalScore):
+                produced.append(result)
+            elif isinstance(result, list):
+                produced.extend(s for s in result if isinstance(s, EvalScore))
+            elif isinstance(result, bool):
+                produced.append(EvalScore(name=eval_name, value=float(result), passed=result))
+            elif isinstance(result, (int, float)):
+                produced.append(EvalScore(name=eval_name, value=float(result)))
+            produced = [_apply_spec(s, spec) for s in produced]
+            for s in produced:
+                if s.value is not None:
+                    case_scores[s.name] = s.value
+            case_verdicts.update(_verdicts(produced))
+            _emit_scores(
+                grouping,
+                produced,
+                context=event_ctx,
+                evaluator=evaluator,
+                evaluator_type=evaluator_type,
+                metadata=safe_meta,
+            )
 
         ev_trace_id, ev_span_id = _span_ids(event_ctx)
-        statuses.append(event_status)
         case_results.append(
             TestCaseResult(
                 case_id=case_id,
@@ -1190,39 +1067,22 @@ def evaluate(
                 expected=expected_val,
                 scores=case_scores,
                 error=error_msg,
-                status=result_status,
+                status=_case_status(
+                    errored=error_msg is not None or bool(scorer_errors),
+                    verdicts=case_verdicts,
+                ),
                 scorer_errors=scorer_errors or None,
                 error_type=error_type,
-                duration_ms=duration_ms,
+                duration_ms=(time.monotonic() - case_start) * 1000,
                 trace_id=ev_trace_id,
                 span_id=ev_span_id,
                 verdicts=case_verdicts or None,
             )
         )
 
-    summary = _compute_summary(name, run_id, case_results, start_time)
-    _emit_run_event(
-        name,
-        run_id,
-        statuses,
-        duration_ms=summary.duration_ms,
-        metadata=safe_meta,
-        ci=ci,
-        # Explicit, else the agent every case agreed on, else register() defaults.
-        agent={
-            **resolve_agent(),
-            **_run_agent(
-                case_agents,
-                {
-                    k: v
-                    for k, v in ((AGENT_NAME_KEY, agent_name), (AGENT_VERSION_KEY, agent_version))
-                    if v
-                },
-            ),
-        },
-    )
+    summary = _compute_summary(name, resolved_run_id, case_results, start_time)
 
     print(str(summary))
-    logger.info("evaluate() completed: %s", run_id)
+    logger.info("evaluate() completed: %s", resolved_run_id)
 
     return BenchmarkResult(summary=summary, cases=case_results)

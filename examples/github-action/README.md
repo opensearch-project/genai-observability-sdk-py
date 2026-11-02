@@ -34,11 +34,10 @@ def suite():
         task=agent,
         data=[{"case_id": "paris", "input": "Capital of France?", "expected": "Paris"}],
         scores=[contains_expected],
-        record_io=True,
     )
 ```
 
-Each named scorer becomes an evaluator (the grade event's instrumentation scope). The run produces the agent's own traces plus `gen_ai.evaluation.result`, `opensearch.test_case.result` and `opensearch.test_suite_run.result` log events.
+Each named scorer becomes an evaluator (`opensearch.evaluation.evaluator.name` on its results). The run produces the agent's own traces plus one `gen_ai.evaluation.result` log event per score.
 
 ## 2. Endpoints
 
@@ -80,7 +79,7 @@ The job fails (exit code 1) when a `fail-on-regression` evaluator mean is below 
 
 ### CI/CD attributes
 
-Inside GitHub Actions the SDK stamps the OTel `cicd.pipeline.*` attributes on the run event, the case and score events and the agent root spans, from the job's environment:
+Inside GitHub Actions the SDK stamps the OTel `cicd.pipeline.*` attributes on every evaluation result and the agent root spans, from the job's environment:
 
 | Attribute | From |
 |---|---|

@@ -19,8 +19,6 @@ from opensearch_genai_observability_sdk_py._internal import (
     set_agent_defaults,
 )
 
-CASE_EVENT = "opensearch.test_case.result"
-RUN_EVENT = "opensearch.test_suite_run.result"
 EVALUATION = "gen_ai.evaluation.result"
 NAME = "gen_ai.agent.name"
 VERSION = "gen_ai.agent.version"
@@ -96,30 +94,31 @@ class TestScore:
 
 
 class TestBenchmark:
-    def test_declared_agent_on_case_score_and_run_events(self, events):
+    def test_declared_agent_on_score_events(self, events):
         with Benchmark(name="suite", agent_name="travel_planner", agent_version="v3") as b:
-            b.log(input="q", output="a", scores={"accuracy": 1.0})
-        for name in (CASE_EVENT, EVALUATION, RUN_EVENT):
-            a = events(name)[0]
-            assert a[NAME] == "travel_planner", name
-            assert a[VERSION] == "v3", name
+            b.log(input="q", output="a", scores={"accuracy": 1.0, "tone": 0.5})
+        recs = events(EVALUATION)
+        assert len(recs) == 2
+        for a in recs:
+            assert a[NAME] == "travel_planner"
+            assert a[VERSION] == "v3"
 
     def test_register_default(self, events):
         set_agent_defaults("support_bot", "v1")
         with Benchmark(name="suite") as b:
-            b.log(input="q", output="a")
-        assert events(RUN_EVENT)[0][NAME] == "support_bot"
-        assert events(CASE_EVENT)[0][VERSION] == "v1"
+            b.log(input="q", output="a", scores={"accuracy": 1.0})
+        assert events(EVALUATION)[0][NAME] == "support_bot"
+        assert events(EVALUATION)[0][VERSION] == "v1"
 
     def test_declared_version_beats_metadata(self, events):
         with Benchmark(name="suite", metadata={VERSION: "meta"}, agent_version="v5") as b:
-            b.log(input="q", output="a")
-        assert events(RUN_EVENT)[0][VERSION] == "v5"
+            b.log(input="q", output="a", scores={"accuracy": 1.0})
+        assert events(EVALUATION)[0][VERSION] == "v5"
 
     def test_metadata_version_kept_without_a_declared_one(self, events):
         with Benchmark(name="suite", metadata={VERSION: "meta"}) as b:
-            b.log(input="q", output="a")
-        assert events(RUN_EVENT)[0][VERSION] == "meta"
+            b.log(input="q", output="a", scores={"accuracy": 1.0})
+        assert events(EVALUATION)[0][VERSION] == "meta"
 
 
 class TestEvaluate:
@@ -147,8 +146,9 @@ class TestEvaluate:
             assert span.attributes[NAME] == "travel_planner"
             assert span.attributes[VERSION] == "v3"
             assert span.attributes["test.suite.name"] == "suite"
-        for name in (CASE_EVENT, EVALUATION, RUN_EVENT):
-            assert all(a[NAME] == "travel_planner" and a[VERSION] == "v3" for a in events(name))
+        recs = events(EVALUATION)
+        assert len(recs) == 2
+        assert all(a[NAME] == "travel_planner" and a[VERSION] == "v3" for a in recs)
 
     def test_root_span_agent_wins_over_the_default(self, events, exporter):
         set_agent_defaults("default_agent", "v1")
@@ -162,12 +162,10 @@ class TestEvaluate:
         # The span's own name is kept; the missing version is filled from the default.
         assert root.attributes[NAME] == "support_bot"
         assert root.attributes[VERSION] == "v1"
-        case = events(CASE_EVENT)[0]
-        assert case[NAME] == "support_bot"
         assert events(EVALUATION)[0][NAME] == "support_bot"
-        assert events(RUN_EVENT)[0][NAME] == "support_bot"
+        assert events(EVALUATION)[0][VERSION] == "v1"
 
-    def test_run_event_has_no_agent_when_cases_disagree(self, events):
+    def test_each_case_reports_its_own_agent(self, events):
         tracer = trace.get_tracer("agent")
         agents = iter(["a1", "a2"])
 
@@ -175,11 +173,14 @@ class TestEvaluate:
             with tracer.start_as_current_span("invoke_agent", attributes={NAME: next(agents)}):
                 return question
 
-        evaluate("suite", task=task, data=[{"input": "x"}, {"input": "y"}], scores=[])
-        assert {a[NAME] for a in events(CASE_EVENT)} == {"a1", "a2"}
-        assert NAME not in events(RUN_EVENT)[0]
+        evaluate(
+            "suite",
+            task=task,
+            data=[{"input": "x"}, {"input": "y"}],
+            scores=[lambda i, o, e: 1.0],
+        )
+        assert [a[NAME] for a in events(EVALUATION)] == ["a1", "a2"]
 
     def test_unknown_agent_is_left_out(self, events):
         evaluate("suite", task=lambda q: q, data=[{"input": "x"}], scores=[lambda i, o, e: 1.0])
-        for name in (CASE_EVENT, EVALUATION, RUN_EVENT):
-            assert NAME not in events(name)[0]
+        assert NAME not in events(EVALUATION)[0]

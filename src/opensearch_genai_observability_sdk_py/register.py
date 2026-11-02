@@ -13,8 +13,7 @@ The register() function is the single entry point for configuring
 tracing. It creates a TracerProvider, sets up the exporter, and
 auto-discovers installed instrumentor packages. It also sets up a
 LoggerProvider with an OTLP log exporter, so evaluation events
-(``gen_ai.evaluation.result``, ``opensearch.test_case.result``,
-``opensearch.test_suite_run.result``) are exported over OTLP logs.
+(``gen_ai.evaluation.result``) are exported over OTLP logs.
 
 Traces and evaluation logs are separate OTLP endpoints. A collector usually
 serves both (``/v1/traces`` and ``/v1/logs``); AWS OpenSearch Ingestion
@@ -228,9 +227,9 @@ def register(
             when a custom ``exporter`` other than ``AWSSigV4OTLPExporter``
             is passed.
         agent_name: Name of the agent this process evaluates. Stamped as
-            ``gen_ai.agent.name`` on every evaluation, test case and test
-            suite run event the SDK emits, unless a call names its own agent
-            or the evaluated span carries one.
+            ``gen_ai.agent.name`` on every evaluation result event the SDK
+            emits, unless a call names its own agent or the evaluated span
+            carries one.
         agent_version: Version of that agent (``gen_ai.agent.version``), stamped the
             same way. Lets OpenSearch Dashboards compare runs version to
             version.

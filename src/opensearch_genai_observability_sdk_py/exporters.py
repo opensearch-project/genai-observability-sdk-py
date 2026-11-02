@@ -12,7 +12,7 @@
 Provides drop-in replacements for OTLPSpanExporter and OTLPLogExporter that
 sign requests using AWS Signature Version 4 for AWS-hosted OpenSearch
 and Data Prepper endpoints. The log exporter carries the evaluation events
-(``gen_ai.evaluation.result`` and the test case / run events). AWS OSIS
+(``gen_ai.evaluation.result``). AWS OSIS
 needs a separate logs pipeline for them.
 
 Design note
