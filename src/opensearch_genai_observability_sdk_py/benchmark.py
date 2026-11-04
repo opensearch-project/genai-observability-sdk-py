@@ -91,13 +91,12 @@ from opentelemetry.sdk.trace import SpanProcessor
 from opentelemetry.trace import NonRecordingSpan, SpanContext
 
 from opensearch_genai_observability_sdk_py._internal import (
-    _RESERVED_KEYS,
     AGENT_NAME_KEY,
     AGENT_VERSION_KEY,
     ci_pipeline_attributes,
+    drop_reserved_keys,
     expected_attributes,
     resolve_agent,
-    validate_metadata_keys,
 )
 from opensearch_genai_observability_sdk_py.score import (
     _VALID_DIRECTIONS,
@@ -588,9 +587,8 @@ def _error_score(
 
 
 def _safe_metadata(metadata: dict[str, Any], *, context: str = "") -> dict[str, Any]:
-    """Filter out SDK-reserved keys from user metadata and warn."""
-    validate_metadata_keys(metadata, context=context)
-    return {k: v for k, v in metadata.items() if k not in _RESERVED_KEYS}
+    """Filter out SDK-reserved keys (``test.*`` ids, CI, evaluation fields) and warn."""
+    return drop_reserved_keys(metadata, context=context)
 
 
 def _compute_summary(

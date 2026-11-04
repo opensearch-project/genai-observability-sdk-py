@@ -53,7 +53,9 @@ from opentelemetry.trace import INVALID_SPAN_ID, NonRecordingSpan, SpanContext, 
 from opensearch_genai_observability_sdk_py._internal import (
     AGENT_NAME_KEY,
     AGENT_VERSION_KEY,
+    drop_reserved_keys,
     get_event_logger,
+    is_evaluation_field_key,
     parse_hex,
     resolve_agent,
 )
@@ -84,6 +86,20 @@ _VALID_LEVELS = ("span", "trace", "session", "tool_call")
 _VALID_EVALUATOR_TYPES = ("llm_judge", "code", "human", "external")
 _VALID_DIRECTIONS = ("maximize", "minimize")
 VALID_VERDICTS = ("pass", "fail")
+
+
+# Keys score() writes from its own arguments: attributes= cannot set them.
+_SCORE_OWNED_KEYS = frozenset({"gen_ai.response.id", "gen_ai.conversation.id"})
+_SCORE_OWNED_PREFIXES = ("gen_ai.agent.",)
+
+
+def _is_score_reserved_key(key: str) -> bool:
+    """Evaluation fields, plus the response, conversation and agent keys score() sets."""
+    return (
+        is_evaluation_field_key(key)
+        or key in _SCORE_OWNED_KEYS
+        or key.startswith(_SCORE_OWNED_PREFIXES)
+    )
 
 
 def _no_span_context() -> Context:
@@ -169,8 +185,13 @@ def score(
         explanation: Evaluator rationale. Kept whole up to
             ``EXPLANATION_MAX_CHARS`` (8192) characters.
         response_id: Completion ID of the evaluated LLM response.
-        attributes: Extra attributes added as-is (e.g., ``test.*`` grouping
-            keys from semantic-conventions-genai#79).
+        attributes: Extra attributes (e.g., ``test.*`` grouping keys from
+            semantic-conventions-genai#79). The SDK fields win over them, and
+            keys the SDK owns (``gen_ai.evaluation.*``,
+            ``opensearch.gen_ai.evaluation.*``, ``error.type``,
+            ``gen_ai.response.id``, ``gen_ai.conversation.id``,
+            ``gen_ai.agent.*``) are dropped with one warning per call: set
+            those through the matching arguments. ``test.*`` keys pass through.
         level: ``"span"``, ``"trace"``, ``"session"`` or ``"tool_call"``.
             Defaults to ``"span"`` with a span context, ``"trace"`` with only
             ``trace_id``, ``"session"`` with only ``conversation_id``.
@@ -263,7 +284,13 @@ def score(
         judge_trace_id=judge_trace_id,
         target_trace_id=target_trace_id,
         threshold=threshold,
-        extra=attributes,
+        extra=(
+            drop_reserved_keys(
+                attributes, reserved=_is_score_reserved_key, context=f"score({name!r})"
+            )
+            if attributes
+            else None
+        ),
     )
     emit_evaluation_event(event_attrs, context=ctx)
     logger.debug("Score emitted: %s=%s (trace=%s)", name, value, trace_id)
@@ -297,7 +324,11 @@ def build_evaluation_attributes(
     threshold: float | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the ``gen_ai.evaluation.result`` attribute map (only set keys)."""
+    """Build the ``gen_ai.evaluation.result`` attribute map (only set keys).
+
+    ``extra`` is the base: the SDK fields are applied over it and win. Callers
+    filter reserved keys out of ``extra`` first.
+    """
     _check_enum("level", level, _VALID_LEVELS)
     _check_enum("evaluator_type", evaluator_type, _VALID_EVALUATOR_TYPES)
     _check_enum("direction", direction, _VALID_DIRECTIONS)
@@ -344,9 +375,7 @@ def build_evaluation_attributes(
         attrs[EVAL_SCORE_THRESHOLD_KEY] = float(threshold)
     if judge_trace_id:
         attrs[EVAL_JUDGE_TRACE_ID_KEY] = judge_trace_id
-    if extra:
-        attrs.update(extra)
-    return attrs
+    return {**(extra or {}), **attrs}
 
 
 def label_verdict(label: str | None) -> str | None:

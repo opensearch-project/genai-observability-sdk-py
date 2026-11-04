@@ -284,6 +284,63 @@ class TestEventAttributes:
         assert a["test.suite.run.id"] == "run_001"
         assert a["test.case.id"] == "case_001"
 
+    def test_sdk_fields_win_over_attributes(self, eval_events, caplog):
+        score(
+            name="relevance",
+            value=0.9,
+            label="pass",
+            evaluator="judge",
+            agent_name="planner",
+            attributes={
+                "gen_ai.evaluation.name": "other",
+                "gen_ai.evaluation.score.label": "fail",
+                "gen_ai.agent.name": "someone-else",
+                "app.variant": "b",
+            },
+        )
+        a = _one_event(eval_events).log_record.attributes
+        assert a["gen_ai.evaluation.name"] == "relevance"
+        assert a["gen_ai.evaluation.score.label"] == "pass"
+        assert a["gen_ai.agent.name"] == "planner"
+        assert a["app.variant"] == "b"
+        assert "'gen_ai.evaluation.name'" in caplog.text
+        assert caplog.text.count("reserved by the SDK") == 1
+
+    def test_evaluation_field_keys_dropped_even_when_unset(self, eval_events, caplog):
+        """attributes= cannot inject a verdict or an error the SDK did not write."""
+        score(
+            name="relevance",
+            value=0.9,
+            attributes={
+                "gen_ai.evaluation.score.label": "pass",
+                "opensearch.gen_ai.evaluation.score.threshold": 0.5,
+                "error.type": "Boom",
+            },
+        )
+        a = _one_event(eval_events).log_record.attributes
+        assert "gen_ai.evaluation.score.label" not in a
+        assert "opensearch.gen_ai.evaluation.score.threshold" not in a
+        assert "error.type" not in a
+        assert caplog.text.count("reserved by the SDK") == 1
+
+    def test_response_conversation_agent_keys_dropped(self, eval_events, caplog):
+        score(
+            name="relevance",
+            value=0.9,
+            attributes={
+                "gen_ai.response.id": "r1",
+                "gen_ai.conversation.id": "c1",
+                "gen_ai.agent.name": "x",
+                "gen_ai.agent.version": "1",
+                "test.case.id": "case_1",
+            },
+        )
+        a = _one_event(eval_events).log_record.attributes
+        for key in ("gen_ai.response.id", "gen_ai.conversation.id", "gen_ai.agent.name"):
+            assert key not in a
+        assert a["test.case.id"] == "case_1"
+        assert caplog.text.count("reserved by the SDK") == 1
+
 
 # ---------------------------------------------------------------------------
 # Verdict: label and threshold

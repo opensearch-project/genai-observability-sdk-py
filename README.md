@@ -424,7 +424,7 @@ score(
 | `agent_version` | `str` | `gen_ai.agent.version` | Its version. Default: the active span's, else `register(agent_version=)` |
 | `error_type` | `str` | `error.type` | Set when the evaluator itself failed |
 | `judge_trace_id` | `str` | `opensearch.gen_ai.evaluation.judge.trace_id` | Trace of the judge's own run |
-| `attributes` | `dict` | as-is | Extra attributes, e.g. `test.*` grouping keys from [semantic-conventions-genai#79](https://github.com/open-telemetry/semantic-conventions-genai/issues/79) |
+| `attributes` | `dict` | | Extra attributes, e.g. `test.*` grouping keys from [semantic-conventions-genai#79](https://github.com/open-telemetry/semantic-conventions-genai/issues/79). The SDK fields win over them; keys the SDK owns (`gen_ai.evaluation.*`, `opensearch.gen_ai.evaluation.*`, `error.type`, `gen_ai.response.id`, `gen_ai.conversation.id`, `gen_ai.agent.*`) are dropped with one warning per call (use the matching arguments). `test.*` keys pass through |
 
 `opensearch.gen_ai.evaluation.*` names are OpenSearch extensions that mirror the OTel `gen_ai.evaluation.*` names for fields OTel does not define yet. `score()` never sets `opensearch.test.case.expected`; pass it in `attributes` if you want it on an online result.
 
@@ -529,7 +529,7 @@ def tools(input, output, expected):
 | `task` | `Callable` | Function that takes input and returns output. Decorate with `@observe()` for tracing |
 | `data` | `list[dict]` | Dicts with `"input"` and optionally `"expected"` (passed to scorers and sent as `opensearch.test.case.expected`), `"case_id"`, `"case_name"` |
 | `scores` | `list[Callable]` | Scorer functions. Each receives `(input, output, expected)` and returns `EvalScore`, `list[EvalScore]`, `float`, or `bool`. Optionally decorated with `@scorer(...)` |
-| `metadata` | `dict` | Copied to every `gen_ai.evaluation.result` of the run. SDK-reserved keys are filtered |
+| `metadata` | `dict` | Copied to every `gen_ai.evaluation.result` of the run. SDK-reserved keys (`test.*` ids, `cicd.pipeline.*`, `opensearch.test.case.*`, evaluation fields) are filtered |
 | `run_id` | `str` | `test.suite.run.id`, used as given (default: generated). Use the same id from every CI shard so they report into one run, or an existing run's id to re-score it (send new results with the same run id). Empty or whitespace-only raises `ValueError` |
 | `agent_name` / `agent_version` | `str` | Agent under test (see [Agent identity](#agent-identity)) |
 | `ci_pipeline` | `dict` | `cicd.pipeline.*` overrides |

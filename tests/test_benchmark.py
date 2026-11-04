@@ -135,6 +135,29 @@ class TestBenchmarkRun:
         assert a["test.suite.name"] == "reserved-bench"
         assert a["m"] == "x"
 
+    def test_evaluation_field_metadata_filtered(self, events, caplog):
+        """Metadata cannot set a verdict or error the SDK left unset."""
+        with Benchmark(
+            name="eval-fields",
+            metadata={"gen_ai.evaluation.score.label": "pass", "error.type": "X", "m": "x"},
+        ) as b:
+            b.log(
+                input="q1",
+                scores=[
+                    EvalScore(
+                        name="a",
+                        value=0.2,
+                        metadata={"opensearch.gen_ai.evaluation.score.threshold": 0.1},
+                    )
+                ],
+            )
+        a = events(EVALUATION)[0].log_record.attributes
+        assert "gen_ai.evaluation.score.label" not in a
+        assert "error.type" not in a
+        assert "opensearch.gen_ai.evaluation.score.threshold" not in a
+        assert a["m"] == "x"
+        assert "'error.type'" in caplog.text and "reserved by the SDK" in caplog.text
+
     def test_custom_test_prefix_allowed(self, events):
         """User metadata with test.* prefix is allowed if not an SDK key."""
         with Benchmark(name="custom-test", metadata={"test.custom_field": "hello"}) as b:

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
@@ -216,12 +217,36 @@ def parse_hex(value: str) -> int | None:
         return None
 
 
-def validate_metadata_keys(metadata: dict, *, context: str = "") -> None:
-    """Warn if metadata keys collide with SDK-reserved attribute keys."""
-    for key in metadata:
-        if key in _RESERVED_KEYS:
-            logger.warning(
-                "%sMetadata key '%s' is reserved by the SDK and will be ignored",
-                f"{context}: " if context else "",
-                key,
-            )
+# Evaluation fields the SDK writes on every ``gen_ai.evaluation.result``: user
+# attributes and metadata must not set them, even when the SDK leaves one
+# unset (for example the label of an error result).
+_EVALUATION_FIELD_PREFIXES = ("gen_ai.evaluation.", "opensearch.gen_ai.evaluation.")
+_EVALUATION_FIELD_KEYS = frozenset({"error.type"})
+
+
+def is_evaluation_field_key(key: str) -> bool:
+    """True for ``gen_ai.evaluation.*``, ``opensearch.gen_ai.evaluation.*``, ``error.type``."""
+    return key in _EVALUATION_FIELD_KEYS or key.startswith(_EVALUATION_FIELD_PREFIXES)
+
+
+def is_reserved_metadata_key(key: str) -> bool:
+    """Keys user metadata of a benchmark run cannot set: ``test.*`` ids, CI, evaluation fields."""
+    return key in _RESERVED_KEYS or is_evaluation_field_key(key)
+
+
+def drop_reserved_keys(
+    attributes: dict[str, Any],
+    *,
+    reserved: Callable[[str], bool] = is_reserved_metadata_key,
+    context: str = "",
+) -> dict[str, Any]:
+    """``attributes`` without the keys ``reserved`` matches, with one warning per call."""
+    dropped = [key for key in attributes if reserved(key)]
+    if not dropped:
+        return dict(attributes)
+    logger.warning(
+        "%sKeys %s are reserved by the SDK and will be ignored",
+        f"{context}: " if context else "",
+        ", ".join(repr(k) for k in dropped),
+    )
+    return {k: v for k, v in attributes.items() if k not in dropped}

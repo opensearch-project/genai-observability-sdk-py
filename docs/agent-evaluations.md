@@ -53,7 +53,7 @@ Attributes (each is set only when it has a value):
 - "OTel" names are in the OTel semantic conventions registry. `test.suite.run.id` and `test.case.id` are proposed in [semantic-conventions#1262](https://github.com/open-telemetry/semantic-conventions/issues/1262) and [semantic-conventions-genai#79](https://github.com/open-telemetry/semantic-conventions-genai/issues/79).
 - `opensearch.gen_ai.evaluation.*` names mirror the OTel `gen_ai.evaluation.*` names for fields OTel does not define yet.
 - "offline" means `evaluate()` and `Benchmark.log()`. `score()` sets the `test.*` and `opensearch.test.case.*` keys only if you pass them in `attributes`.
-- Run and case metadata you pass are added to the events too. Metadata cannot set `test.suite.name`, `test.suite.run.id`, `test.case.id`, `test.case.name`, `cicd.pipeline.*` or `opensearch.test.case.*`: those keys are dropped with a warning.
+- `score(attributes=...)` and run, case and score metadata are added to the events too, under the SDK fields: an SDK field always wins. They cannot set the evaluation fields (`gen_ai.evaluation.*`, `opensearch.gen_ai.evaluation.*`, `error.type`), even ones the SDK leaves unset: those keys are dropped with one warning per call. `score(attributes=...)` also cannot set `gen_ai.response.id`, `gen_ai.conversation.id` or `gen_ai.agent.*` (use the arguments). Metadata also cannot set `test.suite.name`, `test.suite.run.id`, `test.case.id`, `test.case.name`, `cicd.pipeline.*` or `opensearch.test.case.*`.
 
 ## Setup
 
