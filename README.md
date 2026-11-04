@@ -451,7 +451,7 @@ score(
 
 ```python
 score("answer_quality", 3.0, threshold=4, score_min=1, score_max=5)  # label=fail
-score("latency_s", 9.2, threshold=12, direction="minimize")          # label=pass
+score("latency_s", 9.2, threshold=12, direction="minimize")  # label=pass
 score("tool_selection", 1.0, label="pass")
 ```
 
@@ -520,13 +520,16 @@ Each scorer is the evaluator: a named scorer function sets the grade event's `op
 ```python
 from opensearch_genai_observability_sdk_py import scorer
 
+
 @scorer(name="answer_quality", threshold=4, score_min=1, score_max=5, evaluator_type="llm_judge")
 def quality(input, output, expected):
-    return judge(input, output)          # float: named "answer_quality", verdict from threshold
+    return judge(input, output)  # float: named "answer_quality", verdict from threshold
+
 
 @scorer(name="latency_budget", direction="minimize", threshold=12)
 def latency(input, output, expected):
-    return seconds_taken                 # pass when <= 12
+    return seconds_taken  # pass when <= 12
+
 
 @scorer(name="tool_selection")
 def tools(input, output, expected):

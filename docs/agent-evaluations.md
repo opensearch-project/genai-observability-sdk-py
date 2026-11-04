@@ -242,7 +242,12 @@ result = evaluate(
     name="travel-capitals",
     task=travel_planner,
     data=[
-        {"input": "Capital of France?", "expected": "Paris", "case_id": "fr", "case_name": "France"},
+        {
+            "input": "Capital of France?",
+            "expected": "Paris",
+            "case_id": "fr",
+            "case_name": "France",
+        },
         {"input": "Capital of Peru?", "expected": "Lima", "case_id": "pe", "case_name": "Peru"},
     ],
     scores=[exact_match, quality],
