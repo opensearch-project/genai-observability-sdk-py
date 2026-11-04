@@ -174,8 +174,9 @@ def score(
         level: ``"span"``, ``"trace"``, ``"session"`` or ``"tool_call"``.
             Defaults to ``"span"`` with a span context, ``"trace"`` with only
             ``trace_id``, ``"session"`` with only ``conversation_id``.
-        evaluator: Evaluator name; also used as the instrumentation scope.
-        evaluator_version: Evaluator version (instrumentation scope version).
+        evaluator: Evaluator name (``opensearch.gen_ai.evaluation.evaluator.name``).
+        evaluator_version: Evaluator version
+            (``opensearch.gen_ai.evaluation.evaluator.version``).
         evaluator_type: ``"llm_judge"``, ``"code"``, ``"human"`` or ``"external"``.
         direction: ``"maximize"`` or ``"minimize"``: which way is better.
         score_min: Lower bound of the score scale.
@@ -264,12 +265,7 @@ def score(
         threshold=threshold,
         extra=attributes,
     )
-    emit_evaluation_event(
-        event_attrs,
-        context=ctx,
-        evaluator=evaluator,
-        evaluator_version=evaluator_version,
-    )
+    emit_evaluation_event(event_attrs, context=ctx)
     logger.debug("Score emitted: %s=%s (trace=%s)", name, value, trace_id)
 
 
@@ -384,15 +380,13 @@ def emit_evaluation_event(
     attributes: dict[str, Any],
     *,
     context: Context | None = None,
-    evaluator: str | None = None,
-    evaluator_version: str | None = None,
 ) -> None:
     """Emit one ``gen_ai.evaluation.result`` LogRecord via the global LoggerProvider.
 
     ``context`` carries the evaluated span (``None`` means the current
     context, i.e. the active span). The scope is always the SDK.
     """
-    otel_logger = get_event_logger(evaluator, evaluator_version)
+    otel_logger = get_event_logger()
     otel_logger.emit(
         event_name=EVALUATION_EVENT_NAME,
         timestamp=time.time_ns(),

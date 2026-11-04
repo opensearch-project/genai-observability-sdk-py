@@ -220,8 +220,8 @@ def scorer(
     - ``threshold`` / ``direction`` (default ``"maximize"`` with a threshold)
       / ``score_min`` / ``score_max``: defaults for every score the scorer
       returns; fields set on a returned ``EvalScore`` take precedence.
-    - ``evaluator``: evaluator identity (instrumentation scope and
-      ``opensearch.gen_ai.evaluation.evaluator.name``; default: the function name).
+    - ``evaluator``: evaluator name
+      (``opensearch.gen_ai.evaluation.evaluator.name``; default: the function name).
     - ``evaluator_type``: ``llm_judge``, ``code``, ``human`` or ``external``.
 
     Raises:
@@ -554,7 +554,7 @@ def _emit_scores(
             error_type=error_type,
             judge_trace_id=s.judge_trace_id,
         )
-        emit_evaluation_event({**extra, **attrs}, context=context, evaluator=evaluator)
+        emit_evaluation_event({**extra, **attrs}, context=context)
 
 
 def _verdicts(scores: Iterable[EvalScore | _FailedScore]) -> dict[str, str]:

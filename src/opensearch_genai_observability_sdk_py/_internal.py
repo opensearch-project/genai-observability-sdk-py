@@ -138,26 +138,20 @@ def resolve_agent(
     return out
 
 
-def event_scope(
-    evaluator: str | None = None, evaluator_version: str | None = None
-) -> tuple[str, str]:
+def event_scope() -> tuple[str, str]:
     """Instrumentation scope ``(name, version)`` for an SDK-emitted event.
 
     Always the SDK (the instrumentation library, as OTel defines the scope).
     The evaluator identity is carried in the event attributes
     (``opensearch.gen_ai.evaluation.evaluator.*``). Data Prepper and OpenSearch
-    Dashboards derive the result source from the scope name. The arguments
-    are kept for compatibility and ignored.
+    Dashboards derive the result source from the scope name.
     """
-    del evaluator, evaluator_version
     return SDK_SCOPE_NAME, SDK_VERSION
 
 
-def get_event_logger(
-    evaluator: str | None = None, evaluator_version: str | None = None
-) -> _logs.Logger:
+def get_event_logger() -> _logs.Logger:
     """OTel Logger for SDK events, with the SDK as the instrumentation scope."""
-    name, scope_version = event_scope(evaluator, evaluator_version)
+    name, scope_version = event_scope()
     return _logs.get_logger(name, scope_version)
 
 
