@@ -83,9 +83,10 @@ class TestEventEmission:
         assert rec.instrumentation_scope.name == SDK_SCOPE_NAME
         assert rec.instrumentation_scope.version == SDK_VERSION
         assert (
-            rec.log_record.attributes["opensearch.evaluation.evaluator.name"] == "relevance_judge"
+            rec.log_record.attributes["opensearch.gen_ai.evaluation.evaluator.name"]
+            == "relevance_judge"
         )
-        assert rec.log_record.attributes["opensearch.evaluation.evaluator.version"] == "3.1"
+        assert rec.log_record.attributes["opensearch.gen_ai.evaluation.evaluator.version"] == "3.1"
 
     def test_multiple_scores_are_independent(self, eval_events):
         score(name="a", value=0.1)
@@ -105,7 +106,7 @@ class TestEventParenting:
         score(name="accuracy", value=0.95, trace_id=TRACE_ID, span_id=SPAN_ID)
         rec = _one_event(eval_events)
         assert _ids(rec) == (TRACE_ID, SPAN_ID)
-        assert rec.log_record.attributes["opensearch.evaluation.level"] == "span"
+        assert rec.log_record.attributes["opensearch.gen_ai.evaluation.level"] == "span"
 
     def test_explicit_ids_accept_0x_and_uppercase(self, eval_events):
         score(name="accuracy", trace_id="0x" + TRACE_ID.upper(), span_id=SPAN_ID.upper())
@@ -119,7 +120,7 @@ class TestEventParenting:
         rec = _one_event(eval_events)
         assert rec.log_record.trace_id == sc.trace_id
         assert rec.log_record.span_id == sc.span_id
-        assert rec.log_record.attributes["opensearch.evaluation.level"] == "span"
+        assert rec.log_record.attributes["opensearch.gen_ai.evaluation.level"] == "span"
 
     def test_explicit_ids_win_over_active_span(self, eval_events):
         tracer = trace.get_tracer("test")
@@ -132,7 +133,7 @@ class TestEventParenting:
         lr = _one_event(eval_events).log_record
         assert format(lr.trace_id, "032x") == TRACE_ID
         assert lr.span_id == 0
-        assert lr.attributes["opensearch.evaluation.level"] == "trace"
+        assert lr.attributes["opensearch.gen_ai.evaluation.level"] == "trace"
 
     def test_trace_only_never_derives_root_span_id(self, eval_events, exporter):
         """Regression: no span id from the low 64 bits of the trace id."""
@@ -156,7 +157,7 @@ class TestEventParenting:
         score(name="test", value=0.5)
         lr = _one_event(eval_events).log_record
         assert lr.trace_id == 0
-        assert "opensearch.evaluation.level" not in lr.attributes
+        assert "opensearch.gen_ai.evaluation.level" not in lr.attributes
 
     def test_invalid_trace_id_standalone(self, eval_events):
         score(name="test", value=0.5, trace_id="not-hex!", span_id=SPAN_ID)
@@ -168,7 +169,7 @@ class TestEventParenting:
         lr = _one_event(eval_events).log_record
         assert lr.span_id == 0
         assert format(lr.trace_id, "032x") == TRACE_ID
-        assert lr.attributes["opensearch.evaluation.level"] == "trace"
+        assert lr.attributes["opensearch.gen_ai.evaluation.level"] == "trace"
 
     def test_span_id_without_trace_id_ignored(self, eval_events):
         tracer = trace.get_tracer("test")
@@ -214,15 +215,15 @@ class TestEventAttributes:
             judge_trace_id="abcd" * 8,
         )
         a = _one_event(eval_events).log_record.attributes
-        assert a["opensearch.evaluation.level"] == "tool_call"
-        assert a["opensearch.evaluation.evaluator.name"] == "faith_judge"
-        assert a["opensearch.evaluation.evaluator.version"] == "1.0"
-        assert a["opensearch.evaluation.evaluator.type"] == "llm_judge"
-        assert a["opensearch.evaluation.score.direction"] == "maximize"
-        assert a["opensearch.evaluation.score.min"] == 1.0
-        assert a["opensearch.evaluation.score.max"] == 5.0
-        assert isinstance(a["opensearch.evaluation.score.min"], float)
-        assert a["opensearch.evaluation.judge.trace_id"] == "abcd" * 8
+        assert a["opensearch.gen_ai.evaluation.level"] == "tool_call"
+        assert a["opensearch.gen_ai.evaluation.evaluator.name"] == "faith_judge"
+        assert a["opensearch.gen_ai.evaluation.evaluator.version"] == "1.0"
+        assert a["opensearch.gen_ai.evaluation.evaluator.type"] == "llm_judge"
+        assert a["opensearch.gen_ai.evaluation.score.direction"] == "maximize"
+        assert a["opensearch.gen_ai.evaluation.score.min"] == 1.0
+        assert a["opensearch.gen_ai.evaluation.score.max"] == 5.0
+        assert isinstance(a["opensearch.gen_ai.evaluation.score.min"], float)
+        assert a["opensearch.gen_ai.evaluation.judge.trace_id"] == "abcd" * 8
 
     def test_value_is_double(self, eval_events):
         score(name="t", value=1)
@@ -248,18 +249,18 @@ class TestEventAttributes:
     def test_session_level_default(self, eval_events):
         score(name="user_satisfaction", value=0.9, conversation_id="session-456")
         a = _one_event(eval_events).log_record.attributes
-        assert a["opensearch.evaluation.level"] == "session"
+        assert a["opensearch.gen_ai.evaluation.level"] == "session"
         assert a["gen_ai.conversation.id"] == "session-456"
 
     def test_explicit_level_overrides_default(self, eval_events):
         score(name="t", trace_id=TRACE_ID, span_id=SPAN_ID, level="trace")
         a = _one_event(eval_events).log_record.attributes
-        assert a["opensearch.evaluation.level"] == "trace"
+        assert a["opensearch.gen_ai.evaluation.level"] == "trace"
 
     def test_unknown_enum_recorded_with_warning(self, eval_events, caplog):
         score(name="t", evaluator_type="robot", direction="up", level="galaxy")
         a = _one_event(eval_events).log_record.attributes
-        assert a["opensearch.evaluation.evaluator.type"] == "robot"
+        assert a["opensearch.gen_ai.evaluation.evaluator.type"] == "robot"
         assert "evaluator_type" in caplog.text
 
     def test_long_explanation_not_truncated_at_500(self, eval_events):
@@ -289,8 +290,8 @@ class TestEventAttributes:
 # ---------------------------------------------------------------------------
 
 LABEL = "gen_ai.evaluation.score.label"
-THRESHOLD = "opensearch.evaluation.score.threshold"
-DIRECTION = "opensearch.evaluation.score.direction"
+THRESHOLD = "opensearch.gen_ai.evaluation.score.threshold"
+DIRECTION = "opensearch.gen_ai.evaluation.score.direction"
 
 
 class TestVerdict:
@@ -383,3 +384,21 @@ class TestParseHex:
 
     def test_empty_string_returns_zero(self):
         assert _parse_hex("") == 0
+
+
+class TestExpectedNotOnline:
+    def test_score_never_sets_expected(self, eval_events):
+        score("relevance", 0.9, trace_id=TRACE_ID)
+        a = _one_event(eval_events).log_record.attributes
+        assert "opensearch.test.case.expected" not in a
+        assert "opensearch.test.case.expected_truncated" not in a
+
+    def test_score_passes_explicit_expected_through(self, eval_events):
+        score(
+            "relevance",
+            0.9,
+            trace_id=TRACE_ID,
+            attributes={"opensearch.test.case.expected": "Paris"},
+        )
+        a = _one_event(eval_events).log_record.attributes
+        assert a["opensearch.test.case.expected"] == "Paris"

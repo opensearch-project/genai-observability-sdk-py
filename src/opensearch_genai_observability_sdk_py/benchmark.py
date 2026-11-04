@@ -38,7 +38,9 @@ Telemetry shape::
       ... normal GenAI spans
 
     LogRecord gen_ai.evaluation.result       one per score, parented to the
-                                             agent run's root span, test.* copied
+                                             agent run's root span, test.* copied,
+                                             opensearch.test.case.expected when
+                                             the case has an expected value
 
 If the task starts no span, the score events carry no trace context (the
 ``test.*`` attributes are still set). If the task raises, one
@@ -52,7 +54,7 @@ score.
 
 Scope: every event uses the SDK scope ``opensearch-genai-observability-sdk-py``
 with the SDK version (the instrumentation library); the scorer is named in
-``opensearch.evaluation.evaluator.*``.
+``opensearch.gen_ai.evaluation.evaluator.*``.
 
 CI/CD: inside a CI system (GitHub Actions, GitLab CI, Jenkins) the evaluation
 events and the agent root spans also carry the OTel
@@ -93,6 +95,7 @@ from opensearch_genai_observability_sdk_py._internal import (
     AGENT_NAME_KEY,
     AGENT_VERSION_KEY,
     ci_pipeline_attributes,
+    expected_attributes,
     resolve_agent,
     validate_metadata_keys,
 )
@@ -133,6 +136,8 @@ class EvalScore:
     - ``threshold`` + ``direction``: rule the SDK applies to ``value`` when no
       verdict is given; its verdict is written as the label.
     - ``score_min`` / ``score_max``: scale bounds.
+    - ``judge_trace_id``: trace id of the judge's own run, if traced
+      (``opensearch.gen_ai.evaluation.judge.trace_id``).
     """
 
     name: str
@@ -145,6 +150,7 @@ class EvalScore:
     direction: str | None = None
     score_min: float | None = None
     score_max: float | None = None
+    judge_trace_id: str | None = None
 
 
 @dataclasses.dataclass
@@ -161,6 +167,7 @@ class _FailedScore:
     direction: str | None = None
     score_min: float | None = None
     score_max: float | None = None
+    judge_trace_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +221,7 @@ def scorer(
       / ``score_min`` / ``score_max``: defaults for every score the scorer
       returns; fields set on a returned ``EvalScore`` take precedence.
     - ``evaluator``: evaluator identity (instrumentation scope and
-      ``opensearch.evaluation.evaluator.name``; default: the function name).
+      ``opensearch.gen_ai.evaluation.evaluator.name``; default: the function name).
     - ``evaluator_type``: ``llm_judge``, ``code``, ``human`` or ``external``.
 
     Raises:
@@ -545,6 +552,7 @@ def _emit_scores(
             score_max=s.score_max,
             threshold=s.threshold,
             error_type=error_type,
+            judge_trace_id=s.judge_trace_id,
         )
         emit_evaluation_event({**extra, **attrs}, context=context, evaluator=evaluator)
 
@@ -723,7 +731,10 @@ class Benchmark:
         Args:
             input: Test case input data (kept on the local result only).
             output: Actual output from the agent/system (local result only).
-            expected: Expected/ground-truth output (local result only).
+            expected: Expected/ground-truth output. Set on every evaluation
+                event of the case as ``opensearch.test.case.expected``
+                (non-strings JSON-encoded, cut to 4096 characters with
+                ``opensearch.test.case.expected_truncated`` set).
             scores: Pre-computed scores: ``{name: value}``, or a list of
                 ``EvalScore`` to declare verdicts (``label`` / ``passed``
                 or ``threshold`` + ``direction``) and scale bounds.
@@ -770,6 +781,7 @@ class Benchmark:
 
         grouping = {
             **_grouping(self._name, self._run_id, resolved_case_id, case_name),
+            **expected_attributes(expected),
             **self._agent,
             **self._ci,
         }
@@ -896,6 +908,10 @@ def evaluate(
         data: Iterable of dicts with ``"input"`` and optionally
             ``"expected"``, ``"case_id"`` and ``"case_name"`` keys. Consumed
             once (single-pass); generators are materialized into a list.
+            ``"expected"`` is passed to the scorers and set on every
+            evaluation event of the case as ``opensearch.test.case.expected``
+            (non-strings JSON-encoded, cut to 4096 characters with
+            ``opensearch.test.case.expected_truncated`` set).
         scores: List of scorer callables. Each receives
             ``(input, output, expected)`` and returns an ``EvalScore``,
             list of ``EvalScore``, a plain float, or a bool (a verdict:
@@ -970,7 +986,8 @@ def evaluate(
         case_agent = resolve_agent(
             agent_name, agent_version, span=scope.root_span if scope is not None else None
         )
-        grouping = {**grouping, **case_agent}
+        # The expected output goes on the events only, not on the root span.
+        grouping = {**grouping, **expected_attributes(expected_val), **case_agent}
 
         # Score events are parented to the agent run's root span.
         event_ctx: Context

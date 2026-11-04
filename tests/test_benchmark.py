@@ -342,7 +342,7 @@ class TestBenchmarkScoreEvents:
         lr = eval_events()[0].log_record
         assert format(lr.trace_id, "032x") == TRACE_ID
         assert format(lr.span_id, "016x") == SPAN_ID
-        assert lr.attributes["opensearch.evaluation.level"] == "span"
+        assert lr.attributes["opensearch.gen_ai.evaluation.level"] == "span"
 
     def test_no_scores_no_events(self, log_exporter):
         with Benchmark(name="no-score") as b:
@@ -416,7 +416,7 @@ class TestEventScope:
         evaluate(name="scope", task=lambda x: x, data=[{"input": "q1"}], scores=[judge])
         _assert_only_evaluation_events(log_exporter)
         grade = events(EVALUATION)[0]
-        assert grade.log_record.attributes["opensearch.evaluation.evaluator.name"] == "judge"
+        assert grade.log_record.attributes["opensearch.gen_ai.evaluation.evaluator.name"] == "judge"
         assert grade.instrumentation_scope.name == SDK_SCOPE
         assert grade.instrumentation_scope.version == SDK_VERSION
         assert not grade.instrumentation_scope.attributes
@@ -529,7 +529,7 @@ class TestEvaluate:
         assert a["test.suite.name"] == "evt-eval"
         assert a["test.case.id"] == "c1"
         assert a["test.case.name"] == "first"
-        assert a["opensearch.evaluation.evaluator.name"] == "judge"
+        assert a["opensearch.gen_ai.evaluation.evaluator.name"] == "judge"
         assert rec.instrumentation_scope.name == SDK_SCOPE
 
     def test_evaluate_scorer_error_emits_error_event(self, eval_events):
@@ -667,7 +667,7 @@ class TestEvaluateEvents:
         a = score_rec.log_record.attributes
         for key in GROUPING:
             assert a[key] == root.attributes[key]
-        assert a["opensearch.evaluation.level"] == "span"
+        assert a["opensearch.gen_ai.evaluation.level"] == "span"
         assert a["gen_ai.evaluation.score.label"] == "relevant"
         assert score_rec.instrumentation_scope.name == SDK_SCOPE
         case = result.cases[0]
@@ -743,11 +743,13 @@ class TestEvaluateEvents:
             assert lr.trace_id == bad_root.context.trace_id
             assert lr.span_id == bad_root.context.span_id
         by_name = {lr.attributes["gen_ai.evaluation.name"]: lr.attributes for lr in bad}
-        assert by_name["answer_quality"]["opensearch.evaluation.evaluator.name"] == "judge"
-        assert by_name["answer_quality"]["opensearch.evaluation.evaluator.type"] == "llm_judge"
+        assert by_name["answer_quality"]["opensearch.gen_ai.evaluation.evaluator.name"] == "judge"
+        assert (
+            by_name["answer_quality"]["opensearch.gen_ai.evaluation.evaluator.type"] == "llm_judge"
+        )
         assert by_name["answer_quality"][THRESHOLD] == 4.0
-        assert by_name["exact"]["opensearch.evaluation.evaluator.name"] == "exact"
-        assert "opensearch.evaluation.evaluator.name" not in by_name["<lambda>"]
+        assert by_name["exact"]["opensearch.gen_ai.evaluation.evaluator.name"] == "exact"
+        assert "opensearch.gen_ai.evaluation.evaluator.name" not in by_name["<lambda>"]
         good = [r for r in events(EVALUATION) if r.log_record.attributes["test.case.id"] == "good"]
         assert len(good) == 3
         assert all("error.type" not in r.log_record.attributes for r in good)
@@ -795,7 +797,7 @@ class TestEvaluateEvents:
         assert score_lr.trace_id == 0 and score_lr.span_id == 0
         assert score_lr.attributes["test.case.id"] == "c1"
         assert score_lr.attributes["test.suite.name"] == "untraced"
-        assert "opensearch.evaluation.level" not in score_lr.attributes
+        assert "opensearch.gen_ai.evaluation.level" not in score_lr.attributes
         assert result.cases[0].trace_id is None
 
     def test_untraced_task_ignores_ambient_span(self, events):
@@ -914,7 +916,7 @@ class TestBenchmarkEvents:
 # ---------------------------------------------------------------------------
 
 LABEL = "gen_ai.evaluation.score.label"
-THRESHOLD = "opensearch.evaluation.score.threshold"
+THRESHOLD = "opensearch.gen_ai.evaluation.score.threshold"
 
 
 def _grades(events):
@@ -967,11 +969,11 @@ class TestScorerDecorator:
         a = rec.log_record.attributes
         assert a["gen_ai.evaluation.score.value"] == 3.0
         assert a[THRESHOLD] == 4.0
-        assert a["opensearch.evaluation.score.direction"] == "maximize"
-        assert a["opensearch.evaluation.score.min"] == 1.0
-        assert a["opensearch.evaluation.score.max"] == 5.0
-        assert a["opensearch.evaluation.evaluator.name"] == "quality_judge"
-        assert a["opensearch.evaluation.evaluator.type"] == "llm_judge"
+        assert a["opensearch.gen_ai.evaluation.score.direction"] == "maximize"
+        assert a["opensearch.gen_ai.evaluation.score.min"] == 1.0
+        assert a["opensearch.gen_ai.evaluation.score.max"] == 5.0
+        assert a["opensearch.gen_ai.evaluation.evaluator.name"] == "quality_judge"
+        assert a["opensearch.gen_ai.evaluation.evaluator.type"] == "llm_judge"
         assert a[LABEL] == "fail"
         assert rec.instrumentation_scope.name == SDK_SCOPE
         assert result.cases[0].scores == {"answer_quality": 3.0}
@@ -985,7 +987,7 @@ class TestScorerDecorator:
         evaluate(name="override", task=lambda x: x, data=[{"input": "q"}], scores=[latency])
         a = _grades(events)["latency_budget"].log_record.attributes
         assert a[THRESHOLD] == 15.0
-        assert a["opensearch.evaluation.score.direction"] == "minimize"
+        assert a["opensearch.gen_ai.evaluation.score.direction"] == "minimize"
         assert a[LABEL] == "pass"
 
     def test_passed_and_label_propagate(self, events):
@@ -1069,7 +1071,7 @@ class TestScorerErrorGradeName:
         assert LABEL not in a
         assert "gen_ai.evaluation.score.value" not in a
         # The evaluator identity stays the function unless declared.
-        assert a["opensearch.evaluation.evaluator.name"] == "quality"
+        assert a["opensearch.gen_ai.evaluation.evaluator.name"] == "quality"
 
     def test_error_grade_falls_back_to_function_name(self, events):
         def quality(i, o, e):
@@ -1095,7 +1097,7 @@ class TestBenchmarkVerdicts:
         grades = _grades(events)
         quality = grades["answer_quality"].log_record.attributes
         assert quality[LABEL] == "fail"
-        assert quality["opensearch.evaluation.score.max"] == 5.0
+        assert quality["opensearch.gen_ai.evaluation.score.max"] == 5.0
         assert grades["tool_selection"].log_record.attributes[LABEL] == "pass"
         assert b._cases[0].status == "fail"
 
@@ -1109,3 +1111,117 @@ class TestBenchmarkVerdicts:
         with Benchmark(name="bench-status") as b:
             b.log(input="q", scores=[EvalScore(name="x", value=0.0, passed=False)], status="pass")
         assert b._cases[0].status == "pass"
+
+
+# ---------------------------------------------------------------------------
+# Expected output on evaluation events
+# ---------------------------------------------------------------------------
+
+EXPECTED = "opensearch.test.case.expected"
+EXPECTED_TRUNCATED = "opensearch.test.case.expected_truncated"
+
+
+class TestExpectedOutput:
+    def test_string_on_every_result_of_the_case(self, events):
+        with Benchmark(name="exp-str") as b:
+            b.log(input="q", expected="Paris", scores={"a": 1.0, "b": 0.5})
+        records = events(EVALUATION)
+        assert len(records) == 2
+        for r in records:
+            assert r.log_record.attributes[EXPECTED] == "Paris"
+            assert EXPECTED_TRUNCATED not in r.log_record.attributes
+
+    def test_dict_is_json_encoded(self, events):
+        def exact(input_val, output, expected):
+            return 1.0
+
+        evaluate(
+            name="exp-dict",
+            task=lambda x: x,
+            data=[{"input": "q", "expected": {"city": "Paris", "n": 1}}],
+            scores=[exact],
+        )
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a[EXPECTED] == '{"city":"Paris","n":1}'
+        assert EXPECTED_TRUNCATED not in a
+
+    def test_truncated_at_4096(self, events):
+        with Benchmark(name="exp-long") as b:
+            b.log(input="q", expected="x" * 5000, scores={"a": 1.0})
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a[EXPECTED] == "x" * 4096
+        assert a[EXPECTED_TRUNCATED] is True
+
+    def test_exactly_4096_not_truncated(self, events):
+        with Benchmark(name="exp-edge") as b:
+            b.log(input="q", expected="y" * 4096, scores={"a": 1.0})
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a[EXPECTED] == "y" * 4096
+        assert EXPECTED_TRUNCATED not in a
+
+    def test_absent_when_no_expected(self, events):
+        def exact(input_val, output, expected):
+            return 1.0
+
+        with Benchmark(name="exp-none") as b:
+            b.log(input="q", scores={"a": 1.0})
+        evaluate(name="exp-none-eval", task=lambda x: x, data=[{"input": "q"}], scores=[exact])
+        records = events(EVALUATION)
+        assert len(records) == 2
+        for r in records:
+            assert EXPECTED not in r.log_record.attributes
+            assert EXPECTED_TRUNCATED not in r.log_record.attributes
+
+    def test_metadata_cannot_set_expected(self, events):
+        with Benchmark(name="exp-meta", metadata={EXPECTED: "run"}) as b:
+            b.log(
+                input="q",
+                metadata={EXPECTED_TRUNCATED: True},
+                scores=[EvalScore(name="a", value=1.0, metadata={EXPECTED: "score"})],
+            )
+        a = events(EVALUATION)[0].log_record.attributes
+        assert EXPECTED not in a
+        assert EXPECTED_TRUNCATED not in a
+
+    def test_on_error_results_and_not_on_root_span(self, exporter, events):
+        tracer = trace.get_tracer("test")
+
+        def crashing(x):
+            with tracer.start_as_current_span("invoke_agent"):
+                raise RuntimeError("boom")
+
+        def exact(input_val, output, expected):
+            return 1.0
+
+        evaluate(
+            name="exp-crash",
+            task=crashing,
+            data=[{"input": "q", "expected": "A"}],
+            scores=[exact],
+        )
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["error.type"] == "RuntimeError"
+        assert a[EXPECTED] == "A"
+        root = [s for s in exporter.get_finished_spans() if s.name == "invoke_agent"][0]
+        assert EXPECTED not in (root.attributes or {})
+
+
+class TestJudgeTraceIdFromEvalScore:
+    JUDGE = "opensearch.gen_ai.evaluation.judge.trace_id"
+
+    def test_benchmark_log(self, events):
+        with Benchmark(name="judge-log") as b:
+            b.log(input="q", scores=[EvalScore(name="a", value=1.0, judge_trace_id="ab" * 16)])
+        assert events(EVALUATION)[0].log_record.attributes[self.JUDGE] == "ab" * 16
+
+    def test_evaluate_scorer(self, events):
+        def judge(input_val, output, expected):
+            return EvalScore(name="q", value=0.9, judge_trace_id="cd" * 16)
+
+        evaluate(name="judge-eval", task=lambda x: x, data=[{"input": "q"}], scores=[judge])
+        assert events(EVALUATION)[0].log_record.attributes[self.JUDGE] == "cd" * 16
+
+    def test_absent_by_default(self, events):
+        with Benchmark(name="judge-none") as b:
+            b.log(input="q", scores={"a": 1.0})
+        assert self.JUDGE not in events(EVALUATION)[0].log_record.attributes

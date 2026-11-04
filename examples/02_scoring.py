@@ -111,8 +111,8 @@ provider.force_flush()
 #     gen_ai.evaluation.score.value          = 0.95
 #     gen_ai.evaluation.score.label          = "relevant"
 #     gen_ai.evaluation.explanation          = "Answer directly addresses..."
-#     opensearch.evaluation.level            = "span"
-#     opensearch.evaluation.evaluator.name   = "relevance_judge"
-#     opensearch.evaluation.evaluator.type   = "llm_judge"
-#     opensearch.evaluation.score.min / .max = 0.0 / 1.0
-#     opensearch.evaluation.score.direction  = "maximize"
+#     opensearch.gen_ai.evaluation.level            = "span"
+#     opensearch.gen_ai.evaluation.evaluator.name   = "relevance_judge"
+#     opensearch.gen_ai.evaluation.evaluator.type   = "llm_judge"
+#     opensearch.gen_ai.evaluation.score.min / .max = 0.0 / 1.0
+#     opensearch.gen_ai.evaluation.score.direction  = "maximize"

@@ -29,7 +29,7 @@ Scoring levels:
 The instrumentation scope of every event is the SDK
 (``opensearch-genai-observability-sdk-py`` and the SDK version), the
 instrumentation library as OTel defines it. The evaluator identity is in the
-``opensearch.evaluation.evaluator.*`` attributes. Data Prepper and OpenSearch
+``opensearch.gen_ai.evaluation.evaluator.*`` attributes. Data Prepper and OpenSearch
 Dashboards derive the result source from the scope name.
 
 Verdicts: readers show pass/fail only for a declared rule, otherwise the
@@ -67,6 +67,18 @@ EVALUATION_EVENT_NAME = "gen_ai.evaluation.result"
 # ``_TRUNCATION_MARKER``.
 EXPLANATION_MAX_CHARS = 8192
 _TRUNCATION_MARKER = "...[truncated]"
+
+# OpenSearch attributes for evaluation fields OTel does not define yet. They
+# mirror the OTel ``gen_ai.evaluation.*`` names under ``opensearch.``.
+EVAL_LEVEL_KEY = "opensearch.gen_ai.evaluation.level"
+EVAL_EVALUATOR_NAME_KEY = "opensearch.gen_ai.evaluation.evaluator.name"
+EVAL_EVALUATOR_VERSION_KEY = "opensearch.gen_ai.evaluation.evaluator.version"
+EVAL_EVALUATOR_TYPE_KEY = "opensearch.gen_ai.evaluation.evaluator.type"
+EVAL_SCORE_DIRECTION_KEY = "opensearch.gen_ai.evaluation.score.direction"
+EVAL_SCORE_MIN_KEY = "opensearch.gen_ai.evaluation.score.min"
+EVAL_SCORE_MAX_KEY = "opensearch.gen_ai.evaluation.score.max"
+EVAL_SCORE_THRESHOLD_KEY = "opensearch.gen_ai.evaluation.score.threshold"
+EVAL_JUDGE_TRACE_ID_KEY = "opensearch.gen_ai.evaluation.judge.trace_id"
 
 _VALID_LEVELS = ("span", "trace", "session", "tool_call")
 _VALID_EVALUATOR_TYPES = ("llm_judge", "code", "human", "external")
@@ -121,7 +133,7 @@ def score(
 
     The instrumentation scope is always the SDK
     (``opensearch-genai-observability-sdk-py`` with the SDK version); the
-    evaluator is named in ``opensearch.evaluation.evaluator.*``. Data Prepper
+    evaluator is named in ``opensearch.gen_ai.evaluation.evaluator.*``. Data Prepper
     and OpenSearch Dashboards derive the result source from the scope.
 
     ``register()`` configures the OTLP logs pipeline. With your own OTel
@@ -134,7 +146,7 @@ def score(
       ``gen_ai.response.id``, ``error.type``, ``gen_ai.conversation.id``,
       ``gen_ai.agent.name``.
     - Extensions (until the upstream proposals merge):
-      ``opensearch.evaluation.level``, ``.evaluator.name``,
+      ``opensearch.gen_ai.evaluation.level``, ``.evaluator.name``,
       ``.evaluator.version``, ``.evaluator.type``, ``.score.direction``,
       ``.score.min``, ``.score.max``, ``.score.threshold``,
       ``.judge.trace_id``.
@@ -177,7 +189,7 @@ def score(
             same way.
         error_type: ``error.type`` when the evaluator itself failed.
         judge_trace_id: Trace id of the judge's own run, if traced.
-        threshold: Pass threshold (``opensearch.evaluation.score.threshold``).
+        threshold: Pass threshold (``opensearch.gen_ai.evaluation.score.threshold``).
             ``direction`` defaults to ``"maximize"`` and is recorded.
 
     Examples:
@@ -319,23 +331,23 @@ def build_evaluation_attributes(
     if agent_version:
         attrs[AGENT_VERSION_KEY] = agent_version
     if level:
-        attrs["opensearch.evaluation.level"] = level
+        attrs[EVAL_LEVEL_KEY] = level
     if evaluator:
-        attrs["opensearch.evaluation.evaluator.name"] = evaluator
+        attrs[EVAL_EVALUATOR_NAME_KEY] = evaluator
     if evaluator_version:
-        attrs["opensearch.evaluation.evaluator.version"] = evaluator_version
+        attrs[EVAL_EVALUATOR_VERSION_KEY] = evaluator_version
     if evaluator_type:
-        attrs["opensearch.evaluation.evaluator.type"] = evaluator_type
+        attrs[EVAL_EVALUATOR_TYPE_KEY] = evaluator_type
     if direction:
-        attrs["opensearch.evaluation.score.direction"] = direction
+        attrs[EVAL_SCORE_DIRECTION_KEY] = direction
     if score_min is not None:
-        attrs["opensearch.evaluation.score.min"] = float(score_min)
+        attrs[EVAL_SCORE_MIN_KEY] = float(score_min)
     if score_max is not None:
-        attrs["opensearch.evaluation.score.max"] = float(score_max)
+        attrs[EVAL_SCORE_MAX_KEY] = float(score_max)
     if threshold is not None:
-        attrs["opensearch.evaluation.score.threshold"] = float(threshold)
+        attrs[EVAL_SCORE_THRESHOLD_KEY] = float(threshold)
     if judge_trace_id:
-        attrs["opensearch.evaluation.judge.trace_id"] = judge_trace_id
+        attrs[EVAL_JUDGE_TRACE_ID_KEY] = judge_trace_id
     if extra:
         attrs.update(extra)
     return attrs

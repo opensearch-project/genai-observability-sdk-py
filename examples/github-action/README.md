@@ -37,7 +37,7 @@ def suite():
     )
 ```
 
-Each named scorer becomes an evaluator (`opensearch.evaluation.evaluator.name` on its results). The run produces the agent's own traces plus one `gen_ai.evaluation.result` log event per score.
+Each named scorer becomes an evaluator (`opensearch.gen_ai.evaluation.evaluator.name` on its results). The run produces the agent's own traces plus one `gen_ai.evaluation.result` log event per score.
 
 ## 2. Endpoints
 

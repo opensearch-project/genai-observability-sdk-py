@@ -14,9 +14,11 @@ Not part of the public API — subject to change without notice.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from importlib.metadata import PackageNotFoundError, version
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from opentelemetry import _logs
@@ -80,7 +82,7 @@ def ci_pipeline_attributes(
 # ---------------------------------------------------------------------------
 
 AGENT_NAME_KEY = "gen_ai.agent.name"
-# Our extension until OTel defines an agent version attribute.
+# OTel GenAI attribute for the agent version.
 AGENT_VERSION_KEY = "gen_ai.agent.version"
 
 _agent_defaults: dict[str, str | None] = {"name": None, "version": None}
@@ -144,7 +146,7 @@ def event_scope(
 
     Always the SDK (the instrumentation library, as OTel defines the scope).
     The evaluator identity is carried in the event attributes
-    (``opensearch.evaluation.evaluator.*``). Data Prepper and OpenSearch
+    (``opensearch.gen_ai.evaluation.evaluator.*``). Data Prepper and OpenSearch
     Dashboards derive the result source from the scope name. The arguments
     are kept for compatibility and ignored.
     """
@@ -160,6 +162,40 @@ def get_event_logger(
     return _logs.get_logger(name, scope_version)
 
 
+# ---------------------------------------------------------------------------
+# Expected output of an offline test case
+# ---------------------------------------------------------------------------
+
+# OpenSearch attributes (no OTel name yet) for the expected output of a test
+# case, set on every gen_ai.evaluation.result event of that case.
+TEST_CASE_EXPECTED_KEY = "opensearch.test.case.expected"
+TEST_CASE_EXPECTED_TRUNCATED_KEY = "opensearch.test.case.expected_truncated"
+EXPECTED_MAX_CHARS = 4096
+
+
+def expected_attributes(expected: Any) -> dict[str, Any]:
+    """``opensearch.test.case.expected`` (+ ``_truncated``) for an expected value.
+
+    Strings are used as-is; other values are JSON-encoded (compact, non-ASCII
+    kept, unknown types via ``str``). Values longer than
+    ``EXPECTED_MAX_CHARS`` (4096) characters are cut to that length and
+    ``opensearch.test.case.expected_truncated`` is set to ``True``. ``None``
+    means no expected value: nothing is set.
+    """
+    if expected is None:
+        return {}
+    if isinstance(expected, str):
+        text = expected
+    else:
+        text = json.dumps(expected, default=str, ensure_ascii=False, separators=(",", ":"))
+    if len(text) <= EXPECTED_MAX_CHARS:
+        return {TEST_CASE_EXPECTED_KEY: text}
+    return {
+        TEST_CASE_EXPECTED_KEY: text[:EXPECTED_MAX_CHARS],
+        TEST_CASE_EXPECTED_TRUNCATED_KEY: True,
+    }
+
+
 # Exact attribute keys written by the SDK — user metadata must not use these.
 _RESERVED_KEYS = frozenset(
     {
@@ -167,6 +203,8 @@ _RESERVED_KEYS = frozenset(
         "test.suite.run.id",
         "test.case.id",
         "test.case.name",
+        TEST_CASE_EXPECTED_KEY,
+        TEST_CASE_EXPECTED_TRUNCATED_KEY,
         "cicd.pipeline.name",
         "cicd.pipeline.run.id",
         "cicd.pipeline.run.url.full",
