@@ -55,9 +55,14 @@ inputs:
     required: false
     default: "."
   install:
-    description: "pip requirement(s) to install before running, space separated"
+    description: >-
+      pip requirement(s) to install before running, space separated. The action needs an
+      SDK release after 0.2.9 (endpoint, traces-endpoint / logs-endpoint, SigV4 for both
+      signals); until it is on PyPI, install from git, for example
+      "git+https://github.com/opensearch-project/genai-observability-sdk-py@<commit-sha>".
+      SigV4 needs no extra: botocore is a core dependency.
     required: false
-    default: "opensearch-genai-observability-sdk-py[aws]"
+    default: "opensearch-genai-observability-sdk-py>0.2.9"
 
 outputs:
   run-id:

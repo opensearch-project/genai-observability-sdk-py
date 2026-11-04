@@ -67,7 +67,11 @@ Copy [`example-workflow.yml`](example-workflow.yml) to `.github/workflows/agent-
 | `fail-on-regression` | | | Gates on evaluator means: `evaluator=0.8` or `evaluator>=0.8` (at least), `evaluator<=12` (at most, for `direction="minimize"` scorers), comma or newline separated |
 | `pass-threshold` | | `0.5` | Fallback for scores without a verdict: counts as pass in the table when `value >= threshold`. Scores with a verdict use it |
 | `working-directory` | | `.` | Directory to run the suite from (added to `sys.path`) |
-| `install` | | `opensearch-genai-observability-sdk-py[aws]` | pip requirement(s) installed first |
+| `install` | | `opensearch-genai-observability-sdk-py>0.2.9` | pip requirement(s) installed first. See [SDK version](#sdk-version) |
+
+### SDK version
+
+The action needs an SDK release after 0.2.9: that is the first release with `endpoint=` as a base URL, `traces_endpoint=` / `logs_endpoint=`, and `sigv4=` for traces and evaluation events. Until it is on PyPI, `pip` cannot resolve the default `install` and the step fails; set `install` to a git requirement pinned to a commit, for example `git+https://github.com/opensearch-project/genai-observability-sdk-py@<commit-sha>`. SigV4 needs no extra (`botocore` is a core dependency).
 
 ### Outputs
 

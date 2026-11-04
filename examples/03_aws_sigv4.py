@@ -17,7 +17,9 @@ OpenSearch Ingestion (OSIS) has one pipeline per signal: traces go to the
 traces pipeline, evaluation events (score(), evaluate(), Benchmark) go to a
 logs pipeline. Pass both URLs, as traces_endpoint= and logs_endpoint=.
 
-Requires: pip install opensearch-genai-observability-sdk-py[aws]
+Requires: pip install opensearch-genai-observability-sdk-py (botocore, used for
+SigV4, is a core dependency; there is no [aws] extra). sigv4=, traces_endpoint=
+and logs_endpoint= need the SDK release after 0.2.9.
 """
 
 from opensearch_genai_observability_sdk_py import Op, observe, register, score
