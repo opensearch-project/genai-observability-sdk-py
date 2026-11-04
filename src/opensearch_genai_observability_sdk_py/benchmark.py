@@ -152,23 +152,6 @@ class EvalScore:
     judge_trace_id: str | None = None
 
 
-@dataclasses.dataclass
-class _FailedScore:
-    """Internal stand-in for a scorer that raised (no score value)."""
-
-    name: str
-    value: float | None = None
-    label: str | None = None
-    explanation: str | None = None
-    metadata: dict[str, Any] | None = None
-    passed: bool | None = None
-    threshold: float | None = None
-    direction: str | None = None
-    score_min: float | None = None
-    score_max: float | None = None
-    judge_trace_id: str | None = None
-
-
 # ---------------------------------------------------------------------------
 # @scorer: declare a scorer's evaluation name and pass rule up front
 # ---------------------------------------------------------------------------
@@ -259,7 +242,7 @@ def scorer(
     return decorate
 
 
-def _verdict(s: EvalScore | _FailedScore) -> str | None:
+def _verdict(s: EvalScore) -> str | None:
     """Verdict of a resolved score: its pass / fail label, else ``passed``, else the threshold."""
     from_label = label_verdict(s.label)
     if from_label is not None:
@@ -516,7 +499,7 @@ def _agent_run_scope(grouping: dict[str, Any]) -> Iterator[_CaseScope]:
 
 def _emit_scores(
     grouping: dict[str, Any],
-    scores: Iterable[EvalScore | _FailedScore],
+    scores: Iterable[EvalScore],
     *,
     context: Context,
     evaluator: str | None = None,
@@ -556,7 +539,7 @@ def _emit_scores(
         emit_evaluation_event({**extra, **attrs}, context=context)
 
 
-def _verdicts(scores: Iterable[EvalScore | _FailedScore]) -> dict[str, str]:
+def _verdicts(scores: Iterable[EvalScore]) -> dict[str, str]:
     """Evaluation name -> verdict, for the scores that declare one."""
     out: dict[str, str] = {}
     for s in scores:
@@ -573,17 +556,9 @@ def _case_status(*, errored: bool, verdicts: dict[str, str]) -> str:
     return "fail" if "fail" in verdicts.values() else "pass"
 
 
-def _error_score(
-    name: str, spec: ScorerSpec | None, explanation: str | None = None
-) -> _FailedScore:
+def _error_score(name: str, spec: ScorerSpec | None, explanation: str | None = None) -> EvalScore:
     """An evaluator-error result (no score value) under the scorer's declared rule."""
-    failed = _FailedScore(name=name, explanation=explanation)
-    if spec is not None:
-        failed.direction = spec.direction
-        failed.threshold = spec.threshold
-        failed.score_min = spec.score_min
-        failed.score_max = spec.score_max
-    return failed
+    return _apply_spec(EvalScore(name=name, value=None, explanation=explanation), spec)
 
 
 def _safe_metadata(metadata: dict[str, Any], *, context: str = "") -> dict[str, Any]:
