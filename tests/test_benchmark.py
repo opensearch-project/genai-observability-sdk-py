@@ -9,6 +9,9 @@
 
 """Tests for opensearch_genai_observability_sdk_py.benchmark."""
 
+import numbers
+from decimal import Decimal
+
 import pytest
 from opentelemetry import trace
 
@@ -1299,3 +1302,130 @@ class TestJudgeTraceIdFromEvalScore:
         with Benchmark(name="judge-none") as b:
             b.log(input="q", scores={"a": 1.0})
         assert self.JUDGE not in events(EVALUATION)[0].log_record.attributes
+
+
+class _RealLike:
+    """Stand-in for numpy.float32: registered as numbers.Real, convertible to float."""
+
+    def __init__(self, v):
+        self.v = v
+
+    def __float__(self):
+        return float(self.v)
+
+
+class _BoolLike:
+    """Stand-in for numpy.bool_: truthy, not a bool and not a numbers.Real."""
+
+    def __bool__(self):
+        return True
+
+
+numbers.Real.register(_RealLike)
+
+
+class TestScorerReturnTypes:
+    def _run(self, *scorers):
+        return evaluate(name="ret", task=lambda x: x, data=[{"input": "q"}], scores=list(scorers))
+
+    @pytest.mark.parametrize("value", [_RealLike(0.25), 3, 0.5])
+    def test_real_numbers_are_scores(self, value, events):
+        def s(i, o, e):
+            return value
+
+        result = self._run(s)
+        a = _grades(events)["s"].log_record.attributes
+        assert a["gen_ai.evaluation.score.value"] == float(value)
+        assert type(result.cases[0].scores["s"]) is float
+        assert result.cases[0].status == "pass"
+
+    def test_eval_score_value_converted_to_float(self, events):
+        result = self._run(lambda i, o, e: EvalScore(name="x", value=_RealLike(2)))
+        assert type(result.cases[0].scores["x"]) is float
+        assert _grades(events)["x"].log_record.attributes["gen_ai.evaluation.score.value"] == 2.0
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            _BoolLike(),
+            Decimal("0.5"),
+            None,
+            {"score": 1.0},
+            "0.9",
+            [EvalScore(name="ok", value=1.0), 0.5],
+            EvalScore(name="s", value="high"),
+        ],
+        ids=["bool-like", "decimal", "none", "dict", "str", "mixed-list", "str-value"],
+    )
+    def test_unsupported_returns_error_result(self, value, events, caplog):
+        @scorer(name="s", threshold=0.5)
+        def s(i, o, e):
+            return value
+
+        result = self._run(s)
+        case = result.cases[0]
+        grades = _grades(events)
+        assert list(grades) == ["s"]
+        a = grades["s"].log_record.attributes
+        assert a["error.type"] == "TypeError"
+        assert "gen_ai.evaluation.score.value" not in a
+        assert LABEL not in a
+        assert case.status == "error"
+        assert case.error_type == "TypeError"
+        assert case.scores == {}
+        assert "Scorer s returned" in case.scorer_errors[0]
+        assert "Scorer s returned" in caplog.text
+
+    def test_async_scorer_is_not_called(self, events, caplog, recwarn):
+        calls = []
+
+        async def judge(i, o, e):
+            calls.append(1)
+            return 1.0
+
+        result = self._run(judge)
+        assert calls == []
+        assert _grades(events)["judge"].log_record.attributes["error.type"] == "TypeError"
+        assert result.cases[0].status == "error"
+        assert "is async" in caplog.text
+        assert not [w for w in recwarn if "never awaited" in str(w.message)]
+
+    def test_async_scorer_behind_decorator(self, events):
+        @scorer(name="quality")
+        async def judge(i, o, e):
+            return 1.0
+
+        self._run(judge)
+        assert _grades(events)["quality"].log_record.attributes["error.type"] == "TypeError"
+
+    def test_returned_coroutine_is_closed(self, events, recwarn):
+        async def judge():
+            return 1.0
+
+        coros = []
+
+        def sync_wrapper(i, o, e):
+            coro = judge()
+            coros.append(coro)
+            return coro
+
+        result = self._run(sync_wrapper)
+        assert coros[0].cr_frame is None  # closed
+        assert result.cases[0].error_type == "TypeError"
+        assert "awaitable" in result.cases[0].scorer_errors[0]
+        assert not [w for w in recwarn if "never awaited" in str(w.message)]
+
+    def test_numpy_types(self, events):
+        np = pytest.importorskip("numpy")
+
+        def f32(i, o, e):
+            return np.float32(0.5)
+
+        def nb(i, o, e):
+            return np.bool_(True)
+
+        result = self._run(f32, nb)
+        grades = _grades(events)
+        assert grades["f32"].log_record.attributes["gen_ai.evaluation.score.value"] == 0.5
+        assert grades["nb"].log_record.attributes["error.type"] == "TypeError"
+        assert result.cases[0].status == "error"

@@ -266,7 +266,7 @@ if result.summary.fail_count or result.summary.error_count:
     sys.exit(1)
 ```
 
-- A scorer receives `(input, output, expected)` and returns a float, a bool (a verdict), an `EvalScore` or a list of `EvalScore`.
+- A scorer receives `(input, output, expected)` and returns a number (any `numbers.Real`, for example `numpy.float32`), a bool (a verdict), an `EvalScore` or a list of `EvalScore`. Scorers are synchronous. Any other return (`numpy.bool_`, `Decimal`, `None`, a dict, a coroutine) logs a warning and emits an error result with `error.type` = `TypeError`, and the case status is `error`. An `async def` scorer is not called; wrap the async judge with `asyncio.run()` in a sync scorer.
 - `@scorer(...)` declares the evaluation name, `threshold`, `direction`, `score_min`, `score_max`, `evaluator` and `evaluator_type`. Fields set on a returned `EvalScore` win.
 - `EvalScore(judge_trace_id=...)` sets `opensearch.gen_ai.evaluation.judge.trace_id`, in `evaluate()` and in `Benchmark.log()`.
 - Scorers run outside the agent trace, so a traced judge gets its own trace.

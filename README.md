@@ -529,7 +529,7 @@ def tools(input, output, expected):
 | `name` | `str` | Benchmark name (`test.suite.name`). Stable across runs |
 | `task` | `Callable` | Function that takes input and returns output. Decorate with `@observe()` for tracing |
 | `data` | `list[dict]` | Dicts with `"input"` and optionally `"expected"` (passed to scorers and sent as `opensearch.test.case.expected`), `"case_id"`, `"case_name"` |
-| `scores` | `list[Callable]` | Scorer functions. Each receives `(input, output, expected)` and returns `EvalScore`, `list[EvalScore]`, `float`, or `bool`. Optionally decorated with `@scorer(...)` |
+| `scores` | `list[Callable]` | Synchronous scorer functions. Each receives `(input, output, expected)` and returns `EvalScore`, `list[EvalScore]`, a number (any `numbers.Real`, for example `numpy.float32`), or `bool`. Any other return (`numpy.bool_`, `Decimal`, `None`, a dict, a coroutine) logs a warning and emits an error result with `error.type` = `TypeError`; `async def` scorers are not called. Optionally decorated with `@scorer(...)` |
 | `metadata` | `dict` | Copied to every `gen_ai.evaluation.result` of the run. SDK-reserved keys (`test.*` ids, `cicd.pipeline.*`, `opensearch.test.case.*`, evaluation fields) are filtered |
 | `run_id` | `str` | `test.suite.run.id`, used as given (default: generated). Use the same id from every CI shard so they report into one run, or an existing run's id to re-score it (send new results with the same run id). Empty or whitespace-only raises `ValueError` |
 | `agent_name` / `agent_version` | `str` | Agent under test (see [Agent identity](#agent-identity)) |

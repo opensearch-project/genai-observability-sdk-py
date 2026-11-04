@@ -73,8 +73,10 @@ import contextlib
 import dataclasses
 import functools
 import hashlib
+import inspect
 import json
 import logging
+import numbers
 import threading
 import time
 import uuid
@@ -843,6 +845,59 @@ class Benchmark:
             self.close()
 
 
+_SYNC_SCORERS_ONLY = (
+    "evaluate() calls scorers synchronously; wrap async judges with asyncio.run() in a sync scorer"
+)
+
+
+def _is_async_callable(fn: Callable[..., Any]) -> bool:
+    """``True`` for ``async def`` functions, also behind ``functools.wraps`` (``@scorer``)."""
+    return inspect.iscoroutinefunction(inspect.unwrap(fn))
+
+
+def _scorer_results(result: Any, eval_name: str) -> tuple[list[EvalScore] | None, str]:
+    """The scores a scorer returned, or ``(None, problem)`` for an unsupported return.
+
+    Supported: an ``EvalScore``, a list of ``EvalScore``, a ``bool`` (a verdict:
+    value 1.0/0.0 with ``passed``) or any ``numbers.Real`` (``int``, ``float``,
+    ``numpy.float32``...). ``EvalScore.value`` must be ``None`` or a
+    ``numbers.Real``; values are converted to ``float``. Anything else
+    (``numpy.bool_``, ``Decimal``, ``None``, a dict, an awaitable...) is
+    unsupported. A returned coroutine is closed so it is never left
+    un-awaited.
+    """
+    if inspect.isawaitable(result):
+        if inspect.iscoroutine(result):
+            result.close()
+        return None, f"an awaitable ({type(result).__name__}); {_SYNC_SCORERS_ONLY}"
+    if isinstance(result, bool):
+        return [EvalScore(name=eval_name, value=float(result), passed=result)], ""
+    if isinstance(result, numbers.Real):
+        return [EvalScore(name=eval_name, value=float(result))], ""
+    if isinstance(result, EvalScore):
+        items: list[Any] = [result]
+    elif isinstance(result, list):
+        items = result
+    else:
+        return None, (
+            f"unsupported type {type(result).__name__}; expected a number, bool, "
+            "EvalScore or list of EvalScore"
+        )
+    scores: list[EvalScore] = []
+    for item in items:
+        if not isinstance(item, EvalScore):
+            return None, f"a list item of unsupported type {type(item).__name__}"
+        if item.value is not None:
+            if not isinstance(item.value, numbers.Real):
+                return None, (
+                    f"EvalScore({item.name!r}) with a value of unsupported type "
+                    f"{type(item.value).__name__}"
+                )
+            item = dataclasses.replace(item, value=float(item.value))
+        scores.append(item)
+    return scores, ""
+
+
 # ---------------------------------------------------------------------------
 # evaluate(): full eval runner (Mode A)
 # ---------------------------------------------------------------------------
@@ -896,11 +951,16 @@ def evaluate(
             evaluation event of the case as ``opensearch.test.case.expected``
             (non-strings JSON-encoded, cut to 4096 characters with
             ``opensearch.test.case.expected_truncated`` set).
-        scores: List of scorer callables. Each receives
+        scores: List of synchronous scorer callables. Each receives
             ``(input, output, expected)`` and returns an ``EvalScore``,
-            list of ``EvalScore``, a plain float, or a bool (a verdict:
-            value 1.0/0.0 with ``pass``/``fail``). Decorate with
-            ``@scorer(...)`` to declare the evaluation name and pass rule.
+            list of ``EvalScore``, a number (any ``numbers.Real``), or a bool
+            (a verdict: value 1.0/0.0 with ``pass``/``fail``). Any other
+            return (``numpy.bool_``, ``Decimal``, ``None``, a dict, a
+            coroutine from an ``async def`` scorer) logs a warning and emits
+            an error result with ``error.type`` = ``TypeError``; the case
+            status is then ``error``. Async scorers are never called.
+            Decorate with ``@scorer(...)`` to declare the evaluation name and
+            pass rule.
             Scorers run outside the agent trace, so a traced LLM judge gets
             its own trace.
         metadata: Run metadata, added to every ``gen_ai.evaluation.result``
@@ -1010,19 +1070,30 @@ def evaluate(
                 )
                 continue
 
-            try:
-                result = scorer_fn(input_val, output_val, expected_val)
-            except Exception as exc:
-                # The message stays local (scorer_errors): exception text from a
-                # judge call can carry URLs, keys or request bodies.
-                scorer_errors.append(f"Scorer {scorer_name} failed: {exc}")
-                error_type = error_type or type(exc).__qualname__
-                logger.warning(
-                    "Scorer %s failed for case %s: %s",
-                    scorer_name,
-                    case_id,
-                    exc,
-                )
+            # (error.type, local message) when the scorer gives no usable result.
+            failure: tuple[str, str] | None = None
+            produced: list[EvalScore] | None = None
+            if _is_async_callable(scorer_fn):
+                # Never called: calling it would only create an un-awaited coroutine.
+                failure = ("TypeError", f"Scorer {scorer_name} is async; {_SYNC_SCORERS_ONLY}")
+            else:
+                try:
+                    result = scorer_fn(input_val, output_val, expected_val)
+                except Exception as exc:
+                    # The message stays local (scorer_errors): exception text from
+                    # a judge call can carry URLs, keys or request bodies.
+                    failure = (type(exc).__qualname__, f"Scorer {scorer_name} failed: {exc}")
+                else:
+                    produced, problem = _scorer_results(result, eval_name)
+                    if produced is None:
+                        failure = ("TypeError", f"Scorer {scorer_name} returned {problem}")
+
+            if produced is None:
+                assert failure is not None  # every path without scores sets a failure
+                err_type, msg = failure
+                scorer_errors.append(msg)
+                error_type = error_type or err_type
+                logger.warning("%s (case %s)", msg, case_id)
                 # Record the evaluator failure (error.type, no score value, no
                 # explanation), under the evaluation name the scorer would have
                 # produced.
@@ -1032,20 +1103,11 @@ def evaluate(
                     context=event_ctx,
                     evaluator=evaluator,
                     evaluator_type=evaluator_type,
-                    error_type=type(exc).__qualname__,
+                    error_type=err_type,
                     metadata=safe_meta,
                 )
                 continue
 
-            produced: list[EvalScore] = []
-            if isinstance(result, EvalScore):
-                produced.append(result)
-            elif isinstance(result, list):
-                produced.extend(s for s in result if isinstance(s, EvalScore))
-            elif isinstance(result, bool):
-                produced.append(EvalScore(name=eval_name, value=float(result), passed=result))
-            elif isinstance(result, (int, float)):
-                produced.append(EvalScore(name=eval_name, value=float(result)))
             produced = [_apply_spec(s, spec) for s in produced]
             for s in produced:
                 if s.value is not None:
