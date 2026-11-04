@@ -273,14 +273,17 @@ class OpenSearchTraceRetriever:
 
         Looks for ``gen_ai.evaluation.result`` events in the evaluation index,
         matched on ``traceId``. Test case and run events in the same index are
-        not evaluation results and are ignored.
+        not evaluation results and are ignored. A missing evaluation index means
+        nothing is evaluated yet and returns an empty set.
+
+        Raises:
+            Exception: Any other search error (connection, auth, mapping) from
+                the OpenSearch client. It is not turned into an empty set, so
+                a failed lookup never looks like "nothing evaluated" and
+                callers do not re-run judges and write duplicate results.
         """
         if not trace_ids:
             return set()
-        return self._find_in_evaluation_index(trace_ids)
-
-    def _find_in_evaluation_index(self, trace_ids: list[str]) -> set[str]:
-        """Trace ids with ``gen_ai.evaluation.result`` events in the evaluation index."""
         body = {
             "size": 0,
             "query": {
@@ -295,16 +298,13 @@ class OpenSearchTraceRetriever:
                 "by_trace": {"terms": {"field": "traceId", "size": len(trace_ids)}},
             },
         }
-        try:
-            resp = self._client.search(
-                index=self._evaluation_index,
-                body=body,
-                ignore_unavailable=True,
-                allow_no_indices=True,
-            )
-        except Exception as exc:  # index or mapping may not exist yet
-            logger.debug("Evaluation index lookup failed: %s", exc)
-            return set()
+        # A missing index (or pattern with no match) returns no hits instead of an error.
+        resp = self._client.search(
+            index=self._evaluation_index,
+            body=body,
+            ignore_unavailable=True,
+            allow_no_indices=True,
+        )
         aggs = resp.get("aggregations", {})
         wanted = set(trace_ids)
         found = {b["key"] for b in aggs.get("by_trace", {}).get("buckets", [])}

@@ -646,7 +646,7 @@ evaluated = retriever.find_evaluated_trace_ids(["trace-id-1", "trace-id-2"])
 |---|---|---|
 | `get_traces(identifier, max_spans=10000)` | `SessionRecord` | Fetch spans by conversation ID or trace ID |
 | `list_root_spans(services=None, since=None, max_results=50)` | `list[SpanRecord]` | List recent root spans, optionally filtered by service |
-| `find_evaluated_trace_ids(trace_ids)` | `set[str]` | Return subset of trace IDs that already have evaluation results (`gen_ai.evaluation.result` events in the evaluation index) |
+| `find_evaluated_trace_ids(trace_ids)` | `set[str]` | Return subset of trace IDs that already have evaluation results (`gen_ai.evaluation.result` events in the evaluation index). A missing index returns an empty set; other search errors raise |
 
 Requires the `[opensearch]` extra: `pip install opensearch-genai-observability-sdk-py[opensearch]`
 

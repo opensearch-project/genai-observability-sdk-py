@@ -43,7 +43,10 @@ def main():
         print("No traces found. Send some first with 01_tracing_basics.py")
         return
 
-    # Skip already-evaluated traces
+    # Skip already-evaluated traces. A missing evaluation index means none yet;
+    # connection, auth or mapping errors raise, so a failed lookup never makes
+    # every trace look unevaluated (which would re-run the judges and write
+    # duplicate results).
     trace_ids = [r.trace_id for r in roots]
     already_evaluated = retriever.find_evaluated_trace_ids(trace_ids)
     to_evaluate = [r for r in roots if r.trace_id not in already_evaluated]

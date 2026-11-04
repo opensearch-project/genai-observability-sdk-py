@@ -466,9 +466,22 @@ class TestFindEvaluatedTraceIds:
         query = retriever._mock_client.search.call_args.kwargs["body"]["query"]["bool"]
         assert {"term": {"eventName": "gen_ai.evaluation.result"}} in query["filter"]
 
-    def test_evaluation_index_failure_returns_empty(self, retriever):
-        retriever._mock_client.search.side_effect = RuntimeError("index_not_found")
-        assert retriever.find_evaluated_trace_ids(["t1", "t3"]) == set()
+    def test_missing_index_is_not_an_error(self, retriever):
+        """ignore_unavailable / allow_no_indices make a missing index return no buckets."""
+        retriever._mock_client.search.return_value = {"hits": {"hits": []}}
+        assert retriever.find_evaluated_trace_ids(["t1"]) == set()
+        call = retriever._mock_client.search.call_args
+        assert call.kwargs["allow_no_indices"] is True
+        assert call.kwargs["ignore_unavailable"] is True
+
+    @pytest.mark.parametrize(
+        "error", [ConnectionError("connection refused"), PermissionError("403"), ValueError("x")]
+    )
+    def test_other_errors_raise(self, retriever, error):
+        """Auth / connection / mapping errors must not look like "nothing evaluated"."""
+        retriever._mock_client.search.side_effect = error
+        with pytest.raises(type(error)):
+            retriever.find_evaluated_trace_ids(["t1", "t3"])
 
     def test_none_evaluated(self, retriever):
         retriever._mock_client.search.return_value = {"aggregations": {}}
