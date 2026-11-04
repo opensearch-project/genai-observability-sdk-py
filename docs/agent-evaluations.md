@@ -385,7 +385,7 @@ genai-evaluation-pipeline:
 
 `otel-logs-pipeline` and `otel-traces-pipeline` are your existing logs and traces pipelines. Save the [index template JSON](#index-template) as the `template_file`.
 
-**Experimental: `index_type: genai-evaluation`.** A Data Prepper draft change adds the index types `genai-evaluation` and `genai-evaluation-plain` to the OpenSearch sink. It is not in a Data Prepper release and its mappings may change. With it, the sink manages the index and the template, so drop `index`, `template_type` and `template_file`:
+**Experimental: `index_type: genai-evaluation-plain`.** The Data Prepper draft [opensearch-project/data-prepper#7243](https://github.com/opensearch-project/data-prepper/pull/7243) adds this index type to the OpenSearch sink. It is not in a Data Prepper release and its mappings may change. The sink manages the template, so drop `index`, `template_type` and `template_file`:
 
 ```yaml
   sink:
@@ -393,10 +393,10 @@ genai-evaluation-pipeline:
         hosts: ["https://opensearch:9200"]
         username: "admin"
         password: "<password>"
-        index_type: genai-evaluation  # experimental
+        index_type: genai-evaluation-plain  # experimental
 ```
 
-`genai-evaluation` writes to the alias `otel-v1-genai-evaluation` (first index `otel-v1-genai-evaluation-000001`) with an ISM rollover policy; `genai-evaluation-plain` writes to one index `otel-v1-genai-evaluation`. Do not combine it with your own template for `otel-v1-genai-evaluation-*`.
+`genai-evaluation-plain` stores attributes under their dotted OpenTelemetry names, has no ISM policy, and writes to one index named `otel-v1-genai-evaluation` with the sink-managed template `otel-v1-genai-evaluation-index-template`. Do not combine it with your own template that matches `otel-v1-genai-evaluation`.
 
 ### b) Amazon OpenSearch Ingestion (OSI)
 

@@ -457,7 +457,7 @@ score("tool_selection", 1.0, label="pass")
 
 If you configure OTel yourself instead of calling `register()`, install a global `LoggerProvider` with an OTLP log exporter, otherwise the events are dropped.
 
-**Instrumentation scope.** The instrumentation scope is the library that emitted the event, so every SDK event has scope `opensearch-genai-observability-sdk-py` with the SDK version, and no scope attributes. The evaluator is data about the result and goes in `opensearch.gen_ai.evaluation.evaluator.*`. Data Prepper and OpenSearch Dashboards derive the grade source (`attributes.derived.evaluation.source = opensearch-sdk`) from the scope name.
+**Instrumentation scope.** The instrumentation scope is the library that emitted the event, so every SDK event has scope `opensearch-genai-observability-sdk-py` with the SDK version, and no scope attributes. The evaluator is data about the result and goes in `opensearch.gen_ai.evaluation.evaluator.*`.
 
 Trace-level scores never derive a span id from the trace id.
 
