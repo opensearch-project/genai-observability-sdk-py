@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from opensearch_genai_observability_sdk_py import EvalScore, evaluate
+from opensearch_genai_observability_sdk_py import EvalScore, evaluate, scorer
 
 _ACTION_DIR = Path(__file__).resolve().parent.parent / "examples" / "github-action"
 
@@ -49,10 +49,19 @@ def _result():
 
 class TestParsing:
     def test_thresholds(self):
-        assert rs.parse_thresholds("a=0.8, b=0.5\nc=1") == {"a": 0.8, "b": 0.5, "c": 1.0}
+        assert rs.parse_thresholds("a=0.8, b>=0.5\nc <= 12") == {
+            "a": rs.Gate(">=", 0.8),
+            "b": rs.Gate(">=", 0.5),
+            "c": rs.Gate("<=", 12.0),
+        }
         assert rs.parse_thresholds("") == {}
 
-    @pytest.mark.parametrize("bad", ["a", "=0.5", "a=x"])
+    def test_gate(self):
+        assert rs.Gate(">=", 0.8).ok(0.8) and not rs.Gate(">=", 0.8).ok(0.7)
+        assert rs.Gate("<=", 12).ok(9) and not rs.Gate("<=", 12).ok(13)
+        assert rs.Gate("<=", 12).describe() == "max 12"
+
+    @pytest.mark.parametrize("bad", ["a", "=0.5", "a=x", "a<0.5"])
     def test_bad_thresholds(self, bad):
         with pytest.raises(ValueError):
             rs.parse_thresholds(bad)
@@ -84,9 +93,60 @@ class TestReport:
         assert stats["exact"].mean == 0.5
         assert (stats["exact"].passed, stats["exact"].failed) == (1, 1)
         assert (stats["half"].passed, stats["half"].failed) == (2, 0)
-        assert rs.check_regressions(stats, {"half": 0.5}) == []
-        problems = rs.check_regressions(stats, {"exact": 0.9, "missing": 0.1})
+        assert rs.check_regressions(stats, {"half": rs.Gate(">=", 0.5)}) == []
+        problems = rs.check_regressions(
+            stats, {"exact": rs.Gate(">=", 0.9), "missing": rs.Gate(">=", 0.1)}
+        )
         assert len(problems) == 2
+
+    def test_counts_use_verdicts(self):
+        """A minimize scorer and a label verdict are counted as the stored label says."""
+
+        @scorer(name="latency_s", direction="minimize", threshold=12)
+        def latency(i, o, e):
+            return 9.0 if i == "fast" else 20.0
+
+        def judge(i, o, e):
+            # Verdict says fail although the value is above --pass-threshold.
+            return EvalScore(name="judge", value=0.9, label="fail")
+
+        result = evaluate(
+            name="gha-verdicts",
+            task=lambda x: x,
+            data=[{"input": "fast"}, {"input": "slow"}],
+            scores=[latency, judge],
+        )
+        stats = rs.evaluator_stats([result], pass_threshold=0.5)
+        assert (stats["latency_s"].passed, stats["latency_s"].failed) == (1, 1)
+        assert (stats["judge"].passed, stats["judge"].failed) == (0, 2)
+        assert stats["latency_s"].mean == 14.5
+        # Gate a minimize scorer from above.
+        assert rs.check_regressions(stats, {"latency_s": rs.Gate("<=", 15)}) == []
+        problems = rs.check_regressions(stats, {"latency_s": rs.Gate("<=", 10)})
+        assert problems == ["`latency_s`: mean 14.500 is above 10"]
+
+    def test_verdict_only_scores(self):
+        result = evaluate(
+            name="gha-label-only",
+            task=lambda x: x,
+            data=[{"input": "a"}],
+            scores=[lambda i, o, e: EvalScore(name="tool_ok", value=None, label="pass")],
+        )
+        stats = rs.evaluator_stats([result], pass_threshold=0.5)
+        assert stats["tool_ok"].mean is None
+        assert (stats["tool_ok"].passed, stats["tool_ok"].count) == (1, 1)
+        assert rs.check_regressions(stats, {"tool_ok": rs.Gate(">=", 0.5)}) == [
+            "`tool_ok`: no scores recorded (expected mean >= 0.5)"
+        ]
+        text = rs.render_summary(
+            [result],
+            stats,
+            dashboards_url="",
+            pass_threshold=0.5,
+            thresholds={},
+            problems=[],
+        )
+        assert "| `tool_ok` | - | 1 | 0 | 1 |  |" in text
 
     def test_summary_markdown(self):
         result = _result()
@@ -96,8 +156,8 @@ class TestReport:
             stats,
             dashboards_url="http://osd:5601",
             pass_threshold=0.5,
-            thresholds={"exact": 0.9},
-            problems=rs.check_regressions(stats, {"exact": 0.9}),
+            thresholds={"exact": rs.Gate(">=", 0.9)},
+            problems=rs.check_regressions(stats, {"exact": rs.Gate(">=", 0.9)}),
         )
         assert f"#/runs/{result.summary.run_id}" in text
         assert "| `exact` | 0.500 | 1 | 1 | 2 | FAIL (min 0.9) |" in text

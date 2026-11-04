@@ -64,8 +64,8 @@ Copy [`example-workflow.yml`](example-workflow.yml) to `.github/workflows/agent-
 | `aws-service` | | `osis` | SigV4 service: `osis` or `es` |
 | `service-name` | | `agent-evals-ci` | `service.name` resource attribute |
 | `dashboards-url` | | | OpenSearch Dashboards base URL for the run link |
-| `fail-on-regression` | | | `evaluator=min_mean` pairs, comma or newline separated |
-| `pass-threshold` | | `0.5` | A score counts as pass in the table when `value >= threshold` |
+| `fail-on-regression` | | | Gates on evaluator means: `evaluator=0.8` or `evaluator>=0.8` (at least), `evaluator<=12` (at most, for `direction="minimize"` scorers), comma or newline separated |
+| `pass-threshold` | | `0.5` | Fallback for scores without a verdict: counts as pass in the table when `value >= threshold`. Scores with a verdict use it |
 | `working-directory` | | `.` | Directory to run the suite from (added to `sys.path`) |
 | `install` | | `opensearch-genai-observability-sdk-py[aws]` | pip requirement(s) installed first |
 
@@ -76,7 +76,7 @@ Copy [`example-workflow.yml`](example-workflow.yml) to `.github/workflows/agent-
 | `run-id` | `test.suite.run.id` of the (first) run |
 | `run-url` | Link to the run in OpenSearch Dashboards |
 
-The job fails (exit code 1) when a `fail-on-regression` evaluator mean is below its minimum or the evaluator produced no scores. Exit code 2 means a configuration error.
+The table counts pass / fail from each score's verdict (`case.verdicts`: a `pass` / `fail` label, `passed`, or the `@scorer` threshold and direction), the same verdict stored as `gen_ai.evaluation.score.label`, so it matches OpenSearch Dashboards. The job fails (exit code 1) when a `fail-on-regression` evaluator mean is outside its gate or the evaluator produced no scores. Exit code 2 means a configuration error.
 
 ### CI/CD attributes
 

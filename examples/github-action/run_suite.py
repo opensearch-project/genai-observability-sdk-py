@@ -17,9 +17,13 @@ returns the ``BenchmarkResult`` (or a list of them). This script:
 2. runs the suite and flushes traces and evaluation events,
 3. prints a summary and appends it to ``$GITHUB_STEP_SUMMARY``: a link to the
    run in OpenSearch Dashboards plus a table of per-evaluator means and
-   pass/fail counts,
+   pass/fail counts (from each score's verdict, the same one stored in
+   ``gen_ai.evaluation.score.label``; ``--pass-threshold`` only for scores
+   without a verdict),
 4. writes ``run-id`` / ``run-url`` to ``$GITHUB_OUTPUT``,
-5. exits 1 if a ``--fail-on-regression`` threshold is not met.
+5. exits 1 if a ``--fail-on-regression`` gate is not met (``name=0.8`` or
+   ``name>=0.8``: mean at least; ``name<=12``: mean at most, for
+   ``direction="minimize"`` scorers such as latency).
 
 Every option can also be set with an environment variable (used by the
 composite action), so the script runs the same way locally::
@@ -38,6 +42,7 @@ import argparse
 import importlib
 import importlib.util
 import os
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -53,10 +58,24 @@ EXIT_USAGE = 2
 @dataclass
 class EvaluatorStats:
     name: str
-    mean: float
+    mean: float | None  # None when the evaluator has verdicts but no numeric values
     count: int
     passed: int
     failed: int
+
+
+@dataclass(frozen=True)
+class Gate:
+    """A ``--fail-on-regression`` gate on an evaluator mean."""
+
+    op: str  # ">=" (mean at least) or "<=" (mean at most)
+    value: float
+
+    def ok(self, mean: float) -> bool:
+        return mean <= self.value if self.op == "<=" else mean >= self.value
+
+    def describe(self) -> str:
+        return f"{'max' if self.op == '<=' else 'min'} {self.value:g}"
 
 
 # ---------------------------------------------------------------------------
@@ -83,13 +102,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--fail-on-regression",
         default=_env("EVAL_FAIL_ON_REGRESSION"),
-        help="evaluator=min_mean pairs, comma or newline separated",
+        help="evaluator=min, evaluator>=min or evaluator<=max (mean), comma or newline separated",
     )
     p.add_argument(
         "--pass-threshold",
         type=float,
         default=float(_env("EVAL_PASS_THRESHOLD", "0.5")),
-        help="a score counts as pass when value >= this (default 0.5)",
+        help="for scores without a verdict: pass when value >= this (default 0.5)",
     )
     p.add_argument("--working-directory", default=_env("EVAL_WORKING_DIRECTORY", "."))
     p.add_argument("--summary-file", default=_env("GITHUB_STEP_SUMMARY"))
@@ -97,17 +116,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def parse_thresholds(spec: str) -> dict[str, float]:
-    """Parse ``"accuracy=0.8, relevance=0.7"`` (commas or newlines)."""
-    thresholds: dict[str, float] = {}
+_GATE = re.compile(r"^(?P<name>[^<>=\s]+)\s*(?P<op><=|>=|=)\s*(?P<value>\S+)$")
+
+
+def parse_thresholds(spec: str) -> dict[str, Gate]:
+    """Parse ``"accuracy=0.8, latency_s<=12"`` (commas or newlines).
+
+    ``name=0.8`` and ``name>=0.8`` gate the mean from below; ``name<=12``
+    from above (for ``direction="minimize"`` scorers).
+    """
+    thresholds: dict[str, Gate] = {}
     for raw in spec.replace("\n", ",").split(","):
         item = raw.strip()
         if not item:
             continue
-        name, sep, value = item.partition("=")
-        if not sep or not name.strip():
-            raise ValueError(f"Invalid fail-on-regression entry {item!r}; use evaluator=0.8")
-        thresholds[name.strip()] = float(value)
+        match = _GATE.match(item)
+        if match is None:
+            raise ValueError(
+                f"Invalid fail-on-regression entry {item!r}; use evaluator=0.8, "
+                "evaluator>=0.8 or evaluator<=12"
+            )
+        try:
+            value = float(match["value"])
+        except ValueError:
+            raise ValueError(f"Invalid number in fail-on-regression entry {item!r}") from None
+        op = "<=" if match["op"] == "<=" else ">="
+        thresholds[match["name"]] = Gate(op, value)
     return thresholds
 
 
@@ -165,20 +199,38 @@ def run_url(dashboards_url: str, run_id: str) -> str:
 
 
 def evaluator_stats(results: list[Any], pass_threshold: float) -> dict[str, EvaluatorStats]:
+    """Per-evaluator mean and pass / fail counts.
+
+    Pass / fail comes from ``case.verdicts``: the verdict the SDK resolved
+    (``pass`` / ``fail`` label, ``passed``, or ``threshold`` + ``direction`` from
+    the score or its ``@scorer``), which is also the stored label Dashboards
+    shows. Only a score without a verdict falls back to
+    ``value >= pass_threshold``.
+    """
     values: dict[str, list[float]] = {}
+    passed: dict[str, int] = {}
+    failed: dict[str, int] = {}
     for result in results:
         for case in result.cases:
-            for name, value in case.scores.items():
-                values.setdefault(name, []).append(float(value))
+            verdicts = case.verdicts or {}
+            for name in {**case.scores, **verdicts}:
+                value = case.scores.get(name)
+                if value is not None:
+                    values.setdefault(name, []).append(float(value))
+                verdict = verdicts.get(name)
+                if verdict is None and value is not None:
+                    verdict = "pass" if float(value) >= pass_threshold else "fail"
+                passed[name] = passed.get(name, 0) + (verdict == "pass")
+                failed[name] = failed.get(name, 0) + (verdict == "fail")
     stats: dict[str, EvaluatorStats] = {}
-    for name, vals in values.items():
-        passed = sum(1 for v in vals if v >= pass_threshold)
+    for name in passed:
+        vals = values.get(name, [])
         stats[name] = EvaluatorStats(
             name=name,
-            mean=sum(vals) / len(vals),
-            count=len(vals),
-            passed=passed,
-            failed=len(vals) - passed,
+            mean=sum(vals) / len(vals) if vals else None,
+            count=passed[name] + failed[name],
+            passed=passed[name],
+            failed=failed[name],
         )
     return stats
 
@@ -196,16 +248,17 @@ def case_counts(result: Any) -> tuple[int, int, int]:
     return passed, failed, errors
 
 
-def check_regressions(
-    stats: dict[str, EvaluatorStats], thresholds: dict[str, float]
-) -> list[str]:
+def check_regressions(stats: dict[str, EvaluatorStats], thresholds: dict[str, Gate]) -> list[str]:
     problems: list[str] = []
-    for name, minimum in thresholds.items():
+    for name, gate in thresholds.items():
         s = stats.get(name)
-        if s is None:
-            problems.append(f"`{name}`: no scores recorded (expected mean >= {minimum:g})")
-        elif s.mean < minimum:
-            problems.append(f"`{name}`: mean {s.mean:.3f} is below {minimum:g}")
+        if s is None or s.mean is None:
+            problems.append(
+                f"`{name}`: no scores recorded (expected mean {gate.op} {gate.value:g})"
+            )
+        elif not gate.ok(s.mean):
+            side = "above" if gate.op == "<=" else "below"
+            problems.append(f"`{name}`: mean {s.mean:.3f} is {side} {gate.value:g}")
     return problems
 
 
@@ -215,7 +268,7 @@ def render_summary(
     *,
     dashboards_url: str,
     pass_threshold: float,
-    thresholds: dict[str, float],
+    thresholds: dict[str, Gate],
     problems: list[str],
 ) -> str:
     lines = ["## Agent evaluation results", ""]
@@ -232,20 +285,24 @@ def render_summary(
         )
     lines += [
         "",
-        f"| Evaluator | Mean | Pass (>= {pass_threshold:g}) | Fail | Scores | Threshold |",
+        "| Evaluator | Mean | Pass | Fail | Scores | Threshold |",
         "|---|---:|---:|---:|---:|---|",
     ]
     for name in sorted(stats):
         st = stats[name]
         gate = ""
         if name in thresholds:
-            ok = st.mean >= thresholds[name]
-            gate = f"{'pass' if ok else 'FAIL'} (min {thresholds[name]:g})"
-        lines.append(
-            f"| `{name}` | {st.mean:.3f} | {st.passed} | {st.failed} | {st.count} | {gate} |"
-        )
+            ok = st.mean is not None and thresholds[name].ok(st.mean)
+            gate = f"{'pass' if ok else 'FAIL'} ({thresholds[name].describe()})"
+        mean = "-" if st.mean is None else f"{st.mean:.3f}"
+        lines.append(f"| `{name}` | {mean} | {st.passed} | {st.failed} | {st.count} | {gate} |")
     if not stats:
         lines.append("| (no scores) | | | | | |")
+    lines += [
+        "",
+        "Pass / Fail use each score's verdict (the stored label); scores without one "
+        f"count as pass when value >= {pass_threshold:g}.",
+    ]
     if problems:
         lines += ["", "**Regression check failed:**", ""] + [f"- {p}" for p in problems]
     elif thresholds:

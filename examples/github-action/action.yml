@@ -43,11 +43,11 @@ inputs:
     required: false
     default: ""
   fail-on-regression:
-    description: "Fail the job if an evaluator mean is below a minimum: evaluator=0.8, comma or newline separated"
+    description: "Fail the job on an evaluator mean: evaluator=0.8 or evaluator>=0.8 (at least), evaluator<=12 (at most, for minimize scorers), comma or newline separated"
     required: false
     default: ""
   pass-threshold:
-    description: "A score counts as pass in the summary table when value >= this"
+    description: "For scores without a verdict only: counts as pass in the summary table when value >= this. Scores with a verdict (label, passed, @scorer threshold + direction) use it."
     required: false
     default: "0.5"
   working-directory:
