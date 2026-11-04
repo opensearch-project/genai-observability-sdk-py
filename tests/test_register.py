@@ -438,6 +438,28 @@ class TestCreateLogExporter:
         assert isinstance(exp, OTLPLogExporter)
         exp.shutdown()
 
+    def test_grpc_headers_lowercased(self):
+        """gRPC rejects uppercase metadata keys ("Invalid metadata")."""
+        assert _register_mod._grpc_headers({"Authorization": "Basic x", "X-Tenant": "t"}) == {
+            "authorization": "Basic x",
+            "x-tenant": "t",
+        }
+        assert _register_mod._grpc_headers(None) is None
+        assert _register_mod._grpc_headers({}) is None
+
+    def test_grpc_exporters_get_lowercase_headers(self):
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+
+        target = _register_mod._SignalTarget("grpc://localhost:4317", "grpc", True)
+        with patch.object(OTLPLogExporter, "__init__", return_value=None) as init:
+            _register_mod._create_log_exporter(target, {"Authorization": "x"})
+        assert init.call_args.kwargs["headers"] == {"authorization": "x"}
+        with patch(
+            "opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter"
+        ) as span_cls:
+            _register_mod._create_grpc_exporter("grpc://localhost:4317", {"Authorization": "x"})
+        assert span_cls.call_args.kwargs["headers"] == {"authorization": "x"}
+
     def test_grpc_target(self):
         assert _register_mod._grpc_target("grpc://h:4317") == ("h:4317", True)
         assert _register_mod._grpc_target("grpcs://h:4317") == ("h:4317", False)

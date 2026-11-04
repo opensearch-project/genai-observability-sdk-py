@@ -207,7 +207,9 @@ def register(
             endpoint, protocol, headers and ``sigv4`` do not apply to it.
         set_global: Set as the global ``TracerProvider`` (default: ``True``).
         headers: Additional headers for the OTLP exporters register() builds
-            (both signals).
+            (both signals). Over gRPC they are sent as metadata with the names
+            lowercased. When omitted, the exporters read
+            ``OTEL_EXPORTER_OTLP_HEADERS``.
         sigv4: Sign the exporters register() builds with AWS SigV4.
             ``True`` uses service ``"osis"`` and the botocore region; a dict
             may set ``"service"`` (``"osis"`` or ``"es"``) and ``"region"``.
@@ -488,6 +490,13 @@ def _grpc_target(url: str) -> tuple[str, bool]:
     return parsed.netloc or url, scheme not in ("grpcs", "https")
 
 
+def _grpc_headers(headers: dict | None) -> dict | None:
+    """Headers as gRPC metadata: names lowercased (gRPC rejects uppercase keys)."""
+    if not headers:
+        return None
+    return {str(k).lower(): v for k, v in headers.items()}
+
+
 def _create_log_exporter(
     target: _SignalTarget, headers: dict | None, sigv4: dict[str, str] | None = None
 ) -> Any:
@@ -504,7 +513,9 @@ def _create_log_exporter(
         )
 
         grpc_endpoint, insecure = _grpc_target(target.url)
-        return GRPCLogExporter(endpoint=grpc_endpoint, insecure=insecure, headers=headers)
+        return GRPCLogExporter(
+            endpoint=grpc_endpoint, insecure=insecure, headers=_grpc_headers(headers)
+        )
 
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
@@ -610,7 +621,7 @@ def _create_grpc_exporter(
     exporter: SpanExporter = GRPCSpanExporter(
         endpoint=grpc_endpoint,
         insecure=insecure,
-        headers=headers,
+        headers=_grpc_headers(headers),
     )
     return exporter
 

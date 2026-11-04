@@ -194,7 +194,7 @@ An unknown agent is left out, never invented. `evaluate()` also stamps the agent
 
 `http/json` is not supported. Each signal's protocol is checked against that signal's own URL; a `ValueError` is raised if it contradicts a `grpc://` or `grpcs://` scheme.
 
-Nothing is derived from one signal's URL to the other's: setting only `traces_endpoint=` sends logs to the base. Headers (`headers=`) and SigV4 (`sigv4=`) apply to both exporters `register()` builds.
+Nothing is derived from one signal's URL to the other's: setting only `traces_endpoint=` sends logs to the base. Headers (`headers=`) and SigV4 (`sigv4=`) apply to both exporters `register()` builds. Over gRPC, headers are sent as gRPC metadata with lowercase names (gRPC rejects uppercase keys). Without `headers=`, the exporters read the standard `OTEL_EXPORTER_OTLP_HEADERS`.
 
 **OTel Collector or Data Prepper** (one base serves both signals):
 
@@ -233,7 +233,7 @@ export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://logs-pipe-def.us-east-1.osis.ama
 | `traces_endpoint` | resolved | Full OTLP traces URL |
 | `logs_endpoint` | resolved | Full OTLP logs URL, for example the OSIS logs pipeline |
 | `protocol` | resolved | `"http"` or `"grpc"` for both signals |
-| `headers` | `None` | Extra headers for both exporters |
+| `headers` | `None` | Extra headers for both exporters (lowercased gRPC metadata over gRPC); default `OTEL_EXPORTER_OTLP_HEADERS` |
 | `sigv4` | `None` | `True` or `{"service": ..., "region": ...}`: sign both exporters with AWS SigV4 |
 | `enable_logs` | `True` | Set up the logs pipeline for evaluation events |
 | `exporter` | `None` | Custom traces `SpanExporter`, used as-is |
