@@ -261,33 +261,16 @@ class TestAWSSigV4OTLPExporterInit:
 class TestAWSSigV4OTLPLogExporter:
     _mock_botocore = TestAWSSigV4OTLPExporterInit._mock_botocore
 
-    def test_create_log_exporter_derives_logs_path(self):
+    def test_service_and_region(self):
         with self._mock_botocore():
-            span_exporter = AWSSigV4OTLPExporter(endpoint=ENDPOINT, service="osis")
-            log_exporter = span_exporter.create_log_exporter()
-        assert isinstance(log_exporter, AWSSigV4OTLPLogExporter)
-        assert log_exporter._endpoint == "https://pipeline.us-east-1.osis.amazonaws.com/v1/logs"
-        assert log_exporter.signing_session._service == "osis"
-        assert log_exporter.signing_session._region == REGION
-        # Separate session object per exporter
-        assert log_exporter.signing_session is not span_exporter.signing_session
-
-    def test_create_log_exporter_explicit_endpoint(self):
-        with self._mock_botocore():
-            span_exporter = AWSSigV4OTLPExporter(endpoint=ENDPOINT, region="eu-west-1")
-            log_exporter = span_exporter.create_log_exporter(
-                endpoint="https://logs-pipeline.eu-west-1.osis.amazonaws.com/v1/logs"
+            log_exporter = AWSSigV4OTLPLogExporter(
+                endpoint="https://logs-pipeline.eu-west-1.osis.amazonaws.com/v1/logs",
+                service="es",
+                region="eu-west-1",
             )
         assert log_exporter._endpoint.startswith("https://logs-pipeline.")
+        assert log_exporter.signing_session._service == "es"
         assert log_exporter.signing_session._region == "eu-west-1"
-
-    def test_create_log_exporter_requires_endpoint_when_not_derivable(self):
-        with self._mock_botocore():
-            span_exporter = AWSSigV4OTLPExporter(
-                endpoint="https://pipeline.us-east-1.osis.amazonaws.com/ingest", region=REGION
-            )
-            with pytest.raises(ValueError, match="Cannot derive an OTLP logs endpoint"):
-                span_exporter.create_log_exporter()
 
     def test_raises_if_no_credentials(self):
         with self._mock_botocore(credentials=None):

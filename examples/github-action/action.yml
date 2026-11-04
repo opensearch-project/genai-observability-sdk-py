@@ -14,16 +14,20 @@ inputs:
   suite:
     description: "Suite callable: module:function or path/to/file.py:function. It must return the BenchmarkResult of evaluate()."
     required: true
+  endpoint:
+    description: "OTLP base URL for traces and logs, for example http://collector:4318 (/v1/traces and /v1/logs are appended)"
+    required: false
+    default: ""
   traces-endpoint:
-    description: "OTLP traces URL, for example https://<traces-pipeline>.<region>.osis.amazonaws.com/v1/traces"
+    description: "Full OTLP traces URL (overrides endpoint), for example https://<traces-pipeline>.<region>.osis.amazonaws.com/v1/traces"
     required: false
     default: ""
   logs-endpoint:
-    description: "OTLP logs URL for evaluation events, for example https://<logs-pipeline>.<region>.osis.amazonaws.com/v1/logs"
+    description: "Full OTLP logs URL for evaluation events (overrides endpoint), for example https://<logs-pipeline>.<region>.osis.amazonaws.com/v1/logs"
     required: false
     default: ""
   aws-region:
-    description: "AWS region. When set, requests are signed with SigV4 (credentials from the environment, for example aws-actions/configure-aws-credentials)."
+    description: "AWS region. When set, traces and logs requests are signed with SigV4 (credentials from the environment, for example aws-actions/configure-aws-credentials)."
     required: false
     default: ""
   aws-service:
@@ -80,6 +84,7 @@ runs:
       # Inputs are passed as environment variables, never interpolated into the script.
       env:
         EVAL_SUITE: ${{ inputs.suite }}
+        EVAL_ENDPOINT: ${{ inputs.endpoint }}
         EVAL_TRACES_ENDPOINT: ${{ inputs.traces-endpoint }}
         EVAL_LOGS_ENDPOINT: ${{ inputs.logs-endpoint }}
         EVAL_AWS_REGION: ${{ inputs.aws-region }}

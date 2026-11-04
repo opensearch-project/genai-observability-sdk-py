@@ -42,7 +42,7 @@ from opensearch_genai_observability_sdk_py import Op, enrich, observe, register
 
 # --- Setup: one line replaces ~30 lines of manual OTel config ---
 register(
-    endpoint="http://localhost:4318/v1/traces",
+    endpoint="http://localhost:4318",
     service_name="travel-planner",
 )
 

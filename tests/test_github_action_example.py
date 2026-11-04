@@ -113,6 +113,36 @@ class TestReport:
         assert rs.case_counts(bad) == (0, 0, 1)
 
 
+class TestSetupTelemetry:
+    def _args(self, *argv):
+        return rs.parse_args(["--suite", "x:y", *argv])
+
+    def test_base_endpoint(self):
+        with patch("opensearch_genai_observability_sdk_py.register") as register:
+            rs.setup_telemetry(self._args("--endpoint", "http://c:4318"))
+        kwargs = register.call_args.kwargs
+        assert kwargs["endpoint"] == "http://c:4318"
+        assert kwargs["traces_endpoint"] is None and kwargs["logs_endpoint"] is None
+        assert "sigv4" not in kwargs
+
+    def test_osis_sigv4(self):
+        with patch("opensearch_genai_observability_sdk_py.register") as register:
+            rs.setup_telemetry(
+                self._args(
+                    "--traces-endpoint",
+                    "https://t/v1/traces",
+                    "--logs-endpoint",
+                    "https://l/v1/logs",
+                    "--aws-region",
+                    "us-east-1",
+                )
+            )
+        kwargs = register.call_args.kwargs
+        assert kwargs["traces_endpoint"] == "https://t/v1/traces"
+        assert kwargs["logs_endpoint"] == "https://l/v1/logs"
+        assert kwargs["sigv4"] == {"service": "osis", "region": "us-east-1"}
+
+
 class TestMain:
     def _run(self, tmp_path, *extra):
         summary = tmp_path / "summary.md"

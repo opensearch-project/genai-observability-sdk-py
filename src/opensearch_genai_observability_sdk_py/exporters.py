@@ -12,8 +12,9 @@
 Provides drop-in replacements for OTLPSpanExporter and OTLPLogExporter that
 sign requests using AWS Signature Version 4 for AWS-hosted OpenSearch
 and Data Prepper endpoints. The log exporter carries the evaluation events
-(``gen_ai.evaluation.result``). AWS OSIS
-needs a separate logs pipeline for them.
+(``gen_ai.evaluation.result``). AWS OSIS needs a separate logs pipeline for
+them. ``register(sigv4=...)`` builds both exporters from the resolved
+traces and logs URLs.
 
 Design note
 -----------
@@ -43,8 +44,6 @@ from typing import Any
 import requests  # type: ignore[import-untyped]
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
-from opensearch_genai_observability_sdk_py._internal import derive_logs_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -146,43 +145,13 @@ class AWSSigV4OTLPExporter(OTLPSpanExporter):
             self.region,
         )
 
-    @property
-    def endpoint(self) -> str:
-        """The resolved OTLP traces endpoint this exporter sends to."""
-        return str(self._endpoint)
-
-    def create_log_exporter(self, endpoint: str | None = None) -> AWSSigV4OTLPLogExporter:
-        """Create a SigV4 log exporter with the same service and region.
-
-        AWS OSIS has one pipeline per signal, so pass the logs pipeline URL.
-
-        Args:
-            endpoint: OTLP logs URL (the OSIS logs pipeline). When omitted,
-                derived from this exporter's endpoint only if it ends with
-                ``/v1/traces`` (same base, ``/v1/logs``).
-
-        Raises:
-            ValueError: If ``endpoint`` is omitted and cannot be derived.
-        """
-        resolved = endpoint or derive_logs_endpoint(self.endpoint)
-        if not resolved:
-            raise ValueError(
-                f"Cannot derive an OTLP logs endpoint from '{self.endpoint}' (no /v1/traces "
-                "suffix). Pass endpoint= with the logs pipeline URL."
-            )
-        return AWSSigV4OTLPLogExporter(
-            endpoint=resolved,
-            service=self.service,
-            region=self.region,
-        )
-
 
 class AWSSigV4OTLPLogExporter(OTLPLogExporter):
     """OTLP HTTP log exporter that signs requests with AWS SigV4.
 
     Same credential and region resolution as ``AWSSigV4OTLPExporter``.
-    ``register(exporter=AWSSigV4OTLPExporter(...))`` creates one
-    automatically; build it directly to point logs at a different pipeline.
+    ``register(sigv4=...)`` creates one for the resolved logs endpoint; build
+    it directly and pass it as ``register(log_exporter=...)`` for full control.
 
     Args:
         endpoint: The OTLP logs endpoint URL (``.../v1/logs``).

@@ -53,7 +53,7 @@ pip install opensearch-genai-observability-sdk-py[all]
 from opensearch_genai_observability_sdk_py import register, observe, Op, enrich, score
 
 # 1. Initialize tracing (one line)
-register(endpoint="http://localhost:21890/opentelemetry/v1/traces")
+register(endpoint="http://localhost:21890/opentelemetry")
 
 
 # 2. Trace your functions
@@ -143,7 +143,7 @@ Configures the OTel tracing pipeline, plus an OTLP logs pipeline for the evaluat
 
 ```python
 register(
-    endpoint="http://my-collector:4318/v1/traces",  # or use env vars
+    endpoint="http://my-collector:4318",  # base URL for traces and logs, or use env vars
     service_name="my-app",
     batch=True,  # BatchSpanProcessor (True) or Simple (False)
     auto_instrument=True,  # discover installed instrumentor packages
@@ -164,19 +164,25 @@ Per field, the SDK uses the first of:
 
 An unknown agent is left out, never invented. `evaluate()` also stamps the agent on the agent root spans where the span names none itself, so traces can be filtered by agent version.
 
-**Endpoint resolution (priority order):**
+#### Endpoints: traces and evaluation logs
 
-1. `endpoint=` parameter — full URL, used as-is
-2. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` env var — full URL, used as-is
-3. `OTEL_EXPORTER_OTLP_ENDPOINT` env var — base URL, `/v1/traces` appended automatically
-4. `http://localhost:21890/opentelemetry/v1/traces` — Data Prepper default
+`register()` creates a `TracerProvider` for traces and a `LoggerProvider` (with a `BatchLogRecordProcessor`, or `SimpleLogRecordProcessor` with `batch=False`) for the evaluation events (`gen_ai.evaluation.result`). Endpoints follow the [OTel exporter spec](https://opentelemetry.io/docs/specs/otel/protocol/exporter/), one rule per signal:
 
-**Protocol resolution (priority order):**
+- `endpoint=` is the base URL for all signals, same as `OTEL_EXPORTER_OTLP_ENDPOINT`.
+- `traces_endpoint=` / `logs_endpoint=` are full-URL overrides for one signal, same as `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`.
 
-1. `protocol=` parameter — `"http"` or `"grpc"`
-2. `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` env var
-3. `OTEL_EXPORTER_OTLP_PROTOCOL` env var
-4. Inferred from URL scheme
+**Endpoint per signal (priority order):**
+
+1. `traces_endpoint=` / `logs_endpoint=`: full URL, used as-is
+2. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: full URL, used as-is
+3. The base (`endpoint=`, else `OTEL_EXPORTER_OTLP_ENDPOINT`, else the Data Prepper default `http://localhost:21890/opentelemetry`) with `/v1/traces` or `/v1/logs` appended over HTTP. Over gRPC the base is used as-is for both signals (gRPC has no per-signal path).
+
+**Protocol per signal (priority order):**
+
+1. `protocol=` parameter: `"http"` or `"grpc"`
+2. `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` / `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL`
+3. `OTEL_EXPORTER_OTLP_PROTOCOL`
+4. Inferred from that signal's URL scheme
 
 **URL schemes:**
 
@@ -186,63 +192,28 @@ An unknown agent is left out, never invented. `evaluate()` also stamps the agent
 | `grpc://` | gRPC (insecure) |
 | `grpcs://` | gRPC (TLS) |
 
-`http/json` is not supported. A `ValueError` is raised if the protocol contradicts a `grpc://` or `grpcs://` URL scheme.
+`http/json` is not supported. Each signal's protocol is checked against that signal's own URL; a `ValueError` is raised if it contradicts a `grpc://` or `grpcs://` scheme.
 
-**Authenticated endpoints (e.g. AWS OSIS):** pass a custom exporter via `exporter=`:
+Nothing is derived from one signal's URL to the other's: setting only `traces_endpoint=` sends logs to the base. Headers (`headers=`) and SigV4 (`sigv4=`) apply to both exporters `register()` builds.
+
+**OTel Collector or Data Prepper** (one base serves both signals):
 
 ```python
-from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
-
-register(
-    exporter=AWSSigV4OTLPExporter(
-        endpoint="https://pipeline.us-east-1.osis.amazonaws.com/v1/traces",
-        service="osis",
-    )
-)
+register(endpoint="http://localhost:4318")  # /v1/traces and /v1/logs
+register(endpoint="grpc://localhost:4317")  # gRPC: same host:port for both
 ```
 
-`AWSSigV4OTLPExporter` is HTTP-only. AWS OSIS does not expose a gRPC endpoint.
-
-#### Endpoints: traces and evaluation logs
-
-Traces and evaluation logs are separate OTLP endpoints. `register()` creates a `TracerProvider` for traces and a `LoggerProvider` (with a `BatchLogRecordProcessor`, or `SimpleLogRecordProcessor` with `batch=False`) for the evaluation events (`gen_ai.evaluation.result`). The log exporter uses the same protocol, headers and SigV4 settings as traces. An OTel Collector or Data Prepper serves both paths on one host; AWS OpenSearch Ingestion (OSIS) has one pipeline per signal, so you need a traces pipeline and a logs pipeline.
-
-**Logs endpoint resolution (priority order):**
-
-1. `logs_endpoint=` parameter: full URL, used as-is
-2. `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` env var: full URL, used as-is
-3. An explicit traces endpoint (`endpoint=`, or the URL of `exporter=AWSSigV4OTLPExporter(...)`): if its path ends with `/v1/traces`, the same base with `/v1/logs`. This is the only derivation. For any other path the SDK logs a warning and skips logs (traces still work).
-4. `OTEL_EXPORTER_OTLP_ENDPOINT` env var: base URL, `/v1/logs` appended (per the OTel spec)
-5. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` env var: same rule as 3
-6. `http://localhost:21890/opentelemetry/v1/logs`: Data Prepper default
-
-With gRPC traces only 1 and 2 apply; without them the SDK warns and skips logs. A custom `exporter=` other than `AWSSigV4OTLPExporter` also needs `log_exporter=`, else logs are skipped with a warning. The logs protocol honors `protocol=`, then `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` / `OTEL_EXPORTER_OTLP_PROTOCOL`, then the URL scheme.
-
-**Local OTel Collector** (one host, both paths):
+**AWS OSIS** (one pipeline per signal, SigV4):
 
 ```python
 register(
-    endpoint="http://localhost:4318/v1/traces",
-    logs_endpoint="http://localhost:4318/v1/logs",  # optional here: derived from /v1/traces
-    service_name="my-agent",
-)
-```
-
-**AWS OSIS** (two pipeline URLs, SigV4):
-
-```python
-from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
-
-register(
-    exporter=AWSSigV4OTLPExporter(
-        endpoint="https://traces-pipe-abc.us-east-1.osis.amazonaws.com/v1/traces",
-        service="osis",
-    ),
+    traces_endpoint="https://traces-pipe-abc.us-east-1.osis.amazonaws.com/v1/traces",
     logs_endpoint="https://logs-pipe-def.us-east-1.osis.amazonaws.com/v1/logs",
+    sigv4={"service": "osis", "region": "us-east-1"},  # or sigv4=True
 )
 ```
 
-The logs pipeline needs an OTLP logs source; Data Prepper routes the evaluation events to `otel-v1-genai-evaluation-*`. Without `logs_endpoint=` the SDK derives `/v1/logs` on the traces pipeline host, which only works if that pipeline also accepts logs. You can also pass `log_exporter=AWSSigV4OTLPLogExporter(endpoint=..., service="osis")` directly.
+`sigv4=` makes `register()` build an `AWSSigV4OTLPExporter` and an `AWSSigV4OTLPLogExporter`, signed with botocore credentials. `service` defaults to `"osis"` (use `"es"` for OpenSearch Service direct) and `region` to the botocore region. SigV4 is HTTP-only: a signal resolved to gRPC raises `ValueError` (AWS OSIS has no gRPC endpoint). The logs pipeline needs an OTLP logs source; Data Prepper routes the evaluation events to `otel-v1-genai-evaluation-*`.
 
 **Environment variables only:**
 
@@ -252,11 +223,21 @@ export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://logs-pipe-def.us-east-1.osis.ama
 # or, for a collector serving both: export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 ```
 
+**Custom exporters:** `exporter=` (traces) and `log_exporter=` (logs) are used as-is; nothing is derived from them. With `exporter=` and no `log_exporter=`, `register()` builds the log exporter only if a logs destination is configured (`logs_endpoint=`, `endpoint=`, `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT`); otherwise it logs a warning and evaluation events are not exported.
+
+**Upgrading from 0.2.9:** `endpoint=` used to be the full traces URL. An `endpoint=` ending with `/v1/traces` still works for one release: it emits a `DeprecationWarning`, and the suffix is removed to get the base (traces go to the same URL, logs to `/v1/logs` next to it). Pass the base, or use `traces_endpoint=`. `register(exporter=AWSSigV4OTLPExporter(...))` still works for traces; use `sigv4=` to also sign the evaluation events.
+
 | Parameter | Default | Description |
 |---|---|---|
-| `enable_logs` | `True` | Set up the logs pipeline for evaluation events |
+| `endpoint` | resolved | Base OTLP URL for all signals |
+| `traces_endpoint` | resolved | Full OTLP traces URL |
 | `logs_endpoint` | resolved | Full OTLP logs URL, for example the OSIS logs pipeline |
-| `log_exporter` | `None` | Custom `LogRecordExporter`. Needed when `exporter=` is a custom exporter other than `AWSSigV4OTLPExporter` |
+| `protocol` | resolved | `"http"` or `"grpc"` for both signals |
+| `headers` | `None` | Extra headers for both exporters |
+| `sigv4` | `None` | `True` or `{"service": ..., "region": ...}`: sign both exporters with AWS SigV4 |
+| `enable_logs` | `True` | Set up the logs pipeline for evaluation events |
+| `exporter` | `None` | Custom traces `SpanExporter`, used as-is |
+| `log_exporter` | `None` | Custom `LogRecordExporter`, used as-is |
 
 Existing setups are left alone: if a global `LoggerProvider` is already configured, `register()` does not replace it and `score()` uses yours. With `set_global=False` no logs pipeline is created. The returned `TracerProvider`'s `force_flush()` and `shutdown()` also flush and shut down the logs pipeline, so `provider.force_flush()` before exit covers both signals.
 
@@ -687,11 +668,11 @@ Requires the `[opensearch]` extra: `pip install opensearch-genai-observability-s
 | Environment Variable | Description | Default |
 |---|---|---|
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Full OTLP traces endpoint URL | — |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Base OTLP endpoint URL (`/v1/traces` and `/v1/logs` appended) | — |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Base OTLP endpoint URL (`/v1/traces` and `/v1/logs` appended over HTTP, used as-is over gRPC) | — |
 | `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | Protocol for traces (`http/protobuf`, `grpc`) | — |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | Protocol for all signals (`http/protobuf`, `grpc`) | — |
 | `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Full OTLP logs endpoint URL (evaluation events), e.g. the OSIS logs pipeline | see [Endpoints](#endpoints-traces-and-evaluation-logs) |
-| `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | Protocol for logs (`http/protobuf`, `grpc`) | as traces |
+| `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | Protocol for logs (`http/protobuf`, `grpc`) | `OTEL_EXPORTER_OTLP_PROTOCOL` |
 | `OTEL_SERVICE_NAME` | Service name for spans | `"default"` |
 | `OPENSEARCH_PROJECT` | Project/service name (fallback) | `"default"` |
 | `AWS_DEFAULT_REGION` | AWS region for SigV4 signing | auto-detected |
@@ -708,7 +689,7 @@ See the [`examples/`](examples/) directory:
 |---|---|
 | [`01_tracing_basics.py`](examples/01_tracing_basics.py) | `@observe` decorator, context manager, `enrich()` |
 | [`02_scoring.py`](examples/02_scoring.py) | Evaluation events: inline, offline, trace-level, session-level, evaluator failures |
-| [`03_aws_sigv4.py`](examples/03_aws_sigv4.py) | AWS SigV4 authentication with `AWSSigV4OTLPExporter` |
+| [`03_aws_sigv4.py`](examples/03_aws_sigv4.py) | AWS SigV4 for traces and evaluation events with `register(sigv4=...)` |
 | [`04_async_tracing.py`](examples/04_async_tracing.py) | Async function tracing with `@observe` |
 | [`05_openai_auto_instrument.py`](examples/05_openai_auto_instrument.py) | OpenAI auto-instrumentation via `register()` |
 | [`06_retrieval_and_eval.py`](examples/06_retrieval_and_eval.py) | Retrieve traces from OpenSearch, evaluate, write scores back |

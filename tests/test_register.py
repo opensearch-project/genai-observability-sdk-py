@@ -10,11 +10,12 @@
 """Tests for opensearch_genai_observability_sdk_py.register."""
 
 import importlib
+import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from opensearch_genai_observability_sdk_py.register import _infer_protocol, _resolve_endpoint
+from opensearch_genai_observability_sdk_py.register import _infer_protocol
 
 # importlib.import_module is needed because opensearch_genai_observability_sdk_py.__init__ imports
 # `register` (the function) into the package namespace, shadowing the submodule name.
@@ -68,41 +69,139 @@ class TestInferProtocol:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_endpoint
+# _resolve_signal: one rule per signal (OTel exporter spec)
 # ---------------------------------------------------------------------------
 
+_OTLP_ENV_VARS = (
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+)
 
-class TestResolveEndpoint:
-    """Unit tests for endpoint resolution priority."""
 
-    def test_code_endpoint_wins(self, monkeypatch):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://traces:4318/v1/traces")
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://base:4318")
-        assert (
-            _resolve_endpoint("http://explicit:4318/v1/traces") == "http://explicit:4318/v1/traces"
+@pytest.fixture()
+def clean_otlp_env(monkeypatch):
+    for var in _OTLP_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+def _resolve(signal, signal_endpoint=None, base=None, protocol=None):
+    target = _register_mod._resolve_signal(signal, signal_endpoint, base, protocol)
+    return target.url, target.protocol
+
+
+class TestResolveSignal:
+    """Endpoint and protocol resolution per signal."""
+
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_signal_param_wins(self, signal, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT", "http://env:1/x")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://base-env:4318")
+        assert _resolve(signal, "http://p:1/full", "http://base:4318") == (
+            "http://p:1/full",
+            "http",
         )
 
-    def test_traces_endpoint_env_var(self, monkeypatch):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://traces:4318/v1/traces")
-        assert _resolve_endpoint(None) == "http://traces:4318/v1/traces"
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_signal_env_beats_base(self, signal, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT", "http://env:1/x")
+        assert _resolve(signal, None, "http://base:4318")[0] == "http://env:1/x"
 
-    def test_base_endpoint_env_var_appends_path(self, monkeypatch):
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_base_param_appends_signal_path(self, signal, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://base-env:4318")
+        assert _resolve(signal, None, "http://base:4318/")[0] == f"http://base:4318/v1/{signal}"
+
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_base_env_appends_signal_path(self, signal, clean_otlp_env, monkeypatch):
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
-        assert _resolve_endpoint(None) == "http://localhost:4318/v1/traces"
+        assert _resolve(signal)[0] == f"http://localhost:4318/v1/{signal}"
 
-    def test_base_endpoint_trailing_slash_handled(self, monkeypatch):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/")
-        assert _resolve_endpoint(None) == "http://localhost:4318/v1/traces"
+    def test_base_keeps_path_prefix(self, clean_otlp_env):
+        assert _resolve("logs", None, "https://h/opentelemetry")[0] == (
+            "https://h/opentelemetry/v1/logs"
+        )
 
-    def test_traces_endpoint_takes_priority_over_base(self, monkeypatch):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://traces:4318/v1/traces")
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://base:4318")
-        assert _resolve_endpoint(None) == "http://traces:4318/v1/traces"
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_data_prepper_default(self, signal, clean_otlp_env):
+        target = _register_mod._resolve_signal(signal, None, None, None)
+        assert target.url == f"http://localhost:21890/opentelemetry/v1/{signal}"
+        assert target.configured is False
+        assert _register_mod.DEFAULT_ENDPOINT == _resolve("traces")[0]
+        assert _register_mod.DEFAULT_LOGS_ENDPOINT == _resolve("logs")[0]
 
-    def test_data_prepper_default(self, monkeypatch):
-        monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
-        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-        assert _resolve_endpoint(None) == _register_mod.DEFAULT_ENDPOINT
+    def test_configured_flag(self, clean_otlp_env, monkeypatch):
+        resolve = _register_mod._resolve_signal
+        assert resolve("logs", "http://l/v1/logs", None, None).configured
+        assert resolve("logs", None, "http://b:4318", None).configured
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://b:4318")
+        assert resolve("logs", None, None, None).configured
+
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_grpc_base_used_as_is_for_every_signal(self, signal, clean_otlp_env):
+        assert _resolve(signal, None, "grpc://collector:4317") == (
+            "grpc://collector:4317",
+            "grpc",
+        )
+
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_grpc_env_base_with_protocol_env(self, signal, clean_otlp_env, monkeypatch):
+        """The standard collector setup: base env + OTEL_EXPORTER_OTLP_PROTOCOL=grpc."""
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
+        assert _resolve(signal) == ("http://collector:4317", "grpc")
+
+    def test_protocol_param_beats_env(self, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/protobuf")
+        assert _resolve("logs", None, "http://c:4317", "grpc") == ("http://c:4317", "grpc")
+
+    def test_signal_protocol_env_beats_general_env(self, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "grpc")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+        assert _resolve("traces", None, "http://c:4317") == ("http://c:4317", "grpc")
+        assert _resolve("logs", None, "http://c:4318") == ("http://c:4318/v1/logs", "http")
+
+    def test_logs_protocol_checked_against_logs_url(self, clean_otlp_env, monkeypatch):
+        """OTEL_EXPORTER_OTLP_LOGS_PROTOCOL applies to the logs URL, not the traces URL."""
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/protobuf")
+        assert _resolve("traces", None, "grpc://c:4317") == ("grpc://c:4317", "grpc")
+        assert _resolve("logs", "http://c:4318/v1/logs", "grpc://c:4317") == (
+            "http://c:4318/v1/logs",
+            "http",
+        )
+
+    def test_logs_protocol_contradicting_logs_url_raises(self, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/protobuf")
+        with pytest.raises(ValueError, match="grpc://c:4317"):
+            _resolve("logs", None, "grpc://c:4317")
+
+
+class TestLegacyEndpoint:
+    """0.2.9 ``endpoint=`` was a full traces URL: deprecated, still accepted."""
+
+    def test_base_passes_through(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert _register_mod._base_from_legacy_endpoint("http://c:4318") == "http://c:4318"
+            assert _register_mod._base_from_legacy_endpoint(None) is None
+
+    @pytest.mark.parametrize(
+        ("endpoint", "base"),
+        [
+            ("http://c:4318/v1/traces", "http://c:4318"),
+            ("http://c:4318/v1/traces/", "http://c:4318"),
+            (
+                "http://localhost:21890/opentelemetry/v1/traces",
+                "http://localhost:21890/opentelemetry",
+            ),
+        ],
+    )
+    def test_traces_suffix_is_removed_with_warning(self, endpoint, base):
+        with pytest.warns(DeprecationWarning, match="traces_endpoint="):
+            assert _register_mod._base_from_legacy_endpoint(endpoint) == base
 
 
 # ---------------------------------------------------------------------------
@@ -142,11 +241,38 @@ class TestRegister:
 
         mock_create_http.return_value = MagicMock()
         register(
-            endpoint="http://my-collector:4318/v1/traces",
+            endpoint="http://my-collector:4318",
             set_global=False,
             auto_instrument=False,
         )
         mock_create_http.assert_called_once_with("http://my-collector:4318/v1/traces", None)
+
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_register_legacy_traces_url_still_works(self, mock_create_http):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        mock_create_http.return_value = MagicMock()
+        with pytest.warns(DeprecationWarning):
+            register(
+                endpoint="http://my-collector:4318/v1/traces",
+                set_global=False,
+                auto_instrument=False,
+            )
+        mock_create_http.assert_called_once_with("http://my-collector:4318/v1/traces", None)
+
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_register_traces_endpoint_param(self, mock_create_http, monkeypatch):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://env:4318/v1/traces")
+        mock_create_http.return_value = MagicMock()
+        register(
+            endpoint="http://base:4318",
+            traces_endpoint="http://t:4318/custom",
+            set_global=False,
+            auto_instrument=False,
+        )
+        mock_create_http.assert_called_once_with("http://t:4318/custom", None)
 
     @patch.object(_register_mod, "_create_http_exporter")
     def test_register_uses_otel_traces_endpoint_env_var(self, mock_create_http, monkeypatch):
@@ -268,21 +394,6 @@ class TestRegister:
 # Logs pipeline for evaluation events
 # ---------------------------------------------------------------------------
 
-_LOG_ENV_VARS = (
-    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-    "OTEL_EXPORTER_OTLP_PROTOCOL",
-    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-)
-
-
-@pytest.fixture()
-def clean_otlp_env(monkeypatch):
-    for var in _LOG_ENV_VARS:
-        monkeypatch.delenv(var, raising=False)
-
 
 def _in_memory_log_exporter():
     try:
@@ -292,133 +403,46 @@ def _in_memory_log_exporter():
     return InMemoryLogs()
 
 
-class TestDeriveLogsEndpoint:
-    @pytest.mark.parametrize(
-        ("traces", "logs"),
-        [
-            ("http://localhost:4318/v1/traces", "http://localhost:4318/v1/logs"),
-            ("http://localhost:4318/v1/traces/", "http://localhost:4318/v1/logs"),
-            (
-                "http://localhost:21890/opentelemetry/v1/traces",
-                "http://localhost:21890/opentelemetry/v1/logs",
-            ),
-            (
-                "https://p-abc.us-east-1.osis.amazonaws.com/v1/traces",
-                "https://p-abc.us-east-1.osis.amazonaws.com/v1/logs",
-            ),
-        ],
-    )
-    def test_derivation(self, traces, logs):
-        from opensearch_genai_observability_sdk_py._internal import derive_logs_endpoint
+class _Spy:
+    """Wraps a function and records what it returned."""
 
-        assert derive_logs_endpoint(traces) == logs
+    def __init__(self, fn):
+        self.fn = fn
+        self.results = []
 
-    @pytest.mark.parametrize(
-        "traces",
-        [
-            "http://collector:4318",
-            "http://h:1/custom",
-            "http://h:1/traces",
-            "https://p.osis.amazonaws.com/ingest",
-        ],
-    )
-    def test_no_guessing(self, traces):
-        from opensearch_genai_observability_sdk_py._internal import derive_logs_endpoint
-
-        assert derive_logs_endpoint(traces) is None
+    def __call__(self, *args, **kwargs):
+        result = self.fn(*args, **kwargs)
+        self.results.append(result)
+        return result
 
 
-class TestResolveLogsEndpoint:
-    def test_param_wins(self, clean_otlp_env, monkeypatch):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "http://env:4318/v1/logs")
-        assert (
-            _register_mod._resolve_logs_endpoint("http://x:4318/v1/traces", "http://p/v1/logs")
-            == "http://p/v1/logs"
-        )
-
-    def test_logs_env_beats_derivation(self, clean_otlp_env, monkeypatch):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "http://env:4318/v1/logs")
-        assert (
-            _register_mod._resolve_logs_endpoint("http://x:4318/v1/traces", None)
-            == "http://env:4318/v1/logs"
-        )
-
-    def test_derived_from_endpoint_param(self, clean_otlp_env, monkeypatch):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://base:4318")
-        assert (
-            _register_mod._resolve_logs_endpoint("http://x:4318/v1/traces", None)
-            == "http://x:4318/v1/logs"
-        )
-
-    def test_endpoint_param_without_traces_suffix_skips(self, clean_otlp_env, caplog):
-        assert _register_mod._resolve_logs_endpoint("http://x:4318/ingest", None) is None
-        assert "cannot derive an OTLP logs endpoint" in caplog.text
-        assert "logs_endpoint=" in caplog.text
-
-    def test_grpc_without_logs_endpoint_skips(self, clean_otlp_env, monkeypatch, caplog):
-        assert _register_mod._resolve_logs_endpoint("grpc://localhost:4317", None) is None
-        assert "gRPC" in caplog.text
-        assert _register_mod._resolve_logs_endpoint("http://localhost:4317", None, "grpc") is None
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://base:4317")
-        assert _register_mod._resolve_logs_endpoint(None, None, "grpc") is None
-
-    def test_grpc_with_logs_endpoint(self, clean_otlp_env, monkeypatch):
-        assert (
-            _register_mod._resolve_logs_endpoint("grpc://localhost:4317", "grpc://localhost:4317")
-            == "grpc://localhost:4317"
-        )
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "http://l:4318/v1/logs")
-        assert (
-            _register_mod._resolve_logs_endpoint("grpc://localhost:4317", None)
-            == "http://l:4318/v1/logs"
-        )
-
-    def test_logs_env(self, clean_otlp_env, monkeypatch):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "http://env:4318/v1/logs")
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://base:4318")
-        assert _register_mod._resolve_logs_endpoint(None, None) == "http://env:4318/v1/logs"
-
-    def test_base_env(self, clean_otlp_env, monkeypatch):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://base:4318/")
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://t:4318/v1/traces")
-        assert _register_mod._resolve_logs_endpoint(None, None) == "http://base:4318/v1/logs"
-
-    def test_derived_from_traces_env(self, clean_otlp_env, monkeypatch):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://t:4318/v1/traces")
-        assert _register_mod._resolve_logs_endpoint(None, None) == "http://t:4318/v1/logs"
-
-    def test_traces_env_without_suffix_skips(self, clean_otlp_env, monkeypatch, caplog):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://t:4318/custom")
-        assert _register_mod._resolve_logs_endpoint(None, None) is None
-        assert "cannot derive" in caplog.text
-
-    def test_default(self, clean_otlp_env):
-        assert _register_mod._resolve_logs_endpoint(None, None) == (
-            "http://localhost:21890/opentelemetry/v1/logs"
-        )
-        assert _register_mod.DEFAULT_LOGS_ENDPOINT.endswith("/opentelemetry/v1/logs")
-
-    def test_logs_protocol_env(self, monkeypatch):
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "grpc")
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
-        assert _register_mod._resolve_logs_protocol(None) == "grpc"
-        assert _register_mod._resolve_logs_protocol("http") == "http"
+def _log_target(mock_log):
+    """The resolved logs target passed to the patched _create_log_exporter."""
+    return mock_log.call_args.args[0]
 
 
 class TestCreateLogExporter:
     def test_http(self):
         from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
-        exp = _register_mod._create_log_exporter("http://localhost:4318/v1/logs", None, None)
+        target = _register_mod._SignalTarget("http://localhost:4318/v1/logs", "http", True)
+        exp = _register_mod._create_log_exporter(target, None)
         assert isinstance(exp, OTLPLogExporter)
         assert exp._endpoint == "http://localhost:4318/v1/logs"
 
     def test_grpc(self):
         from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 
-        exp = _register_mod._create_log_exporter("grpc://localhost:4317", None, None)
+        target = _register_mod._SignalTarget("grpc://localhost:4317", "grpc", True)
+        exp = _register_mod._create_log_exporter(target, None)
         assert isinstance(exp, OTLPLogExporter)
         exp.shutdown()
+
+    def test_grpc_target(self):
+        assert _register_mod._grpc_target("grpc://h:4317") == ("h:4317", True)
+        assert _register_mod._grpc_target("grpcs://h:4317") == ("h:4317", False)
+        assert _register_mod._grpc_target("https://h:4317") == ("h:4317", False)
+        assert _register_mod._grpc_target("http://h:4317") == ("h:4317", True)
 
 
 @pytest.fixture()
@@ -435,9 +459,7 @@ def fresh_globals():
 class TestRegisterLogs:
     @patch.object(_register_mod, "_create_log_exporter")
     @patch.object(_register_mod, "_create_http_exporter")
-    def test_default_logs_exporter_mirrors_traces(
-        self, mock_http, mock_log, fresh_globals, clean_otlp_env
-    ):
+    def test_one_base_for_traces_and_logs(self, mock_http, mock_log, fresh_globals, clean_otlp_env):
         from opentelemetry.sdk._logs import LoggerProvider
 
         from opensearch_genai_observability_sdk_py.register import register
@@ -445,45 +467,96 @@ class TestRegisterLogs:
         mock_http.return_value = MagicMock()
         mock_log.return_value = _in_memory_log_exporter()
         register(
-            endpoint="http://my-collector:4318/v1/traces",
+            endpoint="http://my-collector:4318",
             headers={"Authorization": "Basic x"},
             auto_instrument=False,
         )
-        mock_log.assert_called_once_with(
-            endpoint="http://my-collector:4318/v1/logs",
-            protocol=None,
-            headers={"Authorization": "Basic x"},
+        mock_http.assert_called_once_with(
+            "http://my-collector:4318/v1/traces", {"Authorization": "Basic x"}
         )
+        target = _log_target(mock_log)
+        assert (target.url, target.protocol) == ("http://my-collector:4318/v1/logs", "http")
+        assert mock_log.call_args.args[1] == {"Authorization": "Basic x"}
         fresh_globals.assert_called_once()
         assert isinstance(fresh_globals.call_args.args[0], LoggerProvider)
 
     @patch.object(_register_mod, "_create_log_exporter")
-    @patch.object(_register_mod, "_create_grpc_exporter")
-    def test_grpc_protocol_passed_to_logs(self, mock_grpc, mock_log, fresh_globals, clean_otlp_env):
-        from opensearch_genai_observability_sdk_py.register import register
-
-        mock_grpc.return_value = MagicMock()
-        mock_log.return_value = _in_memory_log_exporter()
-        register(
-            endpoint="http://localhost:4317",
-            logs_endpoint="http://localhost:4317",
-            protocol="grpc",
-            auto_instrument=False,
-        )
-        assert mock_log.call_args.kwargs["protocol"] == "grpc"
-
-    @patch.object(_register_mod, "_create_log_exporter")
-    @patch.object(_register_mod, "_create_grpc_exporter")
-    def test_grpc_without_logs_endpoint_skips_logs(
-        self, mock_grpc, mock_log, fresh_globals, clean_otlp_env, caplog
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_legacy_traces_url_logs_go_next_to_it(
+        self, mock_http, mock_log, fresh_globals, clean_otlp_env
     ):
         from opensearch_genai_observability_sdk_py.register import register
 
+        mock_http.return_value = MagicMock()
+        mock_log.return_value = _in_memory_log_exporter()
+        with pytest.warns(DeprecationWarning):
+            register(endpoint="http://c:4318/v1/traces", auto_instrument=False)
+        mock_http.assert_called_once_with("http://c:4318/v1/traces", None)
+        assert _log_target(mock_log).url == "http://c:4318/v1/logs"
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"endpoint": "grpc://collector:4317"},
+            {"endpoint": "http://collector:4317", "protocol": "grpc"},
+        ],
+    )
+    def test_grpc_logs_use_the_traces_host_port(self, kwargs, fresh_globals, clean_otlp_env):
+        """gRPC has no per-signal path: logs go to the same host:port as traces."""
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+            OTLPLogExporter as GRPCLogExporter,
+        )
+
+        from opensearch_genai_observability_sdk_py.register import register
+
+        spy = _Spy(_register_mod._create_log_exporter)
+        with (
+            patch.object(_register_mod, "_create_grpc_exporter") as mock_grpc,
+            patch.object(_register_mod, "_create_log_exporter", side_effect=spy) as mock_log,
+        ):
+            mock_grpc.return_value = MagicMock()
+            register(auto_instrument=False, **kwargs)
+        traces_url = mock_grpc.call_args.args[0]
+        target = _log_target(mock_log)
+        assert (target.url, target.protocol) == (traces_url, "grpc")
+        assert isinstance(spy.results[0], GRPCLogExporter)
+        fresh_globals.assert_called_once()
+        spy.results[0].shutdown()
+
+    @patch.object(_register_mod, "_create_log_exporter")
+    @patch.object(_register_mod, "_create_grpc_exporter")
+    def test_grpc_env_collector_setup(
+        self, mock_grpc, mock_log, fresh_globals, clean_otlp_env, monkeypatch
+    ):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
         mock_grpc.return_value = MagicMock()
-        register(endpoint="grpc://localhost:4317", auto_instrument=False)
-        mock_log.assert_not_called()
-        fresh_globals.assert_not_called()
-        assert "gRPC" in caplog.text
+        mock_log.return_value = _in_memory_log_exporter()
+        register(auto_instrument=False)
+        mock_grpc.assert_called_once_with("http://collector:4317", None)
+        target = _log_target(mock_log)
+        assert (target.url, target.protocol) == ("http://collector:4317", "grpc")
+
+    @patch.object(_register_mod, "_create_log_exporter")
+    @patch.object(_register_mod, "_create_grpc_exporter")
+    def test_grpc_traces_http_logs(
+        self, mock_grpc, mock_log, fresh_globals, clean_otlp_env, monkeypatch
+    ):
+        """A logs protocol env var is checked against the logs URL, not the traces URL."""
+        from opensearch_genai_observability_sdk_py.register import register
+
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/protobuf")
+        mock_grpc.return_value = MagicMock()
+        mock_log.return_value = _in_memory_log_exporter()
+        register(
+            endpoint="grpc://collector:4317",
+            logs_endpoint="http://collector:4318/v1/logs",
+            auto_instrument=False,
+        )
+        target = _log_target(mock_log)
+        assert (target.url, target.protocol) == ("http://collector:4318/v1/logs", "http")
 
     @patch.object(_register_mod, "_create_log_exporter")
     @patch.object(_register_mod, "_create_http_exporter")
@@ -493,7 +566,55 @@ class TestRegisterLogs:
         mock_http.return_value = MagicMock()
         mock_log.return_value = _in_memory_log_exporter()
         register(logs_endpoint="http://logs:4318/v1/logs", auto_instrument=False)
-        assert mock_log.call_args.kwargs["endpoint"] == "http://logs:4318/v1/logs"
+        mock_http.assert_called_once_with(_register_mod.DEFAULT_ENDPOINT, None)
+        assert _log_target(mock_log).url == "http://logs:4318/v1/logs"
+
+    @patch.object(_register_mod, "_create_log_exporter")
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_separate_traces_and_logs_endpoints(
+        self, mock_http, mock_log, fresh_globals, clean_otlp_env
+    ):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        mock_http.return_value = MagicMock()
+        mock_log.return_value = _in_memory_log_exporter()
+        register(
+            traces_endpoint="http://traces-host:4318/ingest",
+            logs_endpoint="http://logs-host:4318/v1/logs",
+            auto_instrument=False,
+        )
+        mock_http.assert_called_once_with("http://traces-host:4318/ingest", None)
+        assert _log_target(mock_log).url == "http://logs-host:4318/v1/logs"
+
+    @patch.object(_register_mod, "_create_log_exporter")
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_signal_env_endpoints(
+        self, mock_http, mock_log, fresh_globals, clean_otlp_env, monkeypatch
+    ):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://t:4318/v1/traces")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "http://l:4318/v1/logs")
+        mock_http.return_value = MagicMock()
+        mock_log.return_value = _in_memory_log_exporter()
+        register(auto_instrument=False)
+        mock_http.assert_called_once_with("http://t:4318/v1/traces", None)
+        assert _log_target(mock_log).url == "http://l:4318/v1/logs"
+
+    @patch.object(_register_mod, "_create_log_exporter")
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_traces_env_does_not_drive_logs(
+        self, mock_http, mock_log, fresh_globals, clean_otlp_env, monkeypatch
+    ):
+        """No derivation from the traces URL: logs fall back to the base."""
+        from opensearch_genai_observability_sdk_py.register import register
+
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://t:4318/v1/traces")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://base:4318")
+        mock_http.return_value = MagicMock()
+        mock_log.return_value = _in_memory_log_exporter()
+        register(auto_instrument=False)
+        assert _log_target(mock_log).url == "http://base:4318/v1/logs"
 
     @patch.object(_register_mod, "_create_http_exporter")
     def test_events_flow_and_flush_through_tracer_provider(self, mock_http, fresh_globals):
@@ -518,6 +639,20 @@ class TestRegisterLogs:
         with patch.object(logger_provider, "shutdown") as lp_shutdown:
             provider.shutdown()
         lp_shutdown.assert_called_once()
+
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_simple_processor_when_batch_false(self, mock_http, fresh_globals):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        mock_http.return_value = MagicMock()
+        log_exp = _in_memory_log_exporter()
+        with patch.object(
+            _register_mod,
+            "SimpleLogRecordProcessor",
+            wraps=_register_mod.SimpleLogRecordProcessor,
+        ) as simple:
+            register(log_exporter=log_exp, batch=False, auto_instrument=False)
+        simple.assert_called_once_with(log_exp)
 
     @patch.object(_register_mod, "_create_http_exporter")
     def test_existing_global_logger_provider_untouched(self, mock_http):
@@ -562,12 +697,24 @@ class TestRegisterLogs:
         fresh_globals.assert_not_called()
         mock_log.assert_not_called()
 
-    def test_custom_exporter_without_log_exporter_warns(self, fresh_globals, caplog):
+    def test_custom_exporter_without_logs_destination_warns(
+        self, fresh_globals, clean_otlp_env, caplog
+    ):
         from opensearch_genai_observability_sdk_py.register import register
 
         register(exporter=MagicMock(), auto_instrument=False)
         fresh_globals.assert_not_called()
         assert "log_exporter=" in caplog.text
+
+    @patch.object(_register_mod, "_create_log_exporter")
+    def test_custom_exporter_with_logs_endpoint(self, mock_log, fresh_globals, clean_otlp_env):
+        """No derivation from a custom exporter, but a configured logs URL is used."""
+        from opensearch_genai_observability_sdk_py.register import register
+
+        mock_log.return_value = _in_memory_log_exporter()
+        register(exporter=MagicMock(), logs_endpoint="http://l:4318/v1/logs", auto_instrument=False)
+        assert _log_target(mock_log).url == "http://l:4318/v1/logs"
+        fresh_globals.assert_called_once()
 
     def test_custom_exporter_with_log_exporter(self, fresh_globals):
         from opensearch_genai_observability_sdk_py.register import register
@@ -577,101 +724,133 @@ class TestRegisterLogs:
         )
         fresh_globals.assert_called_once()
 
-    @patch.object(_register_mod, "_create_log_exporter")
-    @patch.object(_register_mod, "_create_http_exporter")
-    def test_explicit_endpoint_without_traces_suffix_skips_logs(
-        self, mock_http, mock_log, fresh_globals, clean_otlp_env, caplog
-    ):
+
+# ---------------------------------------------------------------------------
+# sigv4=: register() builds signed exporters for both signals
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def fake_aws():
+    creds = MagicMock()
+    session = MagicMock()
+    session.get_credentials.return_value = creds
+    session.get_config_variable.return_value = "us-west-2"
+    with patch("botocore.session.get_session", return_value=session):
+        yield
+
+
+class TestSigV4:
+    TRACES = "https://traces-pipe.us-east-1.osis.amazonaws.com/v1/traces"
+    LOGS = "https://logs-pipe.us-east-1.osis.amazonaws.com/v1/logs"
+
+    @pytest.fixture()
+    def built(self):
+        """Spy on the exporters register() builds: (span exporters, log exporters)."""
+        span_spy = _Spy(_register_mod._create_exporter)
+        log_spy = _Spy(_register_mod._create_log_exporter)
+        with (
+            patch.object(_register_mod, "_create_exporter", side_effect=span_spy),
+            patch.object(_register_mod, "_create_log_exporter", side_effect=log_spy),
+        ):
+            yield span_spy.results, log_spy.results
+
+    def test_osis_one_pipeline_per_signal(self, fake_aws, fresh_globals, clean_otlp_env, built):
+        from opensearch_genai_observability_sdk_py.exporters import (
+            AWSSigV4OTLPExporter,
+            AWSSigV4OTLPLogExporter,
+        )
         from opensearch_genai_observability_sdk_py.register import register
 
-        mock_http.return_value = MagicMock()
-        register(endpoint="http://my-collector:4318/ingest", auto_instrument=False)
-        mock_log.assert_not_called()
-        fresh_globals.assert_not_called()
-        assert "cannot derive an OTLP logs endpoint" in caplog.text
-
-    @patch.object(_register_mod, "_create_log_exporter")
-    @patch.object(_register_mod, "_create_http_exporter")
-    def test_explicit_endpoint_with_logs_endpoint(
-        self, mock_http, mock_log, fresh_globals, clean_otlp_env
-    ):
-        from opensearch_genai_observability_sdk_py.register import register
-
-        mock_http.return_value = MagicMock()
-        mock_log.return_value = _in_memory_log_exporter()
         register(
-            endpoint="http://traces-host:4318/ingest",
-            logs_endpoint="http://logs-host:4318/v1/logs",
+            traces_endpoint=self.TRACES,
+            logs_endpoint=self.LOGS,
+            sigv4={"service": "osis", "region": "us-east-1"},
             auto_instrument=False,
         )
-        assert mock_log.call_args.kwargs["endpoint"] == "http://logs-host:4318/v1/logs"
+        (span_exp,), (log_exp,) = built
+        assert isinstance(span_exp, AWSSigV4OTLPExporter)
+        assert isinstance(log_exp, AWSSigV4OTLPLogExporter)
+        assert span_exp._endpoint == self.TRACES
+        assert log_exp._endpoint == self.LOGS
+        assert span_exp.signing_session._region == "us-east-1"
+        assert log_exp.signing_session._service == "osis"
 
-    @patch.object(_register_mod, "_create_log_exporter")
-    @patch.object(_register_mod, "_create_http_exporter")
-    def test_logs_env_endpoint(
-        self, mock_http, mock_log, fresh_globals, clean_otlp_env, monkeypatch
+    def test_sigv4_true_uses_defaults_and_base(
+        self, fake_aws, fresh_globals, clean_otlp_env, built
     ):
         from opensearch_genai_observability_sdk_py.register import register
 
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://t:4318/v1/traces")
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "http://l:4318/v1/logs")
-        mock_http.return_value = MagicMock()
-        mock_log.return_value = _in_memory_log_exporter()
-        register(auto_instrument=False)
-        mock_http.assert_called_once_with("http://t:4318/v1/traces", None)
-        assert mock_log.call_args.kwargs["endpoint"] == "http://l:4318/v1/logs"
-
-    def test_sigv4_logs_derived_from_traces_pipeline(self, fresh_globals, clean_otlp_env):
-        from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
-        from opensearch_genai_observability_sdk_py.register import register
-
-        span_exp = MagicMock(spec=AWSSigV4OTLPExporter)
-        span_exp.endpoint = "https://traces.osis.amazonaws.com/v1/traces"
-        span_exp.create_log_exporter.return_value = _in_memory_log_exporter()
-        register(exporter=span_exp, auto_instrument=False)
-        span_exp.create_log_exporter.assert_called_once_with(
-            endpoint="https://traces.osis.amazonaws.com/v1/logs"
-        )
-
-    def test_sigv4_logs_env(self, fresh_globals, clean_otlp_env, monkeypatch):
-        from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
-        from opensearch_genai_observability_sdk_py.register import register
-
-        monkeypatch.setenv(
-            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "https://logs.osis.amazonaws.com/v1/logs"
-        )
-        span_exp = MagicMock(spec=AWSSigV4OTLPExporter)
-        span_exp.endpoint = "https://traces.osis.amazonaws.com/v1/traces"
-        span_exp.create_log_exporter.return_value = _in_memory_log_exporter()
-        register(exporter=span_exp, auto_instrument=False)
-        span_exp.create_log_exporter.assert_called_once_with(
-            endpoint="https://logs.osis.amazonaws.com/v1/logs"
-        )
-
-    def test_sigv4_not_derivable_skips_logs(self, fresh_globals, clean_otlp_env, caplog):
-        from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
-        from opensearch_genai_observability_sdk_py.register import register
-
-        span_exp = MagicMock(spec=AWSSigV4OTLPExporter)
-        span_exp.endpoint = "https://traces.osis.amazonaws.com/ingest"
-        register(exporter=span_exp, auto_instrument=False)
-        span_exp.create_log_exporter.assert_not_called()
-        fresh_globals.assert_not_called()
-        assert "logs_endpoint=" in caplog.text
-
-    def test_sigv4_exporter_gets_sigv4_log_exporter(self, fresh_globals):
-        from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
-        from opensearch_genai_observability_sdk_py.register import register
-
-        span_exp = MagicMock(spec=AWSSigV4OTLPExporter)
-        span_exp.endpoint = "https://traces.osis.amazonaws.com/v1/traces"
-        span_exp.create_log_exporter.return_value = _in_memory_log_exporter()
         register(
-            exporter=span_exp,
-            logs_endpoint="https://logs.osis.amazonaws.com/v1/logs",
+            endpoint="https://pipe.us-west-2.osis.amazonaws.com",
+            sigv4=True,
             auto_instrument=False,
         )
-        span_exp.create_log_exporter.assert_called_once_with(
-            endpoint="https://logs.osis.amazonaws.com/v1/logs"
+        (span_exp,), (log_exp,) = built
+        assert span_exp._endpoint == "https://pipe.us-west-2.osis.amazonaws.com/v1/traces"
+        assert log_exp._endpoint == "https://pipe.us-west-2.osis.amazonaws.com/v1/logs"
+        assert span_exp.signing_session._service == "osis"
+        assert log_exp.signing_session._region == "us-west-2"
+
+    def test_sigv4_signs_logs_for_custom_exporter(
+        self, fake_aws, fresh_globals, clean_otlp_env, built
+    ):
+        from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPLogExporter
+        from opensearch_genai_observability_sdk_py.register import register
+
+        register(
+            exporter=MagicMock(),
+            logs_endpoint=self.LOGS,
+            sigv4={"service": "es"},
+            auto_instrument=False,
         )
-        fresh_globals.assert_called_once()
+        spans, (log_exp,) = built
+        assert spans == []
+        assert isinstance(log_exp, AWSSigV4OTLPLogExporter)
+        assert log_exp.signing_session._service == "es"
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"endpoint": "grpc://c:4317"},
+            {"traces_endpoint": "grpcs://c:4317"},
+        ],
+    )
+    def test_sigv4_rejects_grpc_traces(self, kwargs, fake_aws, clean_otlp_env):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        with pytest.raises(ValueError, match="sigv4= signs HTTP requests only"):
+            register(sigv4=True, set_global=False, auto_instrument=False, **kwargs)
+
+    def test_sigv4_rejects_grpc_logs(self, fake_aws, fresh_globals, clean_otlp_env):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        with pytest.raises(ValueError, match="logs endpoint"):
+            register(
+                traces_endpoint=self.TRACES,
+                logs_endpoint="grpc://c:4317",
+                sigv4=True,
+                auto_instrument=False,
+            )
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (None, None),
+            (False, None),
+            (True, {}),
+            ({"service": "es"}, {"service": "es"}),
+            (
+                {"service": "osis", "region": "eu-west-1"},
+                {"service": "osis", "region": "eu-west-1"},
+            ),
+            ({"region": None}, {}),
+        ],
+    )
+    def test_options(self, value, expected):
+        assert _register_mod._sigv4_options(value) == expected
+
+    @pytest.mark.parametrize("value", [{"profile": "x"}, "osis"])
+    def test_bad_options(self, value):
+        with pytest.raises(ValueError, match="sigv4="):
+            _register_mod._sigv4_options(value)

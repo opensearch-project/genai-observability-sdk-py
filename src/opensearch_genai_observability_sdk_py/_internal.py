@@ -19,7 +19,6 @@ import logging
 import os
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
-from urllib.parse import urlparse, urlunparse
 
 from opentelemetry import _logs
 
@@ -232,25 +231,3 @@ def validate_metadata_keys(metadata: dict, *, context: str = "") -> None:
                 f"{context}: " if context else "",
                 key,
             )
-
-
-def derive_logs_endpoint(traces_endpoint: str) -> str | None:
-    """Derive the OTLP logs endpoint from an OTLP traces endpoint, if possible.
-
-    This is the only derivation the SDK does: a traces URL whose path ends
-    with ``/v1/traces`` maps to the same base with ``/v1/logs`` (scheme,
-    host, port and any path prefix such as ``/opentelemetry`` are kept).
-    Any other path returns ``None``: the SDK does not guess.
-
-    Examples::
-
-        http://localhost:4318/v1/traces                  -> http://localhost:4318/v1/logs
-        http://localhost:21890/opentelemetry/v1/traces   -> .../opentelemetry/v1/logs
-        https://x.us-east-1.osis.amazonaws.com/v1/traces -> .../v1/logs
-        http://collector:4318/custom                     -> None
-    """
-    parsed = urlparse(traces_endpoint)
-    path = parsed.path.rstrip("/")
-    if not path.endswith("/v1/traces"):
-        return None
-    return urlunparse(parsed._replace(path=path[: -len("/v1/traces")] + "/v1/logs"))

@@ -10,32 +10,30 @@
 """AWS SigV4 authentication with opensearch-genai-observability-sdk-py.
 
 When your Data Prepper or OpenSearch Ingestion pipeline is hosted on AWS,
-pass AWSSigV4OTLPExporter directly to register() via the exporter= parameter.
+pass sigv4= to register(): it builds SigV4-signed exporters for traces and
+for evaluation events.
 
 OpenSearch Ingestion (OSIS) has one pipeline per signal: traces go to the
 traces pipeline, evaluation events (score(), evaluate(), Benchmark) go to a
-logs pipeline. Pass the logs pipeline URL as logs_endpoint=.
+logs pipeline. Pass both URLs, as traces_endpoint= and logs_endpoint=.
 
 Requires: pip install opensearch-genai-observability-sdk-py[aws]
 """
 
 from opensearch_genai_observability_sdk_py import Op, observe, register, score
-from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
 
 TRACES_ENDPOINT = "https://my-traces-pipeline.us-east-1.osis.amazonaws.com/v1/traces"
 LOGS_ENDPOINT = "https://my-logs-pipeline.us-east-1.osis.amazonaws.com/v1/logs"
 
-# Pass AWSSigV4OTLPExporter explicitly.
 # Uses the standard boto3 credential chain (env vars, ~/.aws/credentials, IAM role).
-# The log exporter is created automatically with the same service and region.
 provider = register(
     project_name="my-llm-app",
-    exporter=AWSSigV4OTLPExporter(
-        endpoint=TRACES_ENDPOINT,
-        service="osis",  # "osis" for OpenSearch Ingestion Service
-        # region="us-east-1",   # optional, auto-detected from botocore if not set
-    ),
+    traces_endpoint=TRACES_ENDPOINT,
     logs_endpoint=LOGS_ENDPOINT,
+    sigv4={
+        "service": "osis",  # "osis" for OpenSearch Ingestion, "es" for OpenSearch Service
+        # "region": "us-east-1",  # optional, auto-detected from botocore if not set
+    },
 )
 
 

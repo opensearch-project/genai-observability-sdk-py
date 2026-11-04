@@ -17,7 +17,7 @@ GenAI semantic convention attributes.
 from opensearch_genai_observability_sdk_py import Op, enrich, observe, register
 
 # --- Setup ---
-register(endpoint="http://localhost:21890/opentelemetry/v1/traces")
+register(endpoint="http://localhost:21890/opentelemetry")
 
 
 # --- Decorator: trace a tool ---

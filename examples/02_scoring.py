@@ -22,7 +22,7 @@ session (conversation id).
 from opensearch_genai_observability_sdk_py import Op, observe, register, score
 
 # --- Setup: traces to /v1/traces, evaluation events to /v1/logs ---
-provider = register(endpoint="http://localhost:21890/opentelemetry/v1/traces")
+provider = register(endpoint="http://localhost:21890/opentelemetry")
 
 
 # --- Inline: score the active span while it is running ---

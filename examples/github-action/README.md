@@ -41,10 +41,10 @@ Each named scorer becomes an evaluator (`opensearch.gen_ai.evaluation.evaluator.
 
 ## 2. Endpoints
 
-Traces and evaluation logs are separate OTLP endpoints (see "Endpoints: traces and evaluation logs" in the [SDK README](../../README.md#endpoints-traces-and-evaluation-logs)).
+Traces and evaluation logs share one base URL (`endpoint`) or use one full URL each (`traces-endpoint`, `logs-endpoint`); see "Endpoints: traces and evaluation logs" in the [SDK README](../../README.md#endpoints-traces-and-evaluation-logs).
 
-- **OpenSearch Ingestion (OSIS):** one pipeline per signal. Create a traces pipeline and a logs pipeline (OTLP logs source; Data Prepper routes the evaluation events to `otel-v1-genai-evaluation-*`), then pass both URLs and set `aws-region` to sign requests with SigV4. Give the workflow AWS credentials with `osis:Ingest` on both pipelines, for example with `aws-actions/configure-aws-credentials` and an OIDC role.
-- **OTel Collector / Data Prepper:** pass `traces-endpoint` (`.../v1/traces`) and `logs-endpoint` (`.../v1/logs`) and leave `aws-region` empty. Extra headers (for example auth) can be set with the standard `OTEL_EXPORTER_OTLP_HEADERS` env var on the step.
+- **OpenSearch Ingestion (OSIS):** one pipeline per signal. Create a traces pipeline and a logs pipeline (OTLP logs source; Data Prepper routes the evaluation events to `otel-v1-genai-evaluation-*`), then pass both URLs as `traces-endpoint` and `logs-endpoint` and set `aws-region` to sign both with SigV4. Give the workflow AWS credentials with `osis:Ingest` on both pipelines, for example with `aws-actions/configure-aws-credentials` and an OIDC role.
+- **OTel Collector / Data Prepper:** pass the base URL as `endpoint` (for example `http://collector:4318`; the SDK appends `/v1/traces` and `/v1/logs`) and leave `aws-region` empty. Extra headers (for example auth) can be set with the standard `OTEL_EXPORTER_OTLP_HEADERS` env var on the step.
 
 Store the URLs as secrets or variables.
 
@@ -57,8 +57,9 @@ Copy [`example-workflow.yml`](example-workflow.yml) to `.github/workflows/agent-
 | Input | Required | Default | Description |
 |---|---|---|---|
 | `suite` | yes | | `module:function` or `path/to/file.py:function` |
-| `traces-endpoint` | | | OTLP traces URL |
-| `logs-endpoint` | | | OTLP logs URL for evaluation events |
+| `endpoint` | | | OTLP base URL for traces and logs |
+| `traces-endpoint` | | | Full OTLP traces URL (overrides `endpoint`) |
+| `logs-endpoint` | | | Full OTLP logs URL for evaluation events (overrides `endpoint`) |
 | `aws-region` | | | Enables SigV4 signing when set |
 | `aws-service` | | `osis` | SigV4 service: `osis` or `es` |
 | `service-name` | | `agent-evals-ci` | `service.name` resource attribute |
@@ -96,8 +97,7 @@ The script reads the same settings from flags (or `EVAL_*` env vars), so you can
 ```bash
 python examples/github-action/run_suite.py \
   --suite examples/github-action/sample_suite.py:suite \
-  --traces-endpoint http://localhost:4318/v1/traces \
-  --logs-endpoint http://localhost:4318/v1/logs \
+  --endpoint http://localhost:4318 \
   --service-name my-agent-local \
   --dashboards-url http://localhost:5601 \
   --fail-on-regression "contains_expected=0.75"

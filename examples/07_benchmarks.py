@@ -43,7 +43,7 @@ from opensearch_genai_observability_sdk_py import (
 )
 
 register(
-    endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/traces"),
+    endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318"),
     service_name="my-rag-agent",
 )
 

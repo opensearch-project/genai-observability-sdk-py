@@ -15,86 +15,82 @@ auto-discovers installed instrumentor packages. It also sets up a
 LoggerProvider with an OTLP log exporter, so evaluation events
 (``gen_ai.evaluation.result``) are exported over OTLP logs.
 
-Traces and evaluation logs are separate OTLP endpoints. A collector usually
-serves both (``/v1/traces`` and ``/v1/logs``); AWS OpenSearch Ingestion
-(OSIS) has one pipeline per signal, so it needs a traces pipeline URL and a
-logs pipeline URL.
+Endpoints follow the OTel exporter spec, one rule per signal (traces, logs):
 
-Endpoint resolution (priority order)
--------------------------------------
-1. ``endpoint=`` parameter — full URL, used as-is.
-2. ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` env var — full URL, used as-is.
-3. ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var — base URL; ``/v1/traces`` is
-   appended automatically (per the OTel spec).
-4. Data Prepper default: ``http://localhost:21890/opentelemetry/v1/traces``
+- ``endpoint=`` is the base URL for all signals, like
+  ``OTEL_EXPORTER_OTLP_ENDPOINT``.
+- ``traces_endpoint=`` / ``logs_endpoint=`` are full-URL overrides for one
+  signal, like ``OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT``.
 
-Protocol resolution (priority order)
---------------------------------------
-1. ``protocol=`` parameter — ``"http"`` or ``"grpc"``.
-2. ``OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`` env var.
+Endpoint per signal (priority order)
+------------------------------------
+1. ``<signal>_endpoint=`` parameter: full URL, used as-is.
+2. ``OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT`` env var: full URL, used as-is.
+3. The base: ``endpoint=``, else ``OTEL_EXPORTER_OTLP_ENDPOINT``, else the
+   Data Prepper default ``http://localhost:21890/opentelemetry``. Over HTTP
+   ``/v1/<signal>`` is appended; over gRPC the base is used as-is (gRPC has
+   no per-signal path).
+
+Protocol per signal (priority order)
+------------------------------------
+1. ``protocol=`` parameter: ``"http"`` or ``"grpc"``.
+2. ``OTEL_EXPORTER_OTLP_<SIGNAL>_PROTOCOL`` env var.
 3. ``OTEL_EXPORTER_OTLP_PROTOCOL`` env var.
-4. Inferred from URL scheme: ``grpc://`` / ``grpcs://`` → gRPC;
-   everything else (``http://``, ``https://``) → HTTP.
+4. Inferred from that signal's URL scheme: ``grpc://`` / ``grpcs://`` is
+   gRPC, everything else (``http://``, ``https://``) is HTTP.
+
+Each signal's protocol is checked against that signal's own URL. A protocol
+that contradicts a ``grpc://`` or ``grpcs://`` scheme raises ``ValueError``.
 
 Supported protocols
 --------------------
-- ``http://`` / ``https://`` → HTTP OTLP (protobuf)
-- ``grpc://`` → gRPC (insecure)
-- ``grpcs://`` → gRPC with TLS
+- ``http://`` / ``https://``: HTTP OTLP (protobuf)
+- ``grpc://``: gRPC (insecure)
+- ``grpcs://``: gRPC with TLS
 
 ``http/json`` is not supported.
 
-Raises ``ValueError`` if the explicit protocol contradicts an unambiguous
-``grpc://`` or ``grpcs://`` URL scheme.
-
-For authenticated endpoints (e.g. AWS OSIS), pass a custom exporter:
-
-    from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
+AWS SigV4 (for example AWS OpenSearch Ingestion, OSIS)
+------------------------------------------------------
+``sigv4={"service": "osis", "region": "us-east-1"}`` (or ``sigv4=True``)
+makes register() build signed exporters for both signals. OSIS has one
+pipeline per signal, so pass both URLs:
 
     register(
-        exporter=AWSSigV4OTLPExporter(
-            endpoint="https://pipeline.us-east-1.osis.amazonaws.com/v1/traces",
-            service="osis",
-        )
+        traces_endpoint="https://traces-pipe.us-east-1.osis.amazonaws.com/v1/traces",
+        logs_endpoint="https://logs-pipe.us-east-1.osis.amazonaws.com/v1/logs",
+        sigv4={"service": "osis", "region": "us-east-1"},
     )
 
-Note: AWSSigV4OTLPExporter is HTTP-only. AWS OSIS does not expose a gRPC
-endpoint.
+SigV4 is HTTP-only: a signal resolved to gRPC raises ``ValueError``.
 
-Logs endpoint resolution (priority order)
-------------------------------------------
-1. ``logs_endpoint=`` parameter: full URL, used as-is.
-2. ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`` env var: full URL, used as-is.
-3. An explicit traces endpoint (``endpoint=``, or the endpoint of
-   ``exporter=AWSSigV4OTLPExporter(...)``): if its path ends with
-   ``/v1/traces``, the same base with ``/v1/logs``. This is the only
-   derivation. Any other path logs a warning and the logs pipeline is
-   skipped.
-4. ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var: base URL; ``/v1/logs`` appended
-   (per the OTel spec).
-5. ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` env var: same rule as 3.
-6. Data Prepper default: ``http://localhost:21890/opentelemetry/v1/logs``
+Escape hatches
+--------------
+``exporter=`` replaces the traces exporter and ``log_exporter=`` the logs
+exporter. Nothing is derived from a custom exporter. With ``exporter=`` and
+no ``log_exporter=``, a plain (or SigV4) OTLP log exporter is built only if
+a logs destination is configured (``logs_endpoint=``, ``endpoint=``,
+``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`` or ``OTEL_EXPORTER_OTLP_ENDPOINT``);
+otherwise a warning is logged and evaluation events are not exported.
 
-With gRPC traces only 1 and 2 apply; otherwise a warning is logged and
-logs are skipped. The same happens for a custom exporter without
-``log_exporter=``.
-
-The logs protocol follows ``protocol=``, then
-``OTEL_EXPORTER_OTLP_LOGS_PROTOCOL`` / ``OTEL_EXPORTER_OTLP_PROTOCOL``, then
-the URL scheme. With ``exporter=AWSSigV4OTLPExporter(...)`` the log exporter
-is an ``AWSSigV4OTLPLogExporter`` with the same service/region on the
-resolved logs URL (pass the OSIS logs pipeline URL as ``logs_endpoint=``).
-Any other custom ``exporter=`` needs an explicit ``log_exporter=``; otherwise
-the logs pipeline is skipped.
+Compatibility
+-------------
+Up to 0.2.9 ``endpoint=`` was the full traces URL. An ``endpoint=`` whose
+path ends with ``/v1/traces`` is still accepted for one release: it emits a
+``DeprecationWarning`` and the ``/v1/traces`` suffix is removed to get the
+base, so traces go to the same URL as before and logs to ``/v1/logs`` next
+to it.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import warnings
+from dataclasses import dataclass
 from importlib.metadata import entry_points
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from opentelemetry import _logs, trace
 from opentelemetry.sdk._logs import LoggerProvider
@@ -108,15 +104,19 @@ from opentelemetry.sdk.trace.export import (
     SpanProcessor,
 )
 
-from opensearch_genai_observability_sdk_py._internal import (
-    derive_logs_endpoint,
-    set_agent_defaults,
-)
+from opensearch_genai_observability_sdk_py._internal import set_agent_defaults
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ENDPOINT = "http://localhost:21890/opentelemetry/v1/traces"
-DEFAULT_LOGS_ENDPOINT = "http://localhost:21890/opentelemetry/v1/logs"
+# Data Prepper ``otlp`` source: one base serves /v1/traces and /v1/logs.
+DEFAULT_BASE_ENDPOINT = "http://localhost:21890/opentelemetry"
+DEFAULT_ENDPOINT = DEFAULT_BASE_ENDPOINT + "/v1/traces"
+DEFAULT_LOGS_ENDPOINT = DEFAULT_BASE_ENDPOINT + "/v1/logs"
+
+Signal = Literal["traces", "logs"]
+
+_LEGACY_TRACES_SUFFIX = "/v1/traces"
+_SIGV4_KEYS = frozenset({"service", "region"})
 
 # Entry point group to discover instrumentors from.
 # OpenLLMetry + official OTel instrumentors register under this group.
@@ -125,9 +125,22 @@ _INSTRUMENTOR_GROUPS = [
 ]
 
 
+@dataclass(frozen=True)
+class _SignalTarget:
+    """Resolved destination of one OTLP signal."""
+
+    url: str
+    protocol: str  # "http" or "grpc"
+    # True if the URL came from configuration (a parameter or env var),
+    # False if it is the Data Prepper default.
+    configured: bool
+
+
 def register(
     *,
     endpoint: str | None = None,
+    traces_endpoint: str | None = None,
+    logs_endpoint: str | None = None,
     protocol: Literal["http", "grpc"] | None = None,
     project_name: str | None = None,
     service_name: str | None = None,
@@ -137,59 +150,48 @@ def register(
     exporter: SpanExporter | None = None,
     set_global: bool = True,
     headers: dict | None = None,
+    sigv4: bool | dict[str, str] | None = None,
     enable_logs: bool = True,
-    logs_endpoint: str | None = None,
     log_exporter: Any | None = None,
     agent_name: str | None = None,
     agent_version: str | None = None,
 ) -> TracerProvider:
-    """Configure the OTel tracing pipeline for OpenSearch.
+    """Configure the OTel tracing and evaluation-logs pipeline for OpenSearch.
 
     One-line setup that creates a TracerProvider, configures an OTLP
-    exporter, and auto-discovers installed instrumentor packages.
+    exporter, sets up a LoggerProvider for evaluation events, and
+    auto-discovers installed instrumentor packages.
 
-    Endpoint resolution (priority order):
+    Endpoint per signal (traces, logs), in priority order:
 
-    1. ``endpoint=`` parameter (full URL, used as-is)
-    2. ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` env var (full URL, used as-is)
-    3. ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var (base URL, ``/v1/traces`` appended)
-    4. ``http://localhost:21890/opentelemetry/v1/traces`` (Data Prepper default)
+    1. ``traces_endpoint=`` / ``logs_endpoint=`` (full URL, used as-is)
+    2. ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` / ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``
+       (full URL, used as-is)
+    3. The base (``endpoint=``, else ``OTEL_EXPORTER_OTLP_ENDPOINT``, else
+       ``http://localhost:21890/opentelemetry``) plus ``/v1/traces`` or
+       ``/v1/logs`` over HTTP, or the base as-is over gRPC
 
-    Protocol resolution (priority order):
+    Protocol per signal, in priority order:
 
-    1. ``protocol=`` parameter
-    2. ``OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`` env var
-    3. ``OTEL_EXPORTER_OTLP_PROTOCOL`` env var
-    4. Inferred from URL scheme (``grpc://`` / ``grpcs://`` → gRPC; else HTTP)
-
-    Supported protocols:
-
-        http:// or https:// → HTTP OTLP (protobuf)
-        grpc://             → gRPC (insecure)
-        grpcs://            → gRPC (TLS)
-
-    For endpoints that require authentication (e.g. AWS OSIS), pass a
-    custom exporter via the ``exporter=`` parameter:
-
-        from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
-
-        register(
-            exporter=AWSSigV4OTLPExporter(
-                endpoint="https://pipeline.us-east-1.osis.amazonaws.com/v1/traces",
-                service="osis",
-            )
-        )
+    1. ``protocol=``
+    2. ``OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`` / ``OTEL_EXPORTER_OTLP_LOGS_PROTOCOL``
+    3. ``OTEL_EXPORTER_OTLP_PROTOCOL``
+    4. Inferred from that signal's URL scheme (``grpc://`` / ``grpcs://`` is
+       gRPC, else HTTP)
 
     Args:
-        endpoint: OTLP endpoint URL (full URL, used as-is). When omitted,
-            resolved from OTel env vars or the Data Prepper default.
-            Ignored if ``exporter`` is provided.
-        protocol: Force ``"http"`` or ``"grpc"``. When omitted, resolved
-            from ``OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`` /
-            ``OTEL_EXPORTER_OTLP_PROTOCOL`` env vars, then inferred from
-            the URL scheme. Raises ``ValueError`` if it contradicts a
-            ``grpc://`` or ``grpcs://`` URL scheme.
-            Ignored if ``exporter`` is provided.
+        endpoint: Base OTLP URL for all signals, same meaning as
+            ``OTEL_EXPORTER_OTLP_ENDPOINT`` (for example
+            ``http://collector:4318`` or ``grpc://collector:4317``). A value
+            ending with ``/v1/traces`` (the 0.2.9 meaning) is deprecated: it
+            warns and the suffix is removed.
+        traces_endpoint: Full OTLP traces URL. Overrides the base for traces.
+        logs_endpoint: Full OTLP logs URL (evaluation events), for example
+            the OSIS logs pipeline. Overrides the base for logs.
+        protocol: Force ``"http"`` or ``"grpc"`` for both signals. When
+            omitted, resolved per signal from the env vars, then the URL
+            scheme. Raises ``ValueError`` if it contradicts a ``grpc://`` or
+            ``grpcs://`` URL.
         project_name: Project/service name attached to all spans.
             Defaults to ``OTEL_SERVICE_NAME`` or ``OPENSEARCH_PROJECT``
             env var, or ``"default"``.
@@ -197,35 +199,26 @@ def register(
         service_version: Version string for the service (e.g. ``"1.0.0"``).
             Sets the ``service.version`` resource attribute. When omitted,
             resolved from ``OTEL_SERVICE_VERSION`` env var.
-        batch: Use ``BatchSpanProcessor`` (``True``) or
-            ``SimpleSpanProcessor`` (``False``). Batch is recommended for
-            production.
+        batch: Use batch processors (``True``) or simple processors
+            (``False``). Batch is recommended for production.
         auto_instrument: Discover and activate installed instrumentor
             packages automatically.
-        exporter: Custom ``SpanExporter``. When provided,
-            ``endpoint`` / ``protocol`` / ``headers`` are ignored — the
-            exporter is used as-is. Use this to plug in authenticated
-            exporters such as ``AWSSigV4OTLPExporter``.
+        exporter: Custom traces ``SpanExporter``, used as-is. The traces
+            endpoint, protocol, headers and ``sigv4`` do not apply to it.
         set_global: Set as the global ``TracerProvider`` (default: ``True``).
-        headers: Additional HTTP headers for the default OTLP exporter.
-            Also sent by the default OTLP log exporter.
-            Ignored if ``exporter`` is provided.
+        headers: Additional headers for the OTLP exporters register() builds
+            (both signals).
+        sigv4: Sign the exporters register() builds with AWS SigV4.
+            ``True`` uses service ``"osis"`` and the botocore region; a dict
+            may set ``"service"`` (``"osis"`` or ``"es"``) and ``"region"``.
+            HTTP only.
         enable_logs: Also configure a ``LoggerProvider`` (OTLP logs) so that
             evaluation events are exported (default: ``True``).
             Only done when ``set_global`` is ``True`` and no global
             ``LoggerProvider`` is configured yet; an existing one is reused
             as-is.
-        logs_endpoint: OTLP logs endpoint (full URL), for example
-            ``http://localhost:4318/v1/logs`` or the OSIS logs pipeline URL.
-            When omitted: ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``, else derived
-            from an explicit traces endpoint ending with ``/v1/traces``
-            (same base, ``/v1/logs``), else ``OTEL_EXPORTER_OTLP_ENDPOINT``
-            + ``/v1/logs``. If an explicit traces endpoint has another path,
-            a warning is logged and logs are skipped. Also used for the
-            SigV4 log exporter. Ignored if ``log_exporter`` is provided.
-        log_exporter: Custom ``LogRecordExporter``. Required to export logs
-            when a custom ``exporter`` other than ``AWSSigV4OTLPExporter``
-            is passed.
+        log_exporter: Custom ``LogRecordExporter``, used as-is. The logs
+            endpoint, protocol, headers and ``sigv4`` do not apply to it.
         agent_name: Name of the agent this process evaluates. Stamped as
             ``gen_ai.agent.name`` on every evaluation result event the SDK
             emits, unless a call names its own agent or the evaluated span
@@ -240,39 +233,30 @@ def register(
         ``register()`` created.
 
     Raises:
-        ValueError: If ``protocol`` contradicts the URL scheme, or if an
-            unsupported protocol value is specified.
+        ValueError: If a protocol contradicts its URL scheme, a protocol
+            value is unsupported, ``sigv4`` is used with gRPC, or ``sigv4``
+            has unknown keys.
 
     Examples:
-        # Self-hosted Data Prepper — zero config
+        # Self-hosted Data Prepper: zero config
         register()
 
-        # OTel Collector via env var (standard OTel behaviour)
-        # OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-        register()
+        # OTel Collector serving traces and logs (or OTEL_EXPORTER_OTLP_ENDPOINT)
+        register(endpoint="http://collector:4318")
 
-        # Explicit endpoints (traces and evaluation logs)
+        # gRPC: the same host:port for both signals
+        register(endpoint="grpc://collector:4317")
+
+        # AWS OSIS with SigV4 signing: one pipeline per signal
         register(
-            endpoint="http://my-collector:4318/v1/traces",
-            logs_endpoint="http://my-collector:4318/v1/logs",
-        )
-
-        # gRPC via URL scheme
-        register(endpoint="grpc://localhost:4317")
-
-        # AWS OSIS with SigV4 signing (HTTP only): one pipeline per signal
-        from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
-        register(
-            exporter=AWSSigV4OTLPExporter(
-                endpoint="https://traces-pipe.us-east-1.osis.amazonaws.com/v1/traces",
-                service="osis",
-            ),
+            traces_endpoint="https://traces-pipe.us-east-1.osis.amazonaws.com/v1/traces",
             logs_endpoint="https://logs-pipe.us-east-1.osis.amazonaws.com/v1/logs",
+            sigv4={"service": "osis", "region": "us-east-1"},
         )
     """
     set_agent_defaults(agent_name, agent_version)
-    resolved_endpoint = _resolve_endpoint(endpoint)
-    resolved_protocol = _resolve_protocol(protocol)
+    base = _base_from_legacy_endpoint(endpoint)
+    sigv4_opts = _sigv4_options(sigv4)
 
     name = (
         service_name
@@ -293,12 +277,11 @@ def register(
 
     # Step 3: Create Exporter
     custom_exporter = exporter is not None
+    traces_url = "custom exporter"
     if exporter is None:
-        exporter = _create_exporter(
-            endpoint=resolved_endpoint,
-            protocol=resolved_protocol,
-            headers=headers,
-        )
+        target = _resolve_signal("traces", traces_endpoint, base, protocol)
+        traces_url = target.url
+        exporter = _create_exporter(target, headers, sigv4_opts)
 
     # Step 4: Create Processor and wire up
     processor: SpanProcessor
@@ -312,17 +295,18 @@ def register(
     if set_global:
         trace.set_tracer_provider(provider)
 
-    # Step 6: Logs pipeline for evaluation events (score())
+    # Step 6: Logs pipeline for evaluation events (score(), Benchmark, evaluate())
     if enable_logs and set_global:
         _setup_logs(
             provider=provider,
             resource=resource,
             batch=batch,
-            span_exporter=exporter if custom_exporter else None,
-            endpoint=endpoint,
+            custom_exporter=custom_exporter,
+            base=base,
             logs_endpoint=logs_endpoint,
             protocol=protocol,
             headers=headers,
+            sigv4=sigv4_opts,
             log_exporter=log_exporter,
         )
 
@@ -332,99 +316,86 @@ def register(
 
     logger.info(
         "OpenSearch AI tracing initialized: endpoint=%s project=%s",
-        resolved_endpoint,
+        traces_url,
         name,
     )
 
     return provider
 
 
-def _resolve_endpoint(endpoint: str | None) -> str:
-    """Resolve the OTLP endpoint following OTel env var priority.
-
-    Priority:
-    1. ``endpoint`` argument (full URL)
-    2. ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` (full URL, used as-is)
-    3. ``OTEL_EXPORTER_OTLP_ENDPOINT`` (base URL, ``/v1/traces`` appended)
-    4. Data Prepper default
-    """
-    if endpoint:
-        return endpoint
-
-    traces_ep = os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
-    if traces_ep:
-        return traces_ep
-
-    base_ep = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if base_ep:
-        return base_ep.rstrip("/") + "/v1/traces"
-
-    return DEFAULT_ENDPOINT
-
-
-def _warn_logs_skipped(reason: str) -> None:
-    logger.warning(
-        "register(): %s, so evaluation events will not be exported. Pass logs_endpoint= "
-        "(for example http://localhost:4318/v1/logs or the OSIS logs pipeline URL) or set "
-        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT.",
-        reason,
-    )
-
-
-def _logs_from_traces(traces_endpoint: str, source: str) -> str | None:
-    """The logs URL for an explicit traces URL (the only derivation), or ``None``."""
-    derived = derive_logs_endpoint(traces_endpoint)
-    if derived is None:
-        _warn_logs_skipped(
-            f"cannot derive an OTLP logs endpoint from {source} '{traces_endpoint}' "
-            "(only a path ending with /v1/traces maps to /v1/logs)"
-        )
-    return derived
-
-
-def _resolve_logs_endpoint(
-    endpoint: str | None,
-    logs_endpoint: str | None,
-    protocol: str | None = None,
-) -> str | None:
-    """Resolve the OTLP logs endpoint (see module docstring for priority).
-
-    ``endpoint`` is the explicit traces endpoint (``endpoint=`` or the SigV4
-    exporter's URL). Returns ``None`` (after a warning) when logs are skipped.
-    """
-    if logs_endpoint:
-        return logs_endpoint
-
-    logs_ep = os.environ.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
-    if logs_ep:
-        return logs_ep
-
-    if _infer_protocol(_resolve_endpoint(endpoint), protocol) == "grpc":
-        _warn_logs_skipped("traces are exported over gRPC and no logs endpoint is configured")
+def _base_from_legacy_endpoint(endpoint: str | None) -> str | None:
+    """Accept the 0.2.9 meaning of ``endpoint=`` (full traces URL) for one release."""
+    if not endpoint:
         return None
+    parsed = urlparse(endpoint)
+    path = parsed.path.rstrip("/")
+    if not path.endswith(_LEGACY_TRACES_SUFFIX):
+        return endpoint
+    base = urlunparse(parsed._replace(path=path[: -len(_LEGACY_TRACES_SUFFIX)]))
+    warnings.warn(
+        f"register(endpoint='{endpoint}'): endpoint= is now the base URL for all signals "
+        f"(like OTEL_EXPORTER_OTLP_ENDPOINT). Pass endpoint='{base}', or "
+        "traces_endpoint= for a full traces URL. The /v1/traces suffix is removed for now; "
+        "this will stop working in a future release.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    return base
 
-    if endpoint:
-        return _logs_from_traces(endpoint, "traces endpoint")
 
-    base_ep = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if base_ep:
-        return base_ep.rstrip("/") + "/v1/logs"
+def _sigv4_options(sigv4: bool | dict[str, str] | None) -> dict[str, str] | None:
+    """Normalize ``sigv4=`` to exporter keyword arguments, or ``None`` for unsigned."""
+    if sigv4 is None or sigv4 is False:
+        return None
+    if sigv4 is True:
+        return {}
+    if not isinstance(sigv4, dict):
+        raise ValueError("sigv4= must be True or a dict with 'service' and/or 'region'.")
+    unknown = set(sigv4) - _SIGV4_KEYS
+    if unknown:
+        raise ValueError(
+            f"Unknown sigv4= keys {sorted(unknown)}. Supported keys: 'service', 'region'."
+        )
+    return {k: str(v) for k, v in sigv4.items() if v}
 
-    traces_ep = os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
-    if traces_ep:
-        return _logs_from_traces(traces_ep, "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
 
-    return DEFAULT_LOGS_ENDPOINT
-
-
-def _resolve_logs_protocol(protocol: str | None) -> str | None:
-    """Resolve the OTLP logs protocol from code param or env vars."""
+def _signal_protocol(signal: Signal, protocol: str | None) -> str | None:
+    """The configured protocol for one signal (not yet checked against a URL)."""
     if protocol is not None:
         return protocol
-
-    return os.environ.get("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL") or os.environ.get(
+    return os.environ.get(f"OTEL_EXPORTER_OTLP_{signal.upper()}_PROTOCOL") or os.environ.get(
         "OTEL_EXPORTER_OTLP_PROTOCOL"
     )
+
+
+def _resolve_signal(
+    signal: Signal,
+    signal_endpoint: str | None,
+    base: str | None,
+    protocol: str | None,
+) -> _SignalTarget:
+    """Resolve one signal's URL and protocol (see the module docstring).
+
+    Args:
+        signal: ``"traces"`` or ``"logs"``.
+        signal_endpoint: The ``<signal>_endpoint=`` parameter (full URL).
+        base: The ``endpoint=`` parameter (base URL), already de-legacied.
+        protocol: The ``protocol=`` parameter.
+    """
+    configured_protocol = _signal_protocol(signal, protocol)
+
+    full = signal_endpoint or os.environ.get(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT")
+    if full:
+        return _SignalTarget(full, _infer_protocol(full, configured_protocol), True)
+
+    configured_base = base or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    resolved_base = configured_base or DEFAULT_BASE_ENDPOINT
+    resolved_protocol = _infer_protocol(resolved_base, configured_protocol)
+    if resolved_protocol == "grpc":
+        url = resolved_base
+    else:
+        url = resolved_base.rstrip("/") + f"/v1/{signal}"
+    return _SignalTarget(url, resolved_protocol, bool(configured_base))
 
 
 def _global_logger_provider_is_set() -> bool:
@@ -460,14 +431,15 @@ def _setup_logs(
     provider: TracerProvider,
     resource: Resource,
     batch: bool,
-    span_exporter: SpanExporter | None,
-    endpoint: str | None,
+    custom_exporter: bool,
+    base: str | None,
     logs_endpoint: str | None,
     protocol: str | None,
     headers: dict | None,
+    sigv4: dict[str, str] | None,
     log_exporter: Any | None,
 ) -> LoggerProvider | None:
-    """Create and install the global LoggerProvider used by ``score()``."""
+    """Create and install the global LoggerProvider used for evaluation events."""
     if _global_logger_provider_is_set():
         logger.info(
             "A global LoggerProvider is already configured; evaluation events use it as-is."
@@ -475,19 +447,20 @@ def _setup_logs(
         return None
 
     if log_exporter is None:
-        logs_protocol = _resolve_logs_protocol(protocol)
-        if span_exporter is not None:
-            log_exporter = _log_exporter_for_custom(span_exporter, logs_endpoint)
-            if log_exporter is None:
-                return None
-        else:
-            resolved = _resolve_logs_endpoint(endpoint, logs_endpoint, logs_protocol)
-            if resolved is None:
-                return None
-            log_exporter = _create_log_exporter(
-                endpoint=resolved, protocol=logs_protocol, headers=headers
+        target = _resolve_signal("logs", logs_endpoint, base, protocol)
+        if custom_exporter and not target.configured:
+            logger.warning(
+                "register(): a custom exporter= was passed and no logs destination is "
+                "configured, so evaluation events will not be exported. Pass log_exporter=, "
+                "logs_endpoint= or endpoint=, or set OTEL_EXPORTER_OTLP_LOGS_ENDPOINT."
             )
-            logger.info("OpenSearch AI evaluation events: logs endpoint=%s", resolved)
+            return None
+        log_exporter = _create_log_exporter(target, headers, sigv4)
+        logger.info(
+            "OpenSearch AI evaluation events: logs endpoint=%s%s",
+            target.url,
+            " (SigV4)" if sigv4 is not None else "",
+        )
 
     logger_provider = LoggerProvider(resource=resource, shutdown_on_exit=False)
     if batch:
@@ -500,65 +473,42 @@ def _setup_logs(
     return logger_provider
 
 
-def _log_exporter_for_custom(span_exporter: SpanExporter, logs_endpoint: str | None) -> Any | None:
-    """Build a log exporter matching a custom span exporter, if we know how."""
-    from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
-
-    if not isinstance(span_exporter, AWSSigV4OTLPExporter):
-        logger.warning(
-            "register(): custom exporter %s has no matching log exporter; "
-            "evaluation events will not be exported. Pass log_exporter= to enable them.",
-            type(span_exporter).__name__,
+def _require_http_for_sigv4(target: _SignalTarget, signal: Signal) -> None:
+    if target.protocol == "grpc":
+        raise ValueError(
+            f"sigv4= signs HTTP requests only, but the {signal} endpoint '{target.url}' "
+            "resolved to gRPC. Use an https:// endpoint (AWS OSIS has no gRPC endpoint)."
         )
-        return None
-
-    # SigV4 exporters are HTTP-only, so no protocol is passed.
-    resolved = _resolve_logs_endpoint(span_exporter.endpoint, logs_endpoint)
-    if resolved is None:
-        return None
-    if not logs_endpoint and not os.environ.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"):
-        logger.info(
-            "register(): SigV4 logs endpoint derived from the traces pipeline: %s. "
-            "AWS OSIS needs a logs pipeline; pass its URL as logs_endpoint= if the "
-            "traces pipeline does not accept /v1/logs.",
-            resolved,
-        )
-    logger.info("OpenSearch AI evaluation events: logs endpoint=%s (SigV4)", resolved)
-    return span_exporter.create_log_exporter(endpoint=resolved)
 
 
-def _create_log_exporter(endpoint: str, protocol: str | None, headers: dict | None) -> Any:
-    """Create a plain OTLP log exporter based on protocol and endpoint."""
-    if _infer_protocol(endpoint, protocol) == "grpc":
+def _grpc_target(url: str) -> tuple[str, bool]:
+    """``(host:port, insecure)`` for a gRPC exporter from a URL."""
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    return parsed.netloc or url, scheme not in ("grpcs", "https")
+
+
+def _create_log_exporter(
+    target: _SignalTarget, headers: dict | None, sigv4: dict[str, str] | None = None
+) -> Any:
+    """Create the OTLP log exporter for a resolved logs target."""
+    if sigv4 is not None:
+        _require_http_for_sigv4(target, "logs")
+        from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPLogExporter
+
+        return AWSSigV4OTLPLogExporter(endpoint=target.url, headers=headers, **sigv4)
+
+    if target.protocol == "grpc":
         from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
             OTLPLogExporter as GRPCLogExporter,
         )
 
-        parsed = urlparse(endpoint)
-        scheme = parsed.scheme.lower()
-        insecure = scheme != "grpcs" and scheme != "https"
-        return GRPCLogExporter(
-            endpoint=parsed.netloc or endpoint, insecure=insecure, headers=headers
-        )
+        grpc_endpoint, insecure = _grpc_target(target.url)
+        return GRPCLogExporter(endpoint=grpc_endpoint, insecure=insecure, headers=headers)
 
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
-    return OTLPLogExporter(endpoint=endpoint, headers=headers)
-
-
-def _resolve_protocol(protocol: str | None) -> str | None:
-    """Resolve the OTLP protocol from code param or env vars.
-
-    Returns the raw value (not yet normalised to 'http'/'grpc') so that
-    ``_infer_protocol`` can apply it together with the URL scheme.
-    Returns ``None`` if nothing is configured (infer from URL scheme).
-    """
-    if protocol is not None:
-        return protocol
-
-    return os.environ.get("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") or os.environ.get(
-        "OTEL_EXPORTER_OTLP_PROTOCOL"
-    )
+    return OTLPLogExporter(endpoint=target.url, headers=headers)
 
 
 def _normalize_protocol(value: str) -> str:
@@ -584,7 +534,7 @@ def _infer_protocol(endpoint: str, protocol: str | None) -> str:
     """Determine the OTLP transport protocol from explicit setting or URL scheme.
 
     Args:
-        endpoint: The full endpoint URL.
+        endpoint: The endpoint URL.
         protocol: Explicit protocol override (``'http'``, ``'grpc'``,
             ``'http/protobuf'``, etc.) or ``None`` to infer from URL.
 
@@ -603,9 +553,9 @@ def _infer_protocol(endpoint: str, protocol: str | None) -> str:
         resolved = _normalize_protocol(protocol)
         if url_implies_grpc and resolved == "http":
             raise ValueError(
-                f"Conflicting protocol: endpoint scheme '{scheme}://' implies gRPC "
-                f"but protocol='{protocol}' was specified. "
-                f"Either use protocol='grpc' or change the endpoint scheme to "
+                f"Conflicting protocol: endpoint '{endpoint}' (scheme '{scheme}://') implies "
+                f"gRPC but protocol '{protocol}' was specified. "
+                f"Either use protocol 'grpc' or change the endpoint scheme to "
                 f"'http://' or 'https://'."
             )
         return resolved
@@ -617,17 +567,20 @@ def _infer_protocol(endpoint: str, protocol: str | None) -> str:
 
 
 def _create_exporter(
-    endpoint: str,
-    protocol: str | None,
-    headers: dict | None,
+    target: _SignalTarget, headers: dict | None, sigv4: dict[str, str] | None = None
 ) -> SpanExporter:
-    """Create a plain OTLP exporter based on protocol and endpoint."""
-    resolved_protocol = _infer_protocol(endpoint, protocol)
+    """Create the OTLP span exporter for a resolved traces target."""
+    if sigv4 is not None:
+        _require_http_for_sigv4(target, "traces")
+        from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
 
-    if resolved_protocol == "grpc":
-        return _create_grpc_exporter(endpoint, headers)
+        signed: SpanExporter = AWSSigV4OTLPExporter(endpoint=target.url, headers=headers, **sigv4)
+        return signed
 
-    return _create_http_exporter(endpoint, headers)
+    if target.protocol == "grpc":
+        return _create_grpc_exporter(target.url, headers)
+
+    return _create_http_exporter(target.url, headers)
 
 
 def _create_http_exporter(
@@ -650,12 +603,8 @@ def _create_grpc_exporter(
         OTLPSpanExporter as GRPCSpanExporter,
     )
 
-    parsed = urlparse(endpoint)
-    scheme = parsed.scheme.lower()
-
     # gRPC exporter takes host:port, not a full URL
-    grpc_endpoint = parsed.netloc or endpoint
-    insecure = scheme != "grpcs" and scheme != "https"
+    grpc_endpoint, insecure = _grpc_target(endpoint)
 
     logger.info("Using gRPC exporter: %s (insecure=%s)", grpc_endpoint, insecure)
     exporter: SpanExporter = GRPCSpanExporter(

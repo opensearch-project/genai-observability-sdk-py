@@ -13,7 +13,7 @@ The suite is a Python callable (``module:function`` or ``path/to/file.py:functio
 that takes no arguments, calls ``evaluate()`` (or uses ``Benchmark``) and
 returns the ``BenchmarkResult`` (or a list of them). This script:
 
-1. calls ``register()`` with the traces and logs endpoints (optionally SigV4),
+1. calls ``register()`` with the OTLP endpoints (optionally SigV4),
 2. runs the suite and flushes traces and evaluation events,
 3. prints a summary and appends it to ``$GITHUB_STEP_SUMMARY``: a link to the
    run in OpenSearch Dashboards plus a table of per-evaluator means and
@@ -26,8 +26,7 @@ composite action), so the script runs the same way locally::
 
     python examples/github-action/run_suite.py \\
         --suite examples/github-action/sample_suite.py:suite \\
-        --traces-endpoint http://localhost:4318/v1/traces \\
-        --logs-endpoint http://localhost:4318/v1/logs \\
+        --endpoint http://localhost:4318 \\
         --service-name my-agent-ci \\
         --dashboards-url http://localhost:5601 \\
         --fail-on-regression "exact_match=0.5"
@@ -72,6 +71,9 @@ def _env(name: str, default: str = "") -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--suite", default=_env("EVAL_SUITE"), help="module:function or file.py:fn")
+    p.add_argument(
+        "--endpoint", default=_env("EVAL_ENDPOINT"), help="OTLP base URL for traces and logs"
+    )
     p.add_argument("--traces-endpoint", default=_env("EVAL_TRACES_ENDPOINT"))
     p.add_argument("--logs-endpoint", default=_env("EVAL_LOGS_ENDPOINT"))
     p.add_argument("--aws-region", default=_env("EVAL_AWS_REGION"), help="enables SigV4")
@@ -136,24 +138,19 @@ def load_suite(spec: str) -> Callable[[], Any]:
 
 
 def setup_telemetry(args: argparse.Namespace) -> Any:
-    """Call ``register()`` with explicit traces and logs endpoints."""
+    """Call ``register()`` with the base and per-signal endpoints (optionally SigV4)."""
     from opensearch_genai_observability_sdk_py import register
 
-    common: dict[str, Any] = {
+    kwargs: dict[str, Any] = {
         "service_name": args.service_name,
+        "endpoint": args.endpoint or None,
+        "traces_endpoint": args.traces_endpoint or None,
         "logs_endpoint": args.logs_endpoint or None,
         "batch": True,
     }
     if args.aws_region:
-        from opensearch_genai_observability_sdk_py import AWSSigV4OTLPExporter
-
-        if not args.traces_endpoint:
-            raise ValueError("--traces-endpoint is required with SigV4 (--aws-region)")
-        exporter = AWSSigV4OTLPExporter(
-            endpoint=args.traces_endpoint, service=args.aws_service, region=args.aws_region
-        )
-        return register(exporter=exporter, **common)
-    return register(endpoint=args.traces_endpoint or None, **common)
+        kwargs["sigv4"] = {"service": args.aws_service, "region": args.aws_region}
+    return register(**kwargs)
 
 
 # ---------------------------------------------------------------------------
