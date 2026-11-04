@@ -35,13 +35,16 @@ Dashboards derive the result source from the scope name.
 Verdicts: readers show pass/fail only for a declared rule, otherwise the
 result is neutral ("Scored"). Declare it with ``label="pass"`` / ``"fail"``
 (``gen_ai.evaluation.score.label``, OTel's own examples) or with
-``threshold`` (+ ``direction``): with no label, the SDK writes the verdict
-the threshold gives as the label (see ``threshold_verdict``).
+``threshold`` (+ ``direction``). See ``resolve_verdict`` for the rule: the
+verdict always takes ``gen_ai.evaluation.score.label`` (lowercase ``pass`` /
+``fail``), and a non-verdict label moves to
+``opensearch.gen_ai.evaluation.judge_label``.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -81,6 +84,9 @@ EVAL_SCORE_MIN_KEY = "opensearch.gen_ai.evaluation.score.min"
 EVAL_SCORE_MAX_KEY = "opensearch.gen_ai.evaluation.score.max"
 EVAL_SCORE_THRESHOLD_KEY = "opensearch.gen_ai.evaluation.score.threshold"
 EVAL_JUDGE_TRACE_ID_KEY = "opensearch.gen_ai.evaluation.judge.trace_id"
+# A non-verdict label (for example "relevant") when the result also has a
+# verdict: the verdict takes gen_ai.evaluation.score.label.
+EVAL_JUDGE_LABEL_KEY = "opensearch.gen_ai.evaluation.judge_label"
 
 _VALID_LEVELS = ("span", "trace", "session", "tool_call")
 _VALID_EVALUATOR_TYPES = ("llm_judge", "code", "human", "external")
@@ -168,11 +174,15 @@ def score(
       ``.judge.trace_id``.
 
     Verdict: ``gen_ai.evaluation.score.label`` = ``pass`` / ``fail``. Pass it
-    as ``label``. Otherwise, when both ``value`` and ``threshold`` are given
-    and no ``label`` is, the SDK writes it: ``pass`` if ``value >= threshold``
-    (``direction="maximize"``, the default with a threshold) or
-    ``value <= threshold`` (``direction="minimize"``), else ``fail``. With
-    neither, no verdict is recorded and readers show the result as neutral.
+    as ``label`` (any case; stored lowercase). Otherwise, when both ``value``
+    and ``threshold`` are given, the SDK computes it: ``pass`` if
+    ``value >= threshold`` (``direction="maximize"``, the default with a
+    threshold) or ``value <= threshold`` (``direction="minimize"``), else
+    ``fail``. A ``pass`` / ``fail`` label wins over the threshold. When
+    there is a verdict, a non-verdict ``label`` (for example ``"relevant"``)
+    is kept in ``opensearch.gen_ai.evaluation.judge_label``. A replaced label
+    or a disagreement logs one warning per evaluation name. With no verdict,
+    the label is stored as-is and readers show the result as neutral.
 
     Args:
         name: Evaluation metric name (e.g., ``"relevance"``, ``"factuality"``).
@@ -181,7 +191,9 @@ def score(
         span_id: Hex span ID of the evaluated span. Without it the result is
             trace-level (no span id is ever derived from the trace id).
         label: Low-cardinality label (e.g., ``"relevant"``). ``"pass"`` /
-            ``"fail"`` is the verdict.
+            ``"fail"`` (any case) is the verdict. A non-verdict label moves to
+            ``opensearch.gen_ai.evaluation.judge_label`` when ``threshold``
+            gives a verdict.
         explanation: Evaluator rationale. Kept whole up to
             ``EXPLANATION_MAX_CHARS`` (8192) characters.
         response_id: Completion ID of the evaluated LLM response.
@@ -322,6 +334,7 @@ def build_evaluation_attributes(
     judge_trace_id: str | None = None,
     target_trace_id: str | None = None,
     threshold: float | None = None,
+    passed: bool | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the ``gen_ai.evaluation.result`` attribute map (only set keys).
@@ -334,17 +347,24 @@ def build_evaluation_attributes(
     _check_enum("direction", direction, _VALID_DIRECTIONS)
     if threshold is not None and direction is None:
         direction = "maximize"
-    verdict = threshold_verdict(value, threshold=threshold, direction=direction)
+    verdict, conflicts = resolve_verdict(
+        label=label, passed=passed, value=value, threshold=threshold, direction=direction
+    )
+    judge_label = label if verdict and label and label_verdict(label) is None else None
+    if conflicts or judge_label:
+        _warn_label_once(name, verdict, judge_label, conflicts)
 
     attrs: dict[str, Any] = {"gen_ai.evaluation.name": name}
     if value is not None:
         attrs["gen_ai.evaluation.score.value"] = float(value)
-    # The verdict is the label (OTel examples "pass" / "fail"). A label the caller set
-    # wins; without one, the verdict the threshold gives is written as the label.
-    if label:
-        attrs["gen_ai.evaluation.score.label"] = label
-    elif verdict:
+    # The verdict takes the label (OTel examples "pass" / "fail"); a judge's
+    # non-verdict label is kept next to it instead of being lost.
+    if verdict:
         attrs["gen_ai.evaluation.score.label"] = verdict
+        if judge_label:
+            attrs[EVAL_JUDGE_LABEL_KEY] = judge_label
+    elif label:
+        attrs["gen_ai.evaluation.score.label"] = label
     if explanation:
         attrs["gen_ai.evaluation.explanation"] = _truncate(explanation, EXPLANATION_MAX_CHARS)
     if response_id:
@@ -384,6 +404,70 @@ def label_verdict(label: str | None) -> str | None:
         return None
     normalized = label.strip().lower()
     return normalized if normalized in VALID_VERDICTS else None
+
+
+# Evaluation names already warned about a label the verdict replaced or
+# overrode: one warning per name per process, not one per result.
+_label_warned: set[str] = set()
+_label_warned_lock = threading.Lock()
+
+
+def _warn_label_once(
+    name: str,
+    verdict: str | None,
+    judge_label: str | None,
+    conflicts: list[tuple[str, str]],
+) -> None:
+    with _label_warned_lock:
+        if name in _label_warned:
+            return
+        _label_warned.add(name)
+    reasons = []
+    if judge_label:
+        reasons.append(
+            f"label {judge_label!r} is not a verdict and is kept as {EVAL_JUDGE_LABEL_KEY}"
+        )
+    if conflicts:
+        reasons.append("conflicts with " + ", ".join(f"{source} ({v})" for source, v in conflicts))
+    logger.warning(
+        "evaluation %r: recording verdict %r as gen_ai.evaluation.score.label; %s. "
+        "A pass/fail label wins over passed=, which wins over the threshold. "
+        "Warned once per evaluation name.",
+        name,
+        verdict,
+        "; ".join(reasons),
+    )
+
+
+def resolve_verdict(
+    *,
+    label: str | None = None,
+    passed: bool | None = None,
+    value: float | None = None,
+    threshold: float | None = None,
+    direction: str | None = None,
+) -> tuple[str | None, list[tuple[str, str]]]:
+    """The verdict of a result and the verdict sources that disagree with it.
+
+    Sources, highest precedence first: a ``pass`` / ``fail`` ``label`` (any
+    case), ``passed``, then the ``threshold`` rule (see ``threshold_verdict``).
+    The first source that gives a verdict wins; the others that give a
+    different one are returned as ``(source, verdict)`` so callers can warn.
+    ``(None, [])`` when no source gives a verdict.
+
+    The same function decides the stored label and the local case status, so
+    the event and ``TestCaseResult.status`` always agree.
+    """
+    sources = (
+        ("label", label_verdict(label)),
+        ("passed", None if passed is None else ("pass" if passed else "fail")),
+        ("threshold", threshold_verdict(value, threshold=threshold, direction=direction)),
+    )
+    declared = [(source, v) for source, v in sources if v is not None]
+    if not declared:
+        return None, []
+    verdict = declared[0][1]
+    return verdict, [(source, v) for source, v in declared[1:] if v != verdict]
 
 
 def threshold_verdict(

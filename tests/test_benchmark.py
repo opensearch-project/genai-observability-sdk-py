@@ -1107,6 +1107,54 @@ class TestScorerErrorGradeName:
         assert list(_grades(events)) == ["quality"]
 
 
+JUDGE_LABEL = "opensearch.gen_ai.evaluation.judge_label"
+
+
+class TestLabelVerdictRule:
+    """The stored label always agrees with TestCaseResult.status."""
+
+    def _log(self, *scores):
+        with Benchmark(name="label-rule") as b:
+            b.log(input="q", case_id="c", scores=list(scores))
+        return b._cases[0]
+
+    def test_judge_label_with_failing_passed(self, events):
+        case = self._log(EvalScore(name="rel", value=0.4, label="relevant", passed=False))
+        a = _grades(events)["rel"].log_record.attributes
+        assert (a[LABEL], a[JUDGE_LABEL]) == ("fail", "relevant")
+        assert case.status == "fail" and case.verdicts == {"rel": "fail"}
+
+    def test_judge_label_with_failing_threshold(self, events):
+        case = self._log(EvalScore(name="q", value=2.0, label="partially_correct", threshold=4))
+        a = _grades(events)["q"].log_record.attributes
+        assert (a[LABEL], a[JUDGE_LABEL]) == ("fail", "partially_correct")
+        assert case.status == "fail"
+
+    def test_uppercase_verdict_label_stored_lowercase(self, events):
+        case = self._log(EvalScore(name="ok", value=1.0, label="PASS"))
+        a = _grades(events)["ok"].log_record.attributes
+        assert a[LABEL] == "pass"
+        assert JUDGE_LABEL not in a
+        assert case.status == "pass"
+
+    def test_conflicting_verdicts_warn_and_label_wins(self, events, caplog):
+        case = self._log(EvalScore(name="x", value=0.0, label="pass", passed=False, threshold=1))
+        a = _grades(events)["x"].log_record.attributes
+        assert a[LABEL] == "pass"
+        assert case.status == "pass"
+        assert "conflicts with passed (fail), threshold (fail)" in caplog.text
+
+    def test_evaluate_status_matches_stored_label(self, events):
+        @scorer(name="rel", threshold=0.5)
+        def rel(i, o, e):
+            return EvalScore(name="rel", value=0.2, label="relevant")
+
+        result = evaluate(name="lr", task=lambda x: x, data=[{"input": "q"}], scores=[rel])
+        a = _grades(events)["rel"].log_record.attributes
+        assert a[LABEL] == "fail" == result.cases[0].verdicts["rel"]
+        assert result.cases[0].status == "fail"
+
+
 class TestBenchmarkVerdicts:
     def test_eval_score_list_with_verdicts(self, events):
         with Benchmark(name="bench-verdicts") as b:

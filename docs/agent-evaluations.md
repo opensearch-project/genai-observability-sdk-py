@@ -24,7 +24,7 @@ Attributes (each is set only when it has a value):
 |---|---|---|---|
 | `gen_ai.evaluation.name` | OTel | all | Metric name, for example `relevance` |
 | `gen_ai.evaluation.score.value` | OTel | all | Numeric score |
-| `gen_ai.evaluation.score.label` | OTel | all | Label. `pass` / `fail` is the verdict |
+| `gen_ai.evaluation.score.label` | OTel | all | Label. `pass` / `fail` (lowercase) is the verdict; when a result has a verdict, it is always the verdict |
 | `gen_ai.evaluation.explanation` | OTel | all | Evaluator rationale, up to 8192 characters |
 | `error.type` | OTel | all | The evaluator or the task failed; no value or label |
 | `gen_ai.agent.name` | OTel | all | Agent under evaluation |
@@ -47,6 +47,7 @@ Attributes (each is set only when it has a value):
 | `opensearch.gen_ai.evaluation.score.threshold` | OpenSearch | all | Pass threshold |
 | `opensearch.gen_ai.evaluation.score.direction` | OpenSearch | all | `maximize` or `minimize` |
 | `opensearch.gen_ai.evaluation.judge.trace_id` | OpenSearch | all | Trace of the judge's own run |
+| `opensearch.gen_ai.evaluation.judge_label` | OpenSearch | all | The evaluator's own non-verdict label (for example `relevant`) when the result also has a verdict |
 | `opensearch.test.case.expected` | OpenSearch | offline | Expected output of the case, up to 4096 characters |
 | `opensearch.test.case.expected_truncated` | OpenSearch | offline | `true` when the expected output was cut |
 
@@ -147,11 +148,20 @@ from opensearch_genai_observability_sdk_py import score
 score("answer_quality", 3.0, threshold=4, score_min=1, score_max=5)  # label = fail
 score("latency_s", 9.2, threshold=12, direction="minimize")  # label = pass
 
-# 2. The judge's own label. A label you pass wins over the threshold.
+# 2. The judge's own verdict. A pass / fail label wins over the threshold.
 score("faithfulness", 0.4, label="fail", explanation="Claims a hotel the tool did not return")
+
+# 3. A judge category plus a rule: the verdict takes the label, the category is kept.
+score("relevance", 2.0, label="partially_relevant", threshold=4)
+# label = fail, opensearch.gen_ai.evaluation.judge_label = partially_relevant
 ```
 
-A result with neither a `pass` / `fail` label nor a threshold is neutral: Dashboards shows it as "Scored". Other labels (for example `relevant`) are kept as-is and are not verdicts.
+The rule, the same for `score()`, `evaluate()` and `Benchmark.log()`:
+
+1. The verdict comes from the first source that gives one: a `pass` / `fail` `label` (any case), then `EvalScore.passed`, then `threshold` + `direction`.
+2. The verdict is stored in `gen_ai.evaluation.score.label` as lowercase `pass` / `fail`. `TestCaseResult.status` uses the same verdict, so the stored event and the local result always agree.
+3. A label that is not a verdict (for example `relevant`) moves to `opensearch.gen_ai.evaluation.judge_label` when the result has a verdict. Without a verdict it stays in `gen_ai.evaluation.score.label` and the result is neutral: Dashboards shows it as "Scored".
+4. If two sources give different verdicts (for example `label="pass"` with `passed=False`), the SDK records the winning one. When the verdict replaces a non-verdict label or overrides another source, the SDK logs a warning, once per evaluation name.
 
 ### Scales and evaluators
 
@@ -608,6 +618,7 @@ Used by the `template_file` in (a) and the `PUT _index_template/otel-v1-genai-ev
                           }
                         },
                         "level": {"type": "keyword"},
+                        "judge_label": {"type": "keyword"},
                         "judge": {
                           "properties": {"trace_id": {"type": "keyword"}}
                         }

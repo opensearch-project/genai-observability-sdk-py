@@ -55,6 +55,19 @@ _logs.set_logger_provider(_logger_provider)
 
 
 @pytest.fixture(autouse=True)
+def _reset_label_warnings():
+    """Label warnings are once per evaluation name per process; reset per test."""
+    import importlib
+
+    # The package exports the score() function under the module's name.
+    _score_mod = importlib.import_module("opensearch_genai_observability_sdk_py.score")
+
+    _score_mod._label_warned.clear()
+    yield
+    _score_mod._label_warned.clear()
+
+
+@pytest.fixture(autouse=True)
 def _clear_spans():
     """Clear the shared InMemorySpanExporter before and after every test.
 

@@ -409,7 +409,7 @@ score(
 | `value` | `float` | `gen_ai.evaluation.score.value` | Numeric score |
 | `trace_id` | `str` | event `traceId` | Hex trace ID of the evaluated trace |
 | `span_id` | `str` | event `spanId` | Hex span ID of the evaluated span. Without it the result is trace-level |
-| `label` | `str` | `gen_ai.evaluation.score.label` | Low-cardinality label (`"relevant"`). `"pass"` / `"fail"` (any case) is the verdict |
+| `label` | `str` | `gen_ai.evaluation.score.label` | Low-cardinality label (`"relevant"`). `"pass"` / `"fail"` (any case) is the verdict, stored lowercase. A non-verdict label moves to `opensearch.gen_ai.evaluation.judge_label` when `threshold` gives a verdict |
 | `explanation` | `str` | `gen_ai.evaluation.explanation` | Evaluator rationale. Kept whole up to 8192 characters (safety cap, ends with `...[truncated]` beyond) |
 | `response_id` | `str` | `gen_ai.response.id` | Completion ID of the evaluated response |
 | `level` | `str` | `opensearch.gen_ai.evaluation.level` | `span`, `trace`, `session`, or `tool_call`. Default: `span` with a span context, `trace` with only `trace_id`, `session` with only `conversation_id` |
@@ -428,12 +428,13 @@ score(
 
 `opensearch.gen_ai.evaluation.*` names are OpenSearch extensions that mirror the OTel `gen_ai.evaluation.*` names for fields OTel does not define yet. `score()` never sets `opensearch.test.case.expected`; pass it in `attributes` if you want it on an online result.
 
-**Verdicts.** OpenSearch Dashboards shows pass/fail only for a declared rule; a result without one is neutral ("Scored"). Declare the rule with `label="pass"` / `"fail"` (explicit verdict) or `threshold` (+ `direction`). The verdict is `gen_ai.evaluation.score.label` = `pass` / `fail`, as in OTel's own examples. When `value` and `threshold` are given without a `label`, the SDK computes it: `pass` if `value >= threshold` (`maximize`) or `value <= threshold` (`minimize`), else `fail`. A `label` you set is kept over a computed verdict. The verdict is decided in your code; OpenSearch Dashboards shows the stored label and does not compute one.
+**Verdicts.** OpenSearch Dashboards shows pass/fail only for a declared rule; a result without one is neutral ("Scored"). Declare the rule with `label="pass"` / `"fail"` (explicit verdict) or `threshold` (+ `direction`). The verdict is `gen_ai.evaluation.score.label` = `pass` / `fail`, as in OTel's own examples. When `value` and `threshold` are given, the SDK computes it: `pass` if `value >= threshold` (`maximize`) or `value <= threshold` (`minimize`), else `fail`. A `pass` / `fail` label (any case, stored lowercase) wins over the threshold. When the result has a verdict, the label is always the verdict: a non-verdict label such as `relevant` is kept in `opensearch.gen_ai.evaluation.judge_label`. When the verdict replaces a label or overrides another source, the SDK logs one warning per evaluation name. Without a verdict, the label is stored as-is. The verdict is decided in your code; OpenSearch Dashboards shows the stored label and does not compute one.
 
 ```python
 score("answer_quality", 3.0, threshold=4, score_min=1, score_max=5)  # label=fail
 score("latency_s", 9.2, threshold=12, direction="minimize")  # label=pass
 score("tool_selection", 1.0, label="pass")
+score("relevance", 2.0, label="partially_relevant", threshold=4)  # label=fail + judge_label
 ```
 
 If you configure OTel yourself instead of calling `register()`, install a global `LoggerProvider` with an OTLP log exporter, otherwise the events are dropped.
@@ -519,7 +520,7 @@ def tools(input, output, expected):
 
 `@scorer` arguments: `name` (evaluation name of float/bool results and of the error grade; default the function name), `threshold`, `direction` (default `maximize` with a threshold), `score_min` / `score_max`, `evaluator` (`evaluator.name`; default the function name), `evaluator_type`. A scorer that raises emits its error grade under the declared `name`, so it lands on the same evaluation as its successful results.
 
-**Case status** (local `TestCaseResult.status`, not sent): `error` if the task or any scorer raised; else `fail` if any score of the case has a `fail` verdict (a `pass` / `fail` `label`, `passed`, or `threshold` + `direction`); else `pass`. Scores with no declared rule never fail a case. The summary keeps `pass_count`, `fail_count` and `error_count`.
+**Case status** (local `TestCaseResult.status`, not sent): `error` if the task or any scorer raised; else `fail` if any score of the case has a `fail` verdict; else `pass`. A score's verdict comes from the first of a `pass` / `fail` `label`, `passed`, then `threshold` + `direction`; the same verdict is stored as the event's label, so the event and the local status always agree. Scores with no declared rule never fail a case. The summary keeps `pass_count`, `fail_count` and `error_count`.
 
 **Parameters:**
 

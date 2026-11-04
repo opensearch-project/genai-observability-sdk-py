@@ -104,9 +104,8 @@ from opensearch_genai_observability_sdk_py.score import (
     _no_span_context,
     build_evaluation_attributes,
     emit_evaluation_event,
-    label_verdict,
+    resolve_verdict,
     span_context_for,
-    threshold_verdict,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,13 +126,21 @@ class EvalScore:
     ``Benchmark.log(scores=[...])``).
 
     Verdict fields (all optional; unset fields fall back to the scorer's
-    ``@scorer(...)`` declaration):
+    ``@scorer(...)`` declaration). The first that gives a verdict wins:
 
-    - ``label="pass"`` / ``"fail"``: the verdict
-      (``gen_ai.evaluation.score.label``).
-    - ``passed`` (bool): the verdict, written as the label when ``label`` is unset.
-    - ``threshold`` + ``direction``: rule the SDK applies to ``value`` when no
-      verdict is given; its verdict is written as the label.
+    - ``label="pass"`` / ``"fail"`` (any case): the verdict.
+    - ``passed`` (bool): the verdict.
+    - ``threshold`` + ``direction``: rule the SDK applies to ``value``.
+
+    The verdict is stored as ``gen_ai.evaluation.score.label`` (lowercase
+    ``pass`` / ``fail``) and decides ``TestCaseResult.status``. A non-verdict
+    ``label`` (for example ``"relevant"``) is then stored as
+    ``opensearch.gen_ai.evaluation.judge_label``; without a verdict it stays
+    the label. A replaced label or disagreeing sources log one warning per
+    evaluation name.
+
+    Other fields:
+
     - ``score_min`` / ``score_max``: scale bounds.
     - ``judge_trace_id``: trace id of the judge's own run, if traced
       (``opensearch.gen_ai.evaluation.judge.trace_id``).
@@ -243,13 +250,15 @@ def scorer(
 
 
 def _verdict(s: EvalScore) -> str | None:
-    """Verdict of a resolved score: its pass / fail label, else ``passed``, else the threshold."""
-    from_label = label_verdict(s.label)
-    if from_label is not None:
-        return from_label
-    if s.passed is not None:
-        return "pass" if s.passed else "fail"
-    return threshold_verdict(s.value, threshold=s.threshold, direction=s.direction)
+    """Verdict of a resolved score (see ``score.resolve_verdict``): same rule as the event."""
+    verdict, _ = resolve_verdict(
+        label=s.label,
+        passed=s.passed,
+        value=s.value,
+        threshold=s.threshold,
+        direction=s.direction,
+    )
+    return verdict
 
 
 def _apply_spec(s: EvalScore, spec: ScorerSpec | None) -> EvalScore:
@@ -524,7 +533,8 @@ def _emit_scores(
         attrs = build_evaluation_attributes(
             name=s.name,
             value=None if error_type else s.value,
-            label=None if error_type else (s.label or _verdict(s)),
+            label=None if error_type else s.label,
+            passed=None if error_type else s.passed,
             explanation=s.explanation,
             level="span" if has_span else None,
             evaluator=evaluator,

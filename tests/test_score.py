@@ -9,6 +9,7 @@
 
 """Tests for opensearch_genai_observability_sdk_py.score."""
 
+import pytest
 from opentelemetry import trace
 from opentelemetry._logs import SeverityNumber
 
@@ -349,6 +350,7 @@ class TestEventAttributes:
 LABEL = "gen_ai.evaluation.score.label"
 THRESHOLD = "opensearch.gen_ai.evaluation.score.threshold"
 DIRECTION = "opensearch.gen_ai.evaluation.score.direction"
+JUDGE_LABEL = "opensearch.gen_ai.evaluation.judge_label"
 
 
 class TestVerdict:
@@ -392,11 +394,42 @@ class TestVerdict:
         a = _one_event(eval_events).log_record.attributes
         assert a["gen_ai.evaluation.score.label"] == "pass"
 
-    def test_explicit_label_is_kept_over_the_verdict(self, eval_events):
+    def test_verdict_wins_and_judge_label_is_kept(self, eval_events, caplog):
         score(name="q", value=2.0, threshold=4, label="partially_correct")
         a = _one_event(eval_events).log_record.attributes
-        assert a["gen_ai.evaluation.score.label"] == "partially_correct"
+        assert a[LABEL] == "fail"
+        assert a[JUDGE_LABEL] == "partially_correct"
         assert a[THRESHOLD] == 4.0
+        assert "label 'partially_correct' is not a verdict" in caplog.text
+        assert "conflicts" not in caplog.text
+
+    def test_label_warning_once_per_evaluation_name(self, eval_events, caplog):
+        for _ in range(3):
+            score(name="q", value=2.0, threshold=4, label="partially_correct")
+        score(name="other", value=2.0, threshold=4, label="partially_correct")
+        assert caplog.text.count("Warned once per evaluation name") == 2
+        assert len(eval_events()) == 4
+
+    def test_non_verdict_label_without_rule_stays_the_label(self, eval_events):
+        score(name="q", value=0.7, label="relevant")
+        a = _one_event(eval_events).log_record.attributes
+        assert a[LABEL] == "relevant"
+        assert JUDGE_LABEL not in a
+
+    @pytest.mark.parametrize("label", ["PASS", " Pass ", "pass"])
+    def test_verdict_label_normalized(self, label, eval_events, caplog):
+        score(name="q", value=1.0, label=label)
+        a = _one_event(eval_events).log_record.attributes
+        assert a[LABEL] == "pass"
+        assert JUDGE_LABEL not in a
+        assert "Warned once" not in caplog.text
+
+    def test_label_verdict_beats_threshold_with_warning(self, eval_events, caplog):
+        score(name="q", value=2.0, threshold=4, label="Pass")
+        a = _one_event(eval_events).log_record.attributes
+        assert a[LABEL] == "pass"
+        assert "recording verdict 'pass'" in caplog.text
+        assert "conflicts with threshold (fail)" in caplog.text
 
     def test_threshold_without_value_no_verdict(self, eval_events):
         score(name="q", threshold=4, error_type="TimeoutError")
@@ -459,3 +492,25 @@ class TestExpectedNotOnline:
         )
         a = _one_event(eval_events).log_record.attributes
         assert a["opensearch.test.case.expected"] == "Paris"
+
+
+class TestResolveVerdict:
+    @pytest.mark.parametrize(
+        ("kwargs", "verdict", "conflicts"),
+        [
+            ({}, None, []),
+            ({"label": "relevant"}, None, []),
+            ({"label": "FAIL"}, "fail", []),
+            ({"passed": True}, "pass", []),
+            ({"value": 3, "threshold": 4}, "fail", []),
+            ({"value": 3, "threshold": 4, "direction": "minimize"}, "pass", []),
+            ({"label": "pass", "passed": False}, "pass", [("passed", "fail")]),
+            ({"passed": True, "value": 0.0, "threshold": 1}, "pass", [("threshold", "fail")]),
+            ({"label": "relevant", "passed": False}, "fail", []),
+            ({"label": "pass", "passed": True, "value": 5, "threshold": 4}, "pass", []),
+        ],
+    )
+    def test_precedence(self, kwargs, verdict, conflicts):
+        from opensearch_genai_observability_sdk_py.score import resolve_verdict
+
+        assert resolve_verdict(**kwargs) == (verdict, conflicts)
