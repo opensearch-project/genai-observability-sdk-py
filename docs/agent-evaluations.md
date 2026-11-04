@@ -327,7 +327,7 @@ For another CI system pass `ci_pipeline={"cicd.pipeline.run.id": "...", ...}` to
 ### Errors
 
 - The task raises (`evaluate()`): the case is not scored. Each scorer emits one error result under its evaluation name with `error.type` = the exception class name, no value, no label and no explanation. The run continues.
-- A scorer raises: one error result with `error.type` and the exception message as the explanation.
+- A scorer raises: one error result with `error.type`, no value, no label and no explanation. The exception message is not sent; it stays in `TestCaseResult.scorer_errors`.
 - `Benchmark.log(error_type="TimeoutError", scores=[...])`: every listed score is sent as an error result.
 
 ### Local summary

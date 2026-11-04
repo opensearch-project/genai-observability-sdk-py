@@ -556,9 +556,9 @@ def _case_status(*, errored: bool, verdicts: dict[str, str]) -> str:
     return "fail" if "fail" in verdicts.values() else "pass"
 
 
-def _error_score(name: str, spec: ScorerSpec | None, explanation: str | None = None) -> EvalScore:
-    """An evaluator-error result (no score value) under the scorer's declared rule."""
-    return _apply_spec(EvalScore(name=name, value=None, explanation=explanation), spec)
+def _error_score(name: str, spec: ScorerSpec | None) -> EvalScore:
+    """An evaluator-error result (no score value, no explanation) under the declared rule."""
+    return _apply_spec(EvalScore(name=name, value=None), spec)
 
 
 def _safe_metadata(metadata: dict[str, Any], *, context: str = "") -> dict[str, Any]:
@@ -863,8 +863,9 @@ def evaluate(
     A task that raises does not stop the run: its scorers are not called,
     and each scorer emits one ``gen_ai.evaluation.result`` with
     ``error.type`` = the exception class and no value, label or
-    explanation. A scorer that raises emits an evaluation event with
-    ``error.type``. Either way the result is named after the scorer's
+    explanation. A scorer that raises emits the same kind of error result
+    (the exception message stays in ``TestCaseResult.scorer_errors``, it is
+    never exported). Either way the result is named after the scorer's
     declared ``@scorer(name=...)`` (else the function name).
 
     Local case status (``TestCaseResult.status``): ``error`` if the task or
@@ -1002,8 +1003,9 @@ def evaluate(
             try:
                 result = scorer_fn(input_val, output_val, expected_val)
             except Exception as exc:
-                msg = f"Scorer {scorer_name} failed: {exc}"
-                scorer_errors.append(msg)
+                # The message stays local (scorer_errors): exception text from a
+                # judge call can carry URLs, keys or request bodies.
+                scorer_errors.append(f"Scorer {scorer_name} failed: {exc}")
                 error_type = error_type or type(exc).__qualname__
                 logger.warning(
                     "Scorer %s failed for case %s: %s",
@@ -1011,11 +1013,12 @@ def evaluate(
                     case_id,
                     exc,
                 )
-                # Record the evaluator failure (error.type, no score value),
-                # under the evaluation name the scorer would have produced.
+                # Record the evaluator failure (error.type, no score value, no
+                # explanation), under the evaluation name the scorer would have
+                # produced.
                 _emit_scores(
                     grouping,
-                    [_error_score(eval_name, spec, explanation=str(exc))],
+                    [_error_score(eval_name, spec)],
                     context=event_ctx,
                     evaluator=evaluator,
                     evaluator_type=evaluator_type,

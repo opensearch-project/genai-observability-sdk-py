@@ -805,7 +805,10 @@ class TestEvaluateEvents:
             if r.log_record.attributes["gen_ai.evaluation.name"] == "bad_scorer"
         ]
         assert failed[0]["error.type"] == "RuntimeError"
-        assert failed[0]["gen_ai.evaluation.explanation"] == "scorer broke"
+        # The exception message is not exported: it can carry URLs, keys or bodies.
+        assert "gen_ai.evaluation.explanation" not in failed[0]
+        assert not any("scorer broke" in str(v) for v in failed[0].values())
+        assert any("scorer broke" in e for e in result.cases[0].scorer_errors)
         assert result.summary.error_count == 1
 
     def test_untraced_task_events_without_trace_context(self, exporter, events):
