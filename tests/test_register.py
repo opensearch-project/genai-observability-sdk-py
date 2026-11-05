@@ -89,7 +89,8 @@ def clean_otlp_env(monkeypatch):
 
 
 def _resolve(signal, signal_endpoint=None, base=None, protocol=None):
-    target = _register_mod._resolve_signal(signal, signal_endpoint, base, protocol)
+    endpoint_arg = _register_mod._EndpointArg(base=base)
+    target = _register_mod._resolve_signal(signal, signal_endpoint, endpoint_arg, protocol)
     return target.url, target.protocol
 
 
@@ -127,7 +128,7 @@ class TestResolveSignal:
 
     @pytest.mark.parametrize("signal", ["traces", "logs"])
     def test_data_prepper_default(self, signal, clean_otlp_env):
-        target = _register_mod._resolve_signal(signal, None, None, None)
+        target = _register_mod._resolve_signal(signal, None, _register_mod._EndpointArg(), None)
         assert target.url == f"http://localhost:21890/opentelemetry/v1/{signal}"
         assert target.configured is False
         assert _register_mod.DEFAULT_ENDPOINT == _resolve("traces")[0]
@@ -135,10 +136,13 @@ class TestResolveSignal:
 
     def test_configured_flag(self, clean_otlp_env, monkeypatch):
         resolve = _register_mod._resolve_signal
-        assert resolve("logs", "http://l/v1/logs", None, None).configured
-        assert resolve("logs", None, "http://b:4318", None).configured
+        empty = _register_mod._EndpointArg()
+        assert resolve("logs", "http://l/v1/logs", empty, None).configured
+        assert resolve(
+            "logs", None, _register_mod._EndpointArg(base="http://b:4318"), None
+        ).configured
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://b:4318")
-        assert resolve("logs", None, None, None).configured
+        assert resolve("logs", None, empty, None).configured
 
     @pytest.mark.parametrize("signal", ["traces", "logs"])
     def test_grpc_base_used_as_is_for_every_signal(self, signal, clean_otlp_env):
@@ -182,11 +186,27 @@ class TestResolveSignal:
 class TestLegacyEndpoint:
     """0.2.9 ``endpoint=`` was a full traces URL: deprecated, still accepted."""
 
-    def test_base_passes_through(self):
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "http://c:4318",
+            "http://c:4318/",
+            "https://gw/otlp",
+            "https://gw/traces-proxy",
+            "https://gw/traces/ingest",
+            "grpc://c:4317",
+        ],
+    )
+    def test_base_passes_through(self, endpoint):
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            assert _register_mod._base_from_legacy_endpoint("http://c:4318") == "http://c:4318"
-            assert _register_mod._base_from_legacy_endpoint(None) is None
+            parsed = _register_mod._parse_endpoint_arg(endpoint)
+        assert parsed == _register_mod._EndpointArg(base=endpoint)
+
+    def test_none_is_unset(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert _register_mod._parse_endpoint_arg(None) == _register_mod._EndpointArg()
 
     @pytest.mark.parametrize(
         ("endpoint", "base"),
@@ -201,7 +221,34 @@ class TestLegacyEndpoint:
     )
     def test_traces_suffix_is_removed_with_warning(self, endpoint, base):
         with pytest.warns(DeprecationWarning, match="traces_endpoint="):
-            assert _register_mod._base_from_legacy_endpoint(endpoint) == base
+            parsed = _register_mod._parse_endpoint_arg(endpoint)
+        assert parsed == _register_mod._EndpointArg(base=base)
+
+    @pytest.mark.parametrize(
+        ("endpoint", "logs"),
+        [
+            ("https://gw/otlp/traces", "https://gw/otlp/logs"),
+            ("https://gw/otlp/traces/", "https://gw/otlp/logs"),
+            ("https://gw/traces", "https://gw/logs"),
+            ("https://gw:8443/a/b/traces?x=1", "https://gw:8443/a/b/logs?x=1"),
+        ],
+    )
+    def test_other_traces_path_is_used_as_traces_url_with_warning(self, endpoint, logs):
+        with pytest.warns(DeprecationWarning, match="traces_endpoint=") as record:
+            parsed = _register_mod._parse_endpoint_arg(endpoint)
+        assert parsed == _register_mod._EndpointArg(traces=endpoint, logs=logs)
+        assert logs in str(record[0].message)
+
+    def test_legacy_traces_url_is_below_the_signal_env_var(self, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://env:4318/v1/traces")
+        with pytest.warns(DeprecationWarning):
+            parsed = _register_mod._parse_endpoint_arg("https://gw/otlp/traces")
+        traces = _register_mod._resolve_signal("traces", None, parsed, None)
+        logs = _register_mod._resolve_signal("logs", None, parsed, None)
+        assert traces.url == "http://env:4318/v1/traces"
+        assert (logs.url, logs.configured) == ("https://gw/otlp/logs", True)
+        explicit = _register_mod._resolve_signal("logs", "https://l/v1/logs", parsed, None)
+        assert explicit.url == "https://l/v1/logs"
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +562,21 @@ class TestRegisterLogs:
             register(endpoint="http://c:4318/v1/traces", auto_instrument=False)
         mock_http.assert_called_once_with("http://c:4318/v1/traces", None)
         assert _log_target(mock_log).url == "http://c:4318/v1/logs"
+
+    @patch.object(_register_mod, "_create_log_exporter")
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_legacy_non_v1_traces_url_is_kept(
+        self, mock_http, mock_log, fresh_globals, clean_otlp_env
+    ):
+        """0.2.9 full traces URL without /v1/traces: traces URL unchanged, warns."""
+        from opensearch_genai_observability_sdk_py.register import register
+
+        mock_http.return_value = MagicMock()
+        mock_log.return_value = _in_memory_log_exporter()
+        with pytest.warns(DeprecationWarning, match="https://gw/otlp/logs"):
+            register(endpoint="https://gw/otlp/traces", auto_instrument=False)
+        mock_http.assert_called_once_with("https://gw/otlp/traces", None)
+        assert _log_target(mock_log).url == "https://gw/otlp/logs"
 
     @pytest.mark.parametrize(
         "kwargs",

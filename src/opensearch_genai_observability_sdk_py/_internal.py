@@ -25,8 +25,8 @@ from opentelemetry import _logs
 
 logger = logging.getLogger(__name__)
 
-# Instrumentation scope used when the SDK itself emits telemetry (for
-# example evaluation events without a named evaluator).
+# Instrumentation scope name for every event the SDK emits (see event_scope()).
+# Also the distribution name used to look up SDK_VERSION.
 SDK_SCOPE_NAME = "opensearch-genai-observability-sdk-py"
 
 try:

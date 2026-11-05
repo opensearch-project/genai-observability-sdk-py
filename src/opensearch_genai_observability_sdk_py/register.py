@@ -75,11 +75,18 @@ otherwise a warning is logged and evaluation events are not exported.
 
 Compatibility
 -------------
-Up to 0.2.9 ``endpoint=`` was the full traces URL. An ``endpoint=`` whose
-path ends with ``/v1/traces`` is still accepted for one release: it emits a
-``DeprecationWarning`` and the ``/v1/traces`` suffix is removed to get the
-base, so traces go to the same URL as before and logs to ``/v1/logs`` next
-to it.
+Up to 0.2.9 ``endpoint=`` was the full traces URL. Such a value is still
+accepted for one release and emits a ``DeprecationWarning``:
+
+- A path ending with ``/v1/traces``: the suffix is removed to get the base,
+  so traces go to the same URL as before and logs to ``/v1/logs`` next to it.
+- Any other path whose last segment is ``traces`` (for example
+  ``https://gw/otlp/traces``): it is used as the traces URL as-is, and logs
+  go to the sibling path with ``logs`` as the last segment
+  (``https://gw/otlp/logs``). Pass ``logs_endpoint=`` if that is wrong.
+
+In both cases it sits where ``endpoint=`` sits in the order above, so
+``traces_endpoint=``, ``logs_endpoint=`` and the per-signal env vars still win.
 """
 
 from __future__ import annotations
@@ -116,6 +123,7 @@ DEFAULT_LOGS_ENDPOINT = DEFAULT_BASE_ENDPOINT + "/v1/logs"
 Signal = Literal["traces", "logs"]
 
 _LEGACY_TRACES_SUFFIX = "/v1/traces"
+_LEGACY_TRACES_SEGMENT = "traces"
 _SIGV4_KEYS = frozenset({"service", "region"})
 
 # Entry point group to discover instrumentors from.
@@ -123,6 +131,23 @@ _SIGV4_KEYS = frozenset({"service", "region"})
 _INSTRUMENTOR_GROUPS = [
     "opentelemetry_instrumentor",
 ]
+
+
+@dataclass(frozen=True)
+class _EndpointArg:
+    """``endpoint=`` after the 0.2.9 compatibility shim.
+
+    ``base`` is the base URL for all signals. ``traces`` / ``logs`` are full
+    per-signal URLs derived from a legacy full traces URL that has no
+    ``/v1/traces`` suffix; they take the place of the base for that signal.
+    """
+
+    base: str | None = None
+    traces: str | None = None
+    logs: str | None = None
+
+    def signal_url(self, signal: Signal) -> str | None:
+        return self.traces if signal == "traces" else self.logs
 
 
 @dataclass(frozen=True)
@@ -182,9 +207,11 @@ def register(
     Args:
         endpoint: Base OTLP URL for all signals, same meaning as
             ``OTEL_EXPORTER_OTLP_ENDPOINT`` (for example
-            ``http://collector:4318`` or ``grpc://collector:4317``). A value
-            ending with ``/v1/traces`` (the 0.2.9 meaning) is deprecated: it
-            warns and the suffix is removed.
+            ``http://collector:4318`` or ``grpc://collector:4317``). A full
+            traces URL (the 0.2.9 meaning) is deprecated: a path ending with
+            ``/v1/traces`` warns and the suffix is removed; any other path
+            whose last segment is ``traces`` warns and is used as the traces
+            URL as-is, with logs sent to the sibling ``.../logs`` path.
         traces_endpoint: Full OTLP traces URL. Overrides the base for traces.
         logs_endpoint: Full OTLP logs URL (evaluation events), for example
             the OSIS logs pipeline. Overrides the base for logs.
@@ -257,7 +284,7 @@ def register(
         )
     """
     set_agent_defaults(agent_name, agent_version)
-    base = _base_from_legacy_endpoint(endpoint)
+    endpoint_arg = _parse_endpoint_arg(endpoint)
     sigv4_opts = _sigv4_options(sigv4)
 
     name = (
@@ -281,7 +308,7 @@ def register(
     custom_exporter = exporter is not None
     traces_url = "custom exporter"
     if exporter is None:
-        target = _resolve_signal("traces", traces_endpoint, base, protocol)
+        target = _resolve_signal("traces", traces_endpoint, endpoint_arg, protocol)
         traces_url = target.url
         exporter = _create_exporter(target, headers, sigv4_opts)
 
@@ -304,7 +331,7 @@ def register(
             resource=resource,
             batch=batch,
             custom_exporter=custom_exporter,
-            base=base,
+            endpoint_arg=endpoint_arg,
             logs_endpoint=logs_endpoint,
             protocol=protocol,
             headers=headers,
@@ -325,24 +352,38 @@ def register(
     return provider
 
 
-def _base_from_legacy_endpoint(endpoint: str | None) -> str | None:
+def _parse_endpoint_arg(endpoint: str | None) -> _EndpointArg:
     """Accept the 0.2.9 meaning of ``endpoint=`` (full traces URL) for one release."""
     if not endpoint:
-        return None
+        return _EndpointArg()
     parsed = urlparse(endpoint)
     path = parsed.path.rstrip("/")
-    if not path.endswith(_LEGACY_TRACES_SUFFIX):
-        return endpoint
-    base = urlunparse(parsed._replace(path=path[: -len(_LEGACY_TRACES_SUFFIX)]))
+    if path.endswith(_LEGACY_TRACES_SUFFIX):
+        base = urlunparse(parsed._replace(path=path[: -len(_LEGACY_TRACES_SUFFIX)]))
+        warnings.warn(
+            f"register(endpoint='{endpoint}'): endpoint= is now the base URL for all signals "
+            f"(like OTEL_EXPORTER_OTLP_ENDPOINT). Pass endpoint='{base}', or "
+            "traces_endpoint= for a full traces URL. The /v1/traces suffix is removed for "
+            "now; this will stop working in a future release.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return _EndpointArg(base=base)
+
+    parent, _, last = path.rpartition("/")
+    if last != _LEGACY_TRACES_SEGMENT:
+        return _EndpointArg(base=endpoint)
+    logs = urlunparse(parsed._replace(path=f"{parent}/logs"))
     warnings.warn(
         f"register(endpoint='{endpoint}'): endpoint= is now the base URL for all signals "
-        f"(like OTEL_EXPORTER_OTLP_ENDPOINT). Pass endpoint='{base}', or "
-        "traces_endpoint= for a full traces URL. The /v1/traces suffix is removed for now; "
-        "this will stop working in a future release.",
+        "(like OTEL_EXPORTER_OTLP_ENDPOINT), and /v1/<signal> is appended to it over "
+        f"HTTP. Pass traces_endpoint='{endpoint}' (and logs_endpoint=) for full URLs. "
+        f"For now it is used as the traces URL and logs go to '{logs}'; this will stop "
+        "working in a future release.",
         DeprecationWarning,
         stacklevel=3,
     )
-    return base
+    return _EndpointArg(traces=endpoint, logs=logs)
 
 
 def _sigv4_options(sigv4: bool | dict[str, str] | None) -> dict[str, str] | None:
@@ -373,7 +414,7 @@ def _signal_protocol(signal: Signal, protocol: str | None) -> str | None:
 def _resolve_signal(
     signal: Signal,
     signal_endpoint: str | None,
-    base: str | None,
+    endpoint_arg: _EndpointArg,
     protocol: str | None,
 ) -> _SignalTarget:
     """Resolve one signal's URL and protocol (see the module docstring).
@@ -381,16 +422,20 @@ def _resolve_signal(
     Args:
         signal: ``"traces"`` or ``"logs"``.
         signal_endpoint: The ``<signal>_endpoint=`` parameter (full URL).
-        base: The ``endpoint=`` parameter (base URL), already de-legacied.
+        endpoint_arg: The ``endpoint=`` parameter, after the 0.2.9 shim.
         protocol: The ``protocol=`` parameter.
     """
     configured_protocol = _signal_protocol(signal, protocol)
 
-    full = signal_endpoint or os.environ.get(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT")
+    full = (
+        signal_endpoint
+        or os.environ.get(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT")
+        or endpoint_arg.signal_url(signal)
+    )
     if full:
         return _SignalTarget(full, _infer_protocol(full, configured_protocol), True)
 
-    configured_base = base or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    configured_base = endpoint_arg.base or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     resolved_base = configured_base or DEFAULT_BASE_ENDPOINT
     resolved_protocol = _infer_protocol(resolved_base, configured_protocol)
     if resolved_protocol == "grpc":
@@ -434,7 +479,7 @@ def _setup_logs(
     resource: Resource,
     batch: bool,
     custom_exporter: bool,
-    base: str | None,
+    endpoint_arg: _EndpointArg,
     logs_endpoint: str | None,
     protocol: str | None,
     headers: dict | None,
@@ -449,7 +494,7 @@ def _setup_logs(
         return None
 
     if log_exporter is None:
-        target = _resolve_signal("logs", logs_endpoint, base, protocol)
+        target = _resolve_signal("logs", logs_endpoint, endpoint_arg, protocol)
         if custom_exporter and not target.configured:
             logger.warning(
                 "register(): a custom exporter= was passed and no logs destination is "

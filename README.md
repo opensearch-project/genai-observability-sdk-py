@@ -225,7 +225,7 @@ export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://logs-pipe-def.us-east-1.osis.ama
 
 **Custom exporters:** `exporter=` (traces) and `log_exporter=` (logs) are used as-is; nothing is derived from them. With `exporter=` and no `log_exporter=`, `register()` builds the log exporter only if a logs destination is configured (`logs_endpoint=`, `endpoint=`, `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT`); otherwise it logs a warning and evaluation events are not exported.
 
-**Upgrading from 0.2.9:** `endpoint=` used to be the full traces URL. An `endpoint=` ending with `/v1/traces` still works for one release: it emits a `DeprecationWarning`, and the suffix is removed to get the base (traces go to the same URL, logs to `/v1/logs` next to it). Pass the base, or use `traces_endpoint=`. `register(exporter=AWSSigV4OTLPExporter(...))` still works for traces; use `sigv4=` to also sign the evaluation events.
+**Upgrading from 0.2.9:** `endpoint=` used to be the full traces URL. A full traces URL still works for one release and emits a `DeprecationWarning`. If it ends with `/v1/traces`, the suffix is removed to get the base (traces go to the same URL, logs to `/v1/logs` next to it). If its last path segment is `traces` in any other form (for example `https://gw/otlp/traces`), it is used as the traces URL as-is and logs go to the sibling `.../logs` path (`https://gw/otlp/logs`). Pass the base, or use `traces_endpoint=` and `logs_endpoint=`. `register(exporter=AWSSigV4OTLPExporter(...))` still works for traces; use `sigv4=` to also sign the evaluation events.
 
 | Parameter | Default | Description |
 |---|---|---|
