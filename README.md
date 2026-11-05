@@ -495,7 +495,7 @@ Each `gen_ai.evaluation.result` carries `test.suite.name`, `test.suite.run.id`, 
 
 Each scorer is the evaluator: a named scorer function sets the grade event's `opensearch.gen_ai.evaluation.evaluator.name`. All events use the SDK instrumentation scope. `EvalScore.label`, `.explanation`, `.metadata` and `.judge_trace_id` (`opensearch.gen_ai.evaluation.judge.trace_id`) go on the event.
 
-**Expected output.** A case's `"expected"` value (`evaluate()` data, `Benchmark.log(expected=)`) is set on every `gen_ai.evaluation.result` of the case, including error results, as `opensearch.test.case.expected`. Strings are kept as-is; other values are JSON-encoded. Values longer than 4096 characters are cut to 4096 and `opensearch.test.case.expected_truncated` is set to `true`. Both keys are reserved: metadata cannot set them. The expected value is not put on the agent's spans.
+**Expected output.** A case's `"expected"` value (`evaluate()` data, `Benchmark.log(expected=)`) is set on every `gen_ai.evaluation.result` of the case, including error results, as `opensearch.test.case.expected`. Strings are kept as-is; other values are JSON-encoded. Values longer than 4096 characters are cut to 4096 and `opensearch.test.case.expected_truncated` is set to `true`. Both keys are reserved: metadata cannot set them. The expected value is not put on the agent's spans. `expected` is exported by default; if your test sets hold sensitive data, pass `record_expected=False` to `evaluate()` or `Benchmark(...)` and neither key is written (scorers still receive it). Inputs and outputs are never exported.
 
 **Declaring rules.** Decorate a scorer with `@scorer(...)` to declare its evaluation name and pass rule up front. A scorer may also return a `bool` (a verdict) or an `EvalScore` with `label` (`"pass"` / `"fail"`), `passed`, `threshold`, `direction`, `score_min`, `score_max`; fields set on the `EvalScore` win over the declaration.
 
@@ -534,12 +534,13 @@ def tools(input, output, expected):
 | `run_id` | `str` | `test.suite.run.id`, used as given (default: generated). Use the same id from every CI shard so they report into one run, or an existing run's id to re-score it (send new results with the same run id). Empty or whitespace-only raises `ValueError` |
 | `agent_name` / `agent_version` | `str` | Agent under test (see [Agent identity](#agent-identity)) |
 | `ci_pipeline` | `dict` | `cicd.pipeline.*` overrides |
+| `record_expected` | `bool` | Export `"expected"` as `opensearch.test.case.expected` (default `True`). Pass `False` if test sets hold sensitive data |
 
 Returns `BenchmarkResult` with `.summary` (aggregate stats) and `.cases` (per-case results).
 
 ### `Benchmark`
 
-Upload pre-computed evaluation results from any framework (RAGAS, DeepEval, pytest, custom). Each `log()` emits one `gen_ai.evaluation.result` event per score, parented to the evaluated agent span when `trace_id` and `span_id` are given; otherwise the events have no trace context. Each result carries the `test.*` ids, `opensearch.test.case.expected` when `expected` is given, the agent, `cicd.pipeline.*` in CI, and the run `metadata` plus the case `metadata` passed to `log()` (reserved keys are dropped; the score's own `metadata` and the SDK attributes win). `scores` is `{name: value}` or a list of `EvalScore` (to declare `label` / `threshold` / bounds). Use when you already have results and want to visualize them in agent-health or OpenSearch Dashboards.
+Upload pre-computed evaluation results from any framework (RAGAS, DeepEval, pytest, custom). Each `log()` emits one `gen_ai.evaluation.result` event per score, parented to the evaluated agent span when `trace_id` and `span_id` are given; otherwise the events have no trace context. Each result carries the `test.*` ids, `opensearch.test.case.expected` when `expected` is given (unless `Benchmark(record_expected=False)`), the agent, `cicd.pipeline.*` in CI, and the run `metadata` plus the case `metadata` passed to `log()` (reserved keys are dropped; the score's own `metadata` and the SDK attributes win). `scores` is `{name: value}` or a list of `EvalScore` (to declare `label` / `threshold` / bounds). Use when you already have results and want to visualize them in agent-health or OpenSearch Dashboards.
 
 `error`, `error_type` and `status` set the local result: `error` or `error_type` marks the case `error`; otherwise a `fail` verdict marks it `fail`; `status` sets `pass`, `fail` or `error` explicitly. With `error_type`, every score in `scores` is emitted as an evaluator error result: `error.type` = `error_type`, no score value and no label. `close()` returns the local summary and sends nothing. No spans are created.
 

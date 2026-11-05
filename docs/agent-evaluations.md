@@ -305,6 +305,7 @@ The `"expected"` value of an `evaluate()` case, or `Benchmark.log(expected=...)`
 - Strings are kept as-is. Other values are JSON-encoded, for example `{"city":"Lima"}`.
 - Values longer than 4096 characters are cut to 4096 and `opensearch.test.case.expected_truncated` is set to `true`.
 - It is not put on the agent's spans, and online `score()` never sets it.
+- It is exported by default. If your test sets hold sensitive data, pass `record_expected=False` to `evaluate()` or `Benchmark(...)`: neither attribute is written. Scorers still receive the value, and it stays on the local result. Inputs and outputs are never exported.
 
 ### Run ids
 

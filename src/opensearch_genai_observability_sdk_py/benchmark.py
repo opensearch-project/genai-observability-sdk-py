@@ -655,6 +655,13 @@ class Benchmark:
             ``cicd.pipeline.run.url.full`` overrides, for CI systems the SDK does
             not detect. Detected automatically on GitHub Actions, GitLab CI and
             Jenkins; never set outside CI.
+        record_expected: Export each case's expected output as
+            ``opensearch.test.case.expected`` (default ``True``). Pass
+            ``False`` if the test set holds sensitive data: then neither
+            ``opensearch.test.case.expected`` nor
+            ``opensearch.test.case.expected_truncated`` is written. The
+            expected value is still passed to the scorers and kept on the
+            local result. Inputs and outputs are never exported.
 
     Raises:
         ValueError: ``run_id`` is empty or whitespace.
@@ -669,6 +676,7 @@ class Benchmark:
         agent_name: str | None = None,
         agent_version: str | None = None,
         ci_pipeline: dict[str, str] | None = None,
+        record_expected: bool = True,
     ) -> None:
         self._name = name
         self._run_id = _resolve_run_id(run_id)
@@ -677,6 +685,7 @@ class Benchmark:
         # Declared agent, else the register() default (never invented).
         self._agent = resolve_agent(agent_name, agent_version)
         self._metadata = _safe_metadata(metadata or {}, context=f"Benchmark({name!r})")
+        self._record_expected = record_expected
         self._start_time = time.monotonic()
         self._cases: list[TestCaseResult] = []
         self._closed = False
@@ -716,10 +725,11 @@ class Benchmark:
         Args:
             input: Test case input data (kept on the local result only).
             output: Actual output from the agent/system (local result only).
-            expected: Expected/ground-truth output. Set on every evaluation
-                event of the case as ``opensearch.test.case.expected``
+            expected: Expected/ground-truth output. By default set on every
+                evaluation event of the case as ``opensearch.test.case.expected``
                 (non-strings JSON-encoded, cut to 4096 characters with
-                ``opensearch.test.case.expected_truncated`` set).
+                ``opensearch.test.case.expected_truncated`` set); not exported
+                when the Benchmark has ``record_expected=False``.
             scores: Pre-computed scores: ``{name: value}``, or a list of
                 ``EvalScore`` to declare verdicts (``label`` / ``passed``
                 or ``threshold`` + ``direction``) and scale bounds.
@@ -766,7 +776,7 @@ class Benchmark:
 
         grouping = {
             **_grouping(self._name, self._run_id, resolved_case_id, case_name),
-            **expected_attributes(expected),
+            **(expected_attributes(expected) if self._record_expected else {}),
             **self._agent,
             **self._ci,
         }
@@ -914,6 +924,7 @@ def evaluate(
     agent_name: str | None = None,
     agent_version: str | None = None,
     ci_pipeline: dict[str, str] | None = None,
+    record_expected: bool = True,
 ) -> BenchmarkResult:
     """Run a task against a dataset, score outputs, and record the results.
 
@@ -947,10 +958,11 @@ def evaluate(
         data: Iterable of dicts with ``"input"`` and optionally
             ``"expected"``, ``"case_id"`` and ``"case_name"`` keys. Consumed
             once (single-pass); generators are materialized into a list.
-            ``"expected"`` is passed to the scorers and set on every
-            evaluation event of the case as ``opensearch.test.case.expected``
-            (non-strings JSON-encoded, cut to 4096 characters with
-            ``opensearch.test.case.expected_truncated`` set).
+            ``"expected"`` is passed to the scorers and, by default, set on
+            every evaluation event of the case as
+            ``opensearch.test.case.expected`` (non-strings JSON-encoded, cut
+            to 4096 characters with ``opensearch.test.case.expected_truncated``
+            set). See ``record_expected``.
         scores: List of synchronous scorer callables. Each receives
             ``(input, output, expected)`` and returns an ``EvalScore``,
             list of ``EvalScore``, a number (any ``numbers.Real``), or a bool
@@ -980,6 +992,13 @@ def evaluate(
             ``cicd.pipeline.run.url.full`` overrides, for CI systems the SDK does
             not detect. Detected automatically on GitHub Actions, GitLab CI and
             Jenkins; never set outside CI.
+        record_expected: Export each case's expected output as
+            ``opensearch.test.case.expected`` (default ``True``). Pass
+            ``False`` if the test set holds sensitive data: then neither
+            ``opensearch.test.case.expected`` nor
+            ``opensearch.test.case.expected_truncated`` is written. The
+            expected value is still passed to the scorers and kept on the
+            local result. Inputs and outputs are never exported.
 
     Returns:
         ``BenchmarkResult`` with summary and per-case results.
@@ -1031,7 +1050,9 @@ def evaluate(
             agent_name, agent_version, span=scope.root_span if scope is not None else None
         )
         # The expected output goes on the events only, not on the root span.
-        grouping = {**grouping, **expected_attributes(expected_val), **case_agent}
+        if record_expected:
+            grouping = {**grouping, **expected_attributes(expected_val)}
+        grouping = {**grouping, **case_agent}
 
         # Score events are parented to the agent run's root span.
         event_ctx: Context

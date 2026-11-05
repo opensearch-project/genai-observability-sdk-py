@@ -1283,6 +1283,69 @@ class TestExpectedOutput:
         assert EXPECTED not in (root.attributes or {})
 
 
+class TestRecordExpected:
+    """``record_expected`` (default ``True``) controls the expected-output attributes."""
+
+    @staticmethod
+    def _seen(calls):
+        def scorer_fn(input_val, output, expected):
+            calls.append(expected)
+            return 1.0
+
+        return scorer_fn
+
+    def test_default_on(self, events):
+        with Benchmark(name="rec-default") as b:
+            b.log(input="q", expected="x" * 5000, scores={"a": 1.0})
+        evaluate(
+            name="rec-default-eval",
+            task=lambda x: x,
+            data=[{"input": "q", "expected": "Paris"}],
+            scores=[self._seen([])],
+        )
+        records = events(EVALUATION)
+        assert records[0].log_record.attributes[EXPECTED_TRUNCATED] is True
+        assert records[1].log_record.attributes[EXPECTED] == "Paris"
+
+    def test_benchmark_off_writes_neither(self, events):
+        with Benchmark(name="rec-off", record_expected=False) as b:
+            b.log(input="q", expected="x" * 5000, scores={"a": 1.0, "b": 0.5})
+            b.log(input="q2", expected="short", scores={"a": 1.0}, error_type="ValueError")
+        records = events(EVALUATION)
+        assert len(records) == 3
+        for r in records:
+            assert EXPECTED not in r.log_record.attributes
+            assert EXPECTED_TRUNCATED not in r.log_record.attributes
+        assert b._cases[0].expected == "x" * 5000
+
+    def test_evaluate_off_writes_neither(self, events):
+        calls: list = []
+
+        def crashing(x):
+            if x == "boom":
+                raise RuntimeError("boom")
+            return x
+
+        result = evaluate(
+            name="rec-off-eval",
+            task=crashing,
+            data=[
+                {"input": "q", "expected": "y" * 5000},
+                {"input": "boom", "expected": {"k": "v"}},
+            ],
+            scores=[self._seen(calls)],
+            record_expected=False,
+        )
+        records = events(EVALUATION)
+        assert len(records) == 2  # one score, one error result
+        for r in records:
+            assert EXPECTED not in r.log_record.attributes
+            assert EXPECTED_TRUNCATED not in r.log_record.attributes
+        # Scorers and the local result still get the expected value.
+        assert calls == ["y" * 5000]
+        assert [c.expected for c in result.cases] == ["y" * 5000, {"k": "v"}]
+
+
 class TestJudgeTraceIdFromEvalScore:
     JUDGE = "opensearch.gen_ai.evaluation.judge.trace_id"
 
