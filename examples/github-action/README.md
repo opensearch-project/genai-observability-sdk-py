@@ -3,8 +3,8 @@
 A reusable composite action that runs your `evaluate()` suite on every pull request, sends the agent traces and evaluation events to OpenSearch, and reports the result in the job summary:
 
 - a link to the run in OpenSearch Dashboards: `<dashboards_url>/app/agentTraces/evaluations#/runs/<test.suite.run.id>`
-- a markdown table of per-evaluator means and pass/fail counts
-- an optional regression gate that fails the job when an evaluator's mean drops below a minimum
+- a markdown table of per-evaluation means, pass/fail counts and errored cases
+- an optional regression gate that fails the job when an evaluation's mean drops below a minimum
 
 | File | Purpose |
 |---|---|
@@ -37,7 +37,7 @@ def suite():
     )
 ```
 
-Each named scorer becomes an evaluator (`opensearch.gen_ai.evaluation.evaluator.name` on its results). The run produces the agent's own traces plus one `gen_ai.evaluation.result` log event per score.
+Each score is recorded under its evaluation name (`gen_ai.evaluation.name`: the `EvalScore.name`, or `@scorer(name=...)`, else the scorer function name). That is the name the summary table and `fail-on-regression` use, and the name OpenSearch Dashboards groups results by. Each named scorer is also recorded as the evaluator (`opensearch.gen_ai.evaluation.evaluator.name`); one evaluator can produce several evaluations, so gates do not key on it. The run produces the agent's own traces plus one `gen_ai.evaluation.result` log event per score.
 
 ## 2. Endpoints
 
@@ -64,7 +64,7 @@ Copy [`example-workflow.yml`](example-workflow.yml) to `.github/workflows/agent-
 | `aws-service` | | `osis` | SigV4 service: `osis` or `es` |
 | `service-name` | | `agent-evals-ci` | `service.name` resource attribute |
 | `dashboards-url` | | | OpenSearch Dashboards base URL for the run link |
-| `fail-on-regression` | | | Gates on evaluator means: `evaluator=0.8` or `evaluator>=0.8` (at least), `evaluator<=12` (at most, for `direction="minimize"` scorers), comma or newline separated |
+| `fail-on-regression` | | | Gates on evaluation means, by evaluation name (`gen_ai.evaluation.name`): `name=0.8` or `name>=0.8` (at least), `name<=12` (at most, for `direction="minimize"` scorers), comma or newline separated |
 | `pass-threshold` | | `0.5` | Fallback for scores without a verdict: counts as pass in the table when `value >= threshold`. Scores with a verdict use it |
 | `working-directory` | | `.` | Directory to run the suite from (added to `sys.path`) |
 | `install` | | `opensearch-genai-observability-sdk-py>0.2.9` | pip requirement(s) installed first. See [SDK version](#sdk-version) |
@@ -80,7 +80,13 @@ The action needs an SDK release after 0.2.9: that is the first release with `end
 | `run-id` | `test.suite.run.id` of the (first) run |
 | `run-url` | Link to the run in OpenSearch Dashboards |
 
-The table counts pass / fail from each score's verdict (`case.verdicts`: a `pass` / `fail` label, `passed`, or the `@scorer` threshold and direction), the same verdict stored as `gen_ai.evaluation.score.label`, so it matches OpenSearch Dashboards. The job fails (exit code 1) when a `fail-on-regression` evaluator mean is outside its gate or the evaluator produced no scores. Exit code 2 means a configuration error.
+The table counts pass / fail from each score's verdict (`case.verdicts`: a `pass` / `fail` label, `passed`, or the `@scorer` threshold and direction), the same verdict stored as `gen_ai.evaluation.score.label`, so it matches OpenSearch Dashboards. The `Errors` column counts errored cases (the task or a scorer raised) with no value for that evaluation.
+
+Exit codes:
+
+- `0`: no case errored and every gate passed.
+- `1`: any case errored, with or without a gate (so an all-errored run fails); or a `fail-on-regression` gate failed: the evaluation mean is outside the gate, the evaluation produced no scores, or an errored case has no value for it.
+- `2`: configuration error: a malformed `suite` (not `module:function` / `file.py:function`, missing file, target not callable), a malformed `fail-on-regression`, or a suite that does not return a `BenchmarkResult`.
 
 ### CI/CD attributes
 

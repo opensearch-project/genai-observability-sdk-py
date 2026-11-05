@@ -43,7 +43,7 @@ inputs:
     required: false
     default: ""
   fail-on-regression:
-    description: "Fail the job on an evaluator mean: evaluator=0.8 or evaluator>=0.8 (at least), evaluator<=12 (at most, for minimize scorers), comma or newline separated"
+    description: "Fail the job on an evaluation mean, by evaluation name (gen_ai.evaluation.name): name=0.8 or name>=0.8 (at least), name<=12 (at most, for minimize scorers), comma or newline separated. Errored cases always fail the job."
     required: false
     default: ""
   pass-threshold:

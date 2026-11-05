@@ -16,14 +16,24 @@ returns the ``BenchmarkResult`` (or a list of them). This script:
 1. calls ``register()`` with the OTLP endpoints (optionally SigV4),
 2. runs the suite and flushes traces and evaluation events,
 3. prints a summary and appends it to ``$GITHUB_STEP_SUMMARY``: a link to the
-   run in OpenSearch Dashboards plus a table of per-evaluator means and
+   run in OpenSearch Dashboards plus a table of per-evaluation means,
    pass/fail counts (from each score's verdict, the same one stored in
    ``gen_ai.evaluation.score.label``; ``--pass-threshold`` only for scores
-   without a verdict),
+   without a verdict) and errored cases,
 4. writes ``run-id`` / ``run-url`` to ``$GITHUB_OUTPUT``,
-5. exits 1 if a ``--fail-on-regression`` gate is not met (``name=0.8`` or
-   ``name>=0.8``: mean at least; ``name<=12``: mean at most, for
-   ``direction="minimize"`` scorers such as latency).
+5. exits 1 if any case errored (the task or a scorer raised), or if a
+   ``--fail-on-regression`` gate is not met (``name=0.8`` or ``name>=0.8``:
+   mean at least; ``name<=12``: mean at most, for ``direction="minimize"``
+   scorers such as latency). An errored case without a value for a gated
+   evaluation also fails that gate,
+6. exits 2 on a configuration error (bad ``--suite``, bad gate, a suite that
+   does not return a ``BenchmarkResult``).
+
+Gates key on the evaluation name (``gen_ai.evaluation.name``, the
+``EvalScore.name`` or ``@scorer(name=...)``, else the scorer function name),
+the same name ``TestCaseResult.scores`` uses and OpenSearch Dashboards groups
+results by. The evaluator (``opensearch.gen_ai.evaluation.evaluator.name``)
+is not used: one evaluator may produce several evaluations.
 
 Every option can also be set with an environment variable (used by the
 composite action), so the script runs the same way locally::
@@ -44,7 +54,7 @@ import importlib.util
 import os
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,17 +66,18 @@ EXIT_USAGE = 2
 
 
 @dataclass
-class EvaluatorStats:
-    name: str
-    mean: float | None  # None when the evaluator has verdicts but no numeric values
+class EvaluationStats:
+    name: str  # evaluation name (gen_ai.evaluation.name)
+    mean: float | None  # None when the evaluation has verdicts but no numeric values
     count: int
     passed: int
     failed: int
+    errors: int = 0  # errored cases with no value for this evaluation
 
 
 @dataclass(frozen=True)
 class Gate:
-    """A ``--fail-on-regression`` gate on an evaluator mean."""
+    """A ``--fail-on-regression`` gate on an evaluation mean."""
 
     op: str  # ">=" (mean at least) or "<=" (mean at most)
     value: float
@@ -102,7 +113,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--fail-on-regression",
         default=_env("EVAL_FAIL_ON_REGRESSION"),
-        help="evaluator=min, evaluator>=min or evaluator<=max (mean), comma or newline separated",
+        help="evaluation=min, evaluation>=min or evaluation<=max (mean, by evaluation name), "
+        "comma or newline separated",
     )
     p.add_argument(
         "--pass-threshold",
@@ -133,8 +145,8 @@ def parse_thresholds(spec: str) -> dict[str, Gate]:
         match = _GATE.match(item)
         if match is None:
             raise ValueError(
-                f"Invalid fail-on-regression entry {item!r}; use evaluator=0.8, "
-                "evaluator>=0.8 or evaluator<=12"
+                f"Invalid fail-on-regression entry {item!r}; use name=0.8, "
+                "name>=0.8 or name<=12 (name: the evaluation name)"
             )
         try:
             value = float(match["value"])
@@ -152,6 +164,8 @@ def load_suite(spec: str) -> Callable[[], Any]:
         raise ValueError(f"--suite must be module:function or file.py:function, got {spec!r}")
     if target.endswith(".py") or os.sep in target:
         path = Path(target).resolve()
+        if not path.is_file():
+            raise ValueError(f"Suite file {path} does not exist")
         mod_spec = importlib.util.spec_from_file_location(path.stem, path)
         if mod_spec is None or mod_spec.loader is None:
             raise ValueError(f"Cannot load suite file {path}")
@@ -198,20 +212,33 @@ def run_url(dashboards_url: str, run_id: str) -> str:
     return f"{base}/app/agentTraces/evaluations#/runs/{quote(run_id, safe='')}"
 
 
-def evaluator_stats(results: list[Any], pass_threshold: float) -> dict[str, EvaluatorStats]:
-    """Per-evaluator mean and pass / fail counts.
+def case_errored(case: Any) -> bool:
+    """The task or a scorer raised (or returned no usable result) on this case."""
+    return bool(case.error or case.scorer_errors or case.status == "error")
 
-    Pass / fail comes from ``case.verdicts``: the verdict the SDK resolved
-    (``pass`` / ``fail`` label, ``passed``, or ``threshold`` + ``direction`` from
-    the score or its ``@scorer``), which is also the stored label Dashboards
+
+def evaluation_stats(
+    results: list[Any], pass_threshold: float, names: Iterable[str] = ()
+) -> dict[str, EvaluationStats]:
+    """Per-evaluation mean, pass / fail counts and errored cases.
+
+    Keyed by evaluation name (``case.scores`` / ``case.verdicts``). Pass /
+    fail comes from ``case.verdicts``: the verdict the SDK resolved (``pass``
+    / ``fail`` label, ``passed``, or ``threshold`` + ``direction`` from the
+    score or its ``@scorer``), which is also the stored label Dashboards
     shows. Only a score without a verdict falls back to
-    ``value >= pass_threshold``.
+    ``value >= pass_threshold``. ``errors`` counts errored cases that have
+    neither a value nor a verdict for the evaluation. ``names`` (for example the gated names) are
+    included even when no case scored them.
     """
     values: dict[str, list[float]] = {}
-    passed: dict[str, int] = {}
+    passed: dict[str, int] = dict.fromkeys(names, 0)
     failed: dict[str, int] = {}
+    errored_cases: list[Any] = []
     for result in results:
         for case in result.cases:
+            if case_errored(case):
+                errored_cases.append(case)
             verdicts = case.verdicts or {}
             for name in {**case.scores, **verdicts}:
                 value = case.scores.get(name)
@@ -222,15 +249,19 @@ def evaluator_stats(results: list[Any], pass_threshold: float) -> dict[str, Eval
                     verdict = "pass" if float(value) >= pass_threshold else "fail"
                 passed[name] = passed.get(name, 0) + (verdict == "pass")
                 failed[name] = failed.get(name, 0) + (verdict == "fail")
-    stats: dict[str, EvaluatorStats] = {}
+    stats: dict[str, EvaluationStats] = {}
     for name in passed:
         vals = values.get(name, [])
-        stats[name] = EvaluatorStats(
+        stats[name] = EvaluationStats(
             name=name,
             mean=sum(vals) / len(vals) if vals else None,
-            count=passed[name] + failed[name],
+            count=passed[name] + failed.get(name, 0),
             passed=passed[name],
-            failed=failed[name],
+            failed=failed.get(name, 0),
+            errors=sum(
+                case.scores.get(name) is None and name not in (case.verdicts or {})
+                for case in errored_cases
+            ),
         )
     return stats
 
@@ -239,7 +270,7 @@ def case_counts(result: Any) -> tuple[int, int, int]:
     """(pass, fail, error) case counts, matching the local summary."""
     passed = failed = errors = 0
     for c in result.cases:
-        if c.error or c.scorer_errors or c.status == "error":
+        if case_errored(c):
             errors += 1
         elif c.status == "fail":
             failed += 1
@@ -248,7 +279,16 @@ def case_counts(result: Any) -> tuple[int, int, int]:
     return passed, failed, errors
 
 
-def check_regressions(stats: dict[str, EvaluatorStats], thresholds: dict[str, Gate]) -> list[str]:
+def gate_ok(stats: EvaluationStats | None, gate: Gate) -> bool:
+    return stats is not None and stats.mean is not None and not stats.errors and gate.ok(stats.mean)
+
+
+def check_regressions(stats: dict[str, EvaluationStats], thresholds: dict[str, Gate]) -> list[str]:
+    """Problems with the ``--fail-on-regression`` gates (empty when all pass).
+
+    A gate fails when its mean is outside the gate, the evaluation has no
+    numeric value at all, or an errored case has no value for it.
+    """
     problems: list[str] = []
     for name, gate in thresholds.items():
         s = stats.get(name)
@@ -259,50 +299,71 @@ def check_regressions(stats: dict[str, EvaluatorStats], thresholds: dict[str, Ga
         elif not gate.ok(s.mean):
             side = "above" if gate.op == "<=" else "below"
             problems.append(f"`{name}`: mean {s.mean:.3f} is {side} {gate.value:g}")
+        if s is not None and s.errors:
+            problems.append(f"`{name}`: {s.errors} errored case(s) without a score")
+    return problems
+
+
+def check_errors(results: list[Any]) -> list[str]:
+    """One problem per run with errored cases (these fail the job, gate or not)."""
+    problems: list[str] = []
+    for result in results:
+        errors = case_counts(result)[2]
+        if errors:
+            problems.append(
+                f"**{result.summary.benchmark_name}**: {errors} of "
+                f"{len(result.cases)} case(s) errored (task or scorer raised)"
+            )
     return problems
 
 
 def render_summary(
     results: list[Any],
-    stats: dict[str, EvaluatorStats],
+    stats: dict[str, EvaluationStats],
     *,
     dashboards_url: str,
     pass_threshold: float,
     thresholds: dict[str, Gate],
     problems: list[str],
+    errors: Sequence[str] = (),
 ) -> str:
     lines = ["## Agent evaluation results", ""]
     for result in results:
         s = result.summary
-        passed, failed, errors = case_counts(result)
+        n_pass, n_fail, n_error = case_counts(result)
         title = f"**{s.benchmark_name}** run `{s.run_id}`"
         if dashboards_url:
             title += f": [open in OpenSearch Dashboards]({run_url(dashboards_url, s.run_id)})"
         lines.append(f"- {title}")
         lines.append(
-            f"  - cases: {s.total_cases} (pass {passed}, fail {failed}, error {errors}), "
+            f"  - cases: {s.total_cases} (pass {n_pass}, fail {n_fail}, error {n_error}), "
             f"duration {s.duration_ms / 1000:.1f}s"
         )
     lines += [
         "",
-        "| Evaluator | Mean | Pass | Fail | Scores | Threshold |",
-        "|---|---:|---:|---:|---:|---|",
+        "| Evaluation | Mean | Pass | Fail | Scores | Errors | Threshold |",
+        "|---|---:|---:|---:|---:|---:|---|",
     ]
     for name in sorted(stats):
         st = stats[name]
         gate = ""
         if name in thresholds:
-            ok = st.mean is not None and thresholds[name].ok(st.mean)
+            ok = gate_ok(st, thresholds[name])
             gate = f"{'pass' if ok else 'FAIL'} ({thresholds[name].describe()})"
         mean = "-" if st.mean is None else f"{st.mean:.3f}"
-        lines.append(f"| `{name}` | {mean} | {st.passed} | {st.failed} | {st.count} | {gate} |")
+        lines.append(
+            f"| `{name}` | {mean} | {st.passed} | {st.failed} | {st.count} | {st.errors} | {gate} |"
+        )
     if not stats:
-        lines.append("| (no scores) | | | | | |")
+        lines.append("| (no scores) | | | | | | |")
     lines += [
         "",
         "Pass / Fail use each score's verdict (the stored label); scores without one "
-        f"count as pass when value >= {pass_threshold:g}.",
+        f"count as pass when value >= {pass_threshold:g}. Errors: errored cases "
+        "with no value for that evaluation.",
     ]
+    if errors:
+        lines += ["", "**Errored cases (job fails):**", ""] + [f"- {e}" for e in errors]
     if problems:
         lines += ["", "**Regression check failed:**", ""] + [f"- {p}" for p in problems]
     elif thresholds:
@@ -338,6 +399,11 @@ def main(argv: list[str] | None = None) -> int:
     provider = setup_telemetry(args)
     try:
         suite = load_suite(args.suite)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        provider.shutdown()
+        return EXIT_USAGE
+    try:
         returned = suite()
     finally:
         # Export traces and evaluation events before reporting.
@@ -352,8 +418,9 @@ def main(argv: list[str] | None = None) -> int:
         provider.shutdown()
         return EXIT_USAGE
 
-    stats = evaluator_stats(results, args.pass_threshold)
+    stats = evaluation_stats(results, args.pass_threshold, names=thresholds)
     problems = check_regressions(stats, thresholds)
+    errors = check_errors(results)
     summary = render_summary(
         results,
         stats,
@@ -361,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
         pass_threshold=args.pass_threshold,
         thresholds=thresholds,
         problems=problems,
+        errors=errors,
     )
     print(summary)
     _append(args.summary_file, summary)
@@ -372,7 +440,7 @@ def main(argv: list[str] | None = None) -> int:
     _append(args.output_file, "\n".join(outputs) + "\n")
 
     provider.shutdown()
-    return EXIT_REGRESSION if problems else EXIT_OK
+    return EXIT_REGRESSION if problems or errors else EXIT_OK
 
 
 if __name__ == "__main__":

@@ -74,6 +74,10 @@ class TestParsing:
         with pytest.raises(ValueError, match="module:function"):
             rs.load_suite("no_colon")
 
+    def test_load_suite_missing_file(self, tmp_path):
+        with pytest.raises(ValueError, match="does not exist"):
+            rs.load_suite(str(tmp_path / "nope.py") + ":suite")
+
 
 class TestRunUrl:
     def test_deep_link_shape(self):
@@ -89,7 +93,7 @@ class TestRunUrl:
 class TestReport:
     def test_stats_and_regressions(self):
         result = _result()
-        stats = rs.evaluator_stats([result], pass_threshold=0.5)
+        stats = rs.evaluation_stats([result], pass_threshold=0.5)
         assert stats["exact"].mean == 0.5
         assert (stats["exact"].passed, stats["exact"].failed) == (1, 1)
         assert (stats["half"].passed, stats["half"].failed) == (2, 0)
@@ -116,7 +120,7 @@ class TestReport:
             data=[{"input": "fast"}, {"input": "slow"}],
             scores=[latency, judge],
         )
-        stats = rs.evaluator_stats([result], pass_threshold=0.5)
+        stats = rs.evaluation_stats([result], pass_threshold=0.5)
         assert (stats["latency_s"].passed, stats["latency_s"].failed) == (1, 1)
         assert (stats["judge"].passed, stats["judge"].failed) == (0, 2)
         assert stats["latency_s"].mean == 14.5
@@ -132,7 +136,7 @@ class TestReport:
             data=[{"input": "a"}],
             scores=[lambda i, o, e: EvalScore(name="tool_ok", value=None, label="pass")],
         )
-        stats = rs.evaluator_stats([result], pass_threshold=0.5)
+        stats = rs.evaluation_stats([result], pass_threshold=0.5)
         assert stats["tool_ok"].mean is None
         assert (stats["tool_ok"].passed, stats["tool_ok"].count) == (1, 1)
         assert rs.check_regressions(stats, {"tool_ok": rs.Gate(">=", 0.5)}) == [
@@ -146,11 +150,11 @@ class TestReport:
             thresholds={},
             problems=[],
         )
-        assert "| `tool_ok` | - | 1 | 0 | 1 |  |" in text
+        assert "| `tool_ok` | - | 1 | 0 | 1 | 0 |  |" in text
 
     def test_summary_markdown(self):
         result = _result()
-        stats = rs.evaluator_stats([result], 0.5)
+        stats = rs.evaluation_stats([result], 0.5)
         text = rs.render_summary(
             [result],
             stats,
@@ -160,8 +164,78 @@ class TestReport:
             problems=rs.check_regressions(stats, {"exact": rs.Gate(">=", 0.9)}),
         )
         assert f"#/runs/{result.summary.run_id}" in text
-        assert "| `exact` | 0.500 | 1 | 1 | 2 | FAIL (min 0.9) |" in text
+        assert "| `exact` | 0.500 | 1 | 1 | 2 | 0 | FAIL (min 0.9) |" in text
         assert "Regression check failed" in text
+
+    def test_errored_cases_fail_the_gate(self):
+        """19 of 20 cases raise, 1 scores 1.0: the mean is 1.0 but the gate fails."""
+
+        def task(x):
+            if x != 0:
+                raise RuntimeError("boom")
+            return x
+
+        def accuracy(i, o, e) -> float:
+            return 1.0
+
+        result = evaluate(
+            name="gha-errors",
+            task=task,
+            data=[{"input": i} for i in range(20)],
+            scores=[accuracy],
+        )
+        stats = rs.evaluation_stats([result], 0.5)
+        assert stats["accuracy"].mean == 1.0
+        assert stats["accuracy"].errors == 19
+        problems = rs.check_regressions(stats, {"accuracy": rs.Gate(">=", 0.8)})
+        assert problems == ["`accuracy`: 19 errored case(s) without a score"]
+        assert rs.check_errors([result]) == [
+            "**gha-errors**: 19 of 20 case(s) errored (task or scorer raised)"
+        ]
+        text = rs.render_summary(
+            [result],
+            stats,
+            dashboards_url="",
+            pass_threshold=0.5,
+            thresholds={"accuracy": rs.Gate(">=", 0.8)},
+            problems=problems,
+            errors=rs.check_errors([result]),
+        )
+        assert "| `accuracy` | 1.000 | 1 | 0 | 1 | 19 | FAIL (min 0.8) |" in text
+        assert "Errored cases (job fails)" in text
+
+    def test_scorer_error_only_fails_the_gate_without_a_value(self):
+        """A case where another scorer raised does not fail a gate that has its value."""
+
+        def good(i, o, e) -> float:
+            return 1.0
+
+        def bad(i, o, e) -> float:
+            raise ValueError("judge down")
+
+        result = evaluate(
+            name="gha-scorer-error", task=lambda x: x, data=[{"input": "a"}], scores=[good, bad]
+        )
+        stats = rs.evaluation_stats([result], 0.5, names=["good", "bad"])
+        assert (stats["good"].errors, stats["bad"].errors) == (0, 1)
+        assert rs.check_regressions(stats, {"good": rs.Gate(">=", 0.5)}) == []
+        assert rs.check_regressions(stats, {"bad": rs.Gate(">=", 0.5)}) == [
+            "`bad`: no scores recorded (expected mean >= 0.5)",
+            "`bad`: 1 errored case(s) without a score",
+        ]
+
+    def test_gate_keys_on_evaluation_name(self):
+        """Scorer ``quality`` returning ``answer_quality``: gate and table use the latter."""
+
+        def quality(i, o, e) -> EvalScore:
+            return EvalScore(name="answer_quality", value=0.9)
+
+        result = evaluate(
+            name="gha-names", task=lambda x: x, data=[{"input": "a"}], scores=[quality]
+        )
+        stats = rs.evaluation_stats([result], 0.5)
+        assert set(stats) == {"answer_quality"}
+        assert rs.check_regressions(stats, {"answer_quality": rs.Gate(">=", 0.8)}) == []
 
     def test_case_counts(self):
         def boom(x):
@@ -244,3 +318,50 @@ class TestMain:
 
     def test_missing_suite(self):
         assert rs.main(["--suite", ""]) == 2
+
+    def _main(self, tmp_path, suite, *extra):
+        provider = MagicMock()
+        with patch.object(rs, "setup_telemetry", return_value=provider):
+            code = rs.main(
+                [
+                    "--suite",
+                    suite,
+                    "--summary-file",
+                    str(tmp_path / "summary.md"),
+                    "--output-file",
+                    str(tmp_path / "output.txt"),
+                    "--working-directory",
+                    str(tmp_path),
+                    *extra,
+                ]
+            )
+        return code, provider
+
+    @pytest.mark.parametrize(
+        "suite",
+        ["no_colon", "missing_file.py:suite", "bad_suite.py:not_callable", "bad_suite.py:absent"],
+    )
+    def test_bad_suite_is_a_config_error(self, tmp_path, monkeypatch, capsys, suite):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "bad_suite.py").write_text("not_callable = 1\n")
+        code, provider = self._main(tmp_path, suite)
+        assert code == 2
+        assert "error:" in capsys.readouterr().err
+        provider.shutdown.assert_called_once()
+
+    def test_errored_cases_fail_without_a_gate(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "erroring.py").write_text(
+            "from opensearch_genai_observability_sdk_py import evaluate\n"
+            "def boom(x):\n"
+            "    raise RuntimeError('down')\n"
+            "def suite():\n"
+            "    return evaluate(name='all-errored', task=boom,\n"
+            "                    data=[{'input': 'a'}, {'input': 'b'}],\n"
+            "                    scores=[lambda i, o, e: 1.0])\n"
+        )
+        code, _ = self._main(tmp_path, str(tmp_path / "erroring.py") + ":suite")
+        assert code == 1
+        summary = (tmp_path / "summary.md").read_text()
+        assert "pass 0, fail 0, error 2" in summary
+        assert "**all-errored**: 2 of 2 case(s) errored" in summary
