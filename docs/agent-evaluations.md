@@ -68,7 +68,7 @@ Call `register()` once at startup. It sets up the OTLP traces pipeline and the O
 from opensearch_genai_observability_sdk_py import register
 
 register(
-    endpoint="http://localhost:21890/opentelemetry",  # base URL for traces and logs
+    endpoint="http://localhost:4318",  # OTLP base URL for traces and logs (the default)
     service_name="travel-agent",
     agent_name="travel_planner",
     agent_version="v3",
@@ -77,14 +77,41 @@ register(
 
 Endpoints follow the OTel exporter spec, one rule per signal (traces, logs):
 
-- `endpoint=` is the base URL for all signals (like `OTEL_EXPORTER_OTLP_ENDPOINT`). Over HTTP the SDK appends `/v1/traces` and `/v1/logs`; over gRPC it uses the base as-is for both.
-- `traces_endpoint=` / `logs_endpoint=` are full URLs for one signal and win over `endpoint=`.
-- Code arguments always win over env vars. Per signal: `<signal>_endpoint=`, then `endpoint=`, then `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT` (full URL), then `OTEL_EXPORTER_OTLP_ENDPOINT` (base), then the Data Prepper default.
-- With nothing set, the base is the local Data Prepper `http://localhost:21890/opentelemetry`. See the [README](../README.md#endpoints-traces-and-evaluation-logs) for the full order and the protocol rules.
-- Amazon OpenSearch Ingestion has one pipeline per signal, so give both pipeline URLs. `sigv4=` signs both exporters:
+- `endpoint=` is always the OTLP base URL (like `OTEL_EXPORTER_OTLP_ENDPOINT`). Over HTTP the SDK appends `/v1/traces` and `/v1/logs`; over gRPC it uses the base as-is for both. A base ending with `/v1/traces` or `/v1/logs` raises `ValueError`.
+- `traces_endpoint=` / `logs_endpoint=` are full URLs for one signal and win over `endpoint=`. Pass both or neither (`log_exporter=` counts as the logs side).
+- Code arguments always win over env vars. Per signal: `<signal>_endpoint=`, then `endpoint=`, then `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT` (full URL), then `OTEL_EXPORTER_OTLP_ENDPOINT` (base), then the default base `http://localhost:4318`.
+- There are no port options: the port is part of each URL. See the [README](../README.md#endpoints-traces-and-evaluation-logs) for the full order and the protocol rules.
+
+Three setups:
+
+(a) Local OTel Collector or the observability stack: nothing to set.
 
 ```python
-from opensearch_genai_observability_sdk_py import register
+register(service_name="travel-agent")  # same as endpoint="http://localhost:4318"
+```
+
+(b) One OTLP source for both signals under a pipeline path: an OpenSearch Ingestion (OSI) or Data Prepper `otlp` source with `traces_path: /<pipeline>/v1/traces` and `logs_path: /<pipeline>/v1/logs`, as in the [Data Prepper pipeline](#a-self-managed-data-prepper) below. Pass the pipeline base. `sigv4=` signs both exporters for OSI:
+
+```python
+register(
+    endpoint="http://localhost:21890/otlp-pipeline",  # Data Prepper example below
+    agent_name="travel_planner",
+)
+
+register(
+    endpoint="https://<host>/<pipeline>",  # OSI
+    sigv4={"service": "osis", "region": "us-east-1"},
+    agent_name="travel_planner",
+)
+```
+
+(c) Separate trace and log pipelines (`otel_trace_source` and `otel_logs_source`): pass both full URLs. On Data Prepper the default ports are 21890 (traces) and 21892 (logs); set `path:` (for example `/v1/traces` and `/v1/logs`) and `unframed_requests: true` on each source. On OSI, one pipeline per signal:
+
+```python
+register(
+    traces_endpoint="http://data-prepper:21890/v1/traces",
+    logs_endpoint="http://data-prepper:21892/v1/logs",
+)
 
 register(
     traces_endpoint="https://traces-pipe-abc.us-east-1.osis.amazonaws.com/v1/traces",
@@ -364,6 +391,9 @@ otlp-pipeline:
     otlp:
       port: 21890
       ssl: false
+      unframed_requests: true  # accept plain OTLP/HTTP from the SDK
+      traces_path: "/otlp-pipeline/v1/traces"
+      logs_path: "/otlp-pipeline/v1/logs"
   route:
     - evaluations: 'getEventType() == "LOG" and /eventName == "gen_ai.evaluation.result"'
     - logs: 'getEventType() == "LOG" and /eventName != "gen_ai.evaluation.result"'
@@ -398,7 +428,7 @@ genai-evaluation-pipeline:
         template_file: /usr/share/data-prepper/templates/genai-evaluation-index-template.json
 ```
 
-`otel-logs-pipeline` and `otel-traces-pipeline` are your existing logs and traces pipelines. Save the [index template JSON](#index-template) as the `template_file`.
+Point the SDK at the pipeline base: `register(endpoint="http://<data-prepper-host>:21890/otlp-pipeline")` sends to `/otlp-pipeline/v1/traces` and `/otlp-pipeline/v1/logs`, the paths set on the source. `otel-logs-pipeline` and `otel-traces-pipeline` are your existing logs and traces pipelines. Save the [index template JSON](#index-template) as the `template_file`.
 
 **Experimental: `index_type: genai-evaluation-plain`.** The Data Prepper draft [opensearch-project/data-prepper#7243](https://github.com/opensearch-project/data-prepper/pull/7243) adds this index type to the OpenSearch sink. It is not in a Data Prepper release and its mappings may change. The sink manages the template, so drop `index`, `template_type` and `template_file`:
 
@@ -424,7 +454,7 @@ PUT _index_template/otel-v1-genai-evaluation
 <the index template JSON below>
 ```
 
-2. Create an OSI pipeline with an OTLP logs source. Point `register(logs_endpoint=...)` at its `/v1/logs` URL.
+2. Create an OSI pipeline with an OTLP logs source. Pass its `/v1/logs` URL as `register(logs_endpoint=...)`, together with your traces pipeline URL as `traces_endpoint=` (setup (c)). With a single OSI `otlp` source for both signals, use setup (b) instead.
 
 ```yaml
 version: "2"
@@ -789,7 +819,7 @@ explore.agentTraces.evaluations.enabled: true
 ## Troubleshooting
 
 - **No events at all.** `register()` was not called, or your own OTel setup has no global `LoggerProvider`. Short scripts: the SDK flushes at exit; call `provider.force_flush()` on the `TracerProvider` that `register()` returns if the process is killed.
-- **Traces arrive, results do not.** The logs endpoint is wrong: nothing is derived from the traces URL, so `traces_endpoint=` alone sends logs to the base (`endpoint=` or the local Data Prepper default), and a custom `exporter=` without a logs destination skips logs with a warning. Set `logs_endpoint=`, or a base `endpoint=` that serves both signals. `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` only applies when neither `logs_endpoint=` nor `endpoint=` is passed. With OSI, the logs pipeline must be a separate pipeline with an OTLP logs source, and `sigv4=` must be set so the logs are signed.
+- **Traces arrive, results do not.** The logs endpoint is wrong: nothing is derived from the traces URL, and a custom `exporter=` without a logs destination skips logs with a warning. Set both `traces_endpoint=` and `logs_endpoint=`, or a base `endpoint=` that serves both signals. `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` only applies when neither `logs_endpoint=` nor `endpoint=` is passed. With OSI, the logs pipeline must be a separate pipeline with an OTLP logs source, and `sigv4=` must be set so the logs are signed.
 - **Results land in the logs index.** The route did not match `eventName`. Check that the route uses `/eventName == "gen_ai.evaluation.result"` and that your Data Prepper version maps the OTLP `event_name` field to `eventName` (added in opensearch-project/data-prepper#7148).
 - **Field types look wrong** (strings as `text` with `.keyword` sub-fields, `time` not a date). The index was created before the index template. Create the template, then wait for the next daily index or reindex.
 - **`opensearch.test.case.expected` cannot be aggregated.** Expected: it is `text`. Filter or search on it instead.

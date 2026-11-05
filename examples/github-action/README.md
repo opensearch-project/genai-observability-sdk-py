@@ -43,8 +43,8 @@ Each score is recorded under its evaluation name (`gen_ai.evaluation.name`: the 
 
 Traces and evaluation logs share one base URL (`endpoint`) or use one full URL each (`traces-endpoint`, `logs-endpoint`); see "Endpoints: traces and evaluation logs" in the [SDK README](../../README.md#endpoints-traces-and-evaluation-logs).
 
-- **OpenSearch Ingestion (OSIS):** one pipeline per signal. Create a traces pipeline and a logs pipeline (OTLP logs source; Data Prepper routes the evaluation events to `otel-v1-genai-evaluation-*`), then pass both URLs as `traces-endpoint` and `logs-endpoint` and set `aws-region` to sign both with SigV4. Give the workflow AWS credentials with `osis:Ingest` on both pipelines, for example with `aws-actions/configure-aws-credentials` and an OIDC role.
-- **OTel Collector / Data Prepper:** pass the base URL as `endpoint` (for example `http://collector:4318`; the SDK appends `/v1/traces` and `/v1/logs`) and leave `aws-region` empty. Extra headers (for example auth) can be set with the standard `OTEL_EXPORTER_OTLP_HEADERS` env var on the step.
+- **OpenSearch Ingestion (OSIS):** one pipeline per signal. Create a traces pipeline and a logs pipeline (OTLP logs source; Data Prepper routes the evaluation events to `otel-v1-genai-evaluation-*`), then pass both URLs as `traces-endpoint` and `logs-endpoint` (always together; one alone is a configuration error) and set `aws-region` to sign both with SigV4. Give the workflow AWS credentials with `osis:Ingest` on both pipelines, for example with `aws-actions/configure-aws-credentials` and an OIDC role.
+- **OTel Collector / Data Prepper `otlp` source / a single OSIS `otlp` pipeline:** pass the OTLP base URL as `endpoint` (for example `http://collector:4318` or `https://<host>/<pipeline>`; the SDK appends `/v1/traces` and `/v1/logs`, and a value ending in `/v1/traces` is a configuration error) and leave `aws-region` empty. Extra headers (for example auth) can be set with the standard `OTEL_EXPORTER_OTLP_HEADERS` env var on the step.
 
 Store the URLs as secrets or variables.
 
@@ -86,7 +86,7 @@ Exit codes:
 
 - `0`: no case errored and every gate passed.
 - `1`: any case errored, with or without a gate (so an all-errored run fails); or a `fail-on-regression` gate failed: the evaluation mean is outside the gate, the evaluation produced no scores, or an errored case has no value for it.
-- `2`: configuration error: a malformed `suite` (not `module:function` / `file.py:function`, missing file, target not callable), a malformed `fail-on-regression`, or a suite that does not return a `BenchmarkResult`.
+- `2`: configuration error: a malformed `suite` (not `module:function` / `file.py:function`, missing file, target not callable), a malformed `fail-on-regression`, endpoints `register()` rejects (a base URL ending in `/v1/traces` or `/v1/logs`, or only one of `traces-endpoint` / `logs-endpoint`), or a suite that does not return a `BenchmarkResult`.
 
 ### CI/CD attributes
 

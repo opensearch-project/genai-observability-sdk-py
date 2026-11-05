@@ -17,10 +17,14 @@ LoggerProvider with an OTLP log exporter, so evaluation events
 
 Endpoints follow the OTel exporter spec, one rule per signal (traces, logs):
 
-- ``endpoint=`` is the base URL for all signals, like
-  ``OTEL_EXPORTER_OTLP_ENDPOINT``.
-- ``traces_endpoint=`` / ``logs_endpoint=`` are full-URL overrides for one
-  signal, like ``OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT``.
+- ``endpoint=`` is always the OTLP base URL for all signals, like
+  ``OTEL_EXPORTER_OTLP_ENDPOINT`` (for example ``http://host:4318``).
+- ``traces_endpoint=`` / ``logs_endpoint=`` are full URLs, like
+  ``OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT``. Pass both or neither
+  (``log_exporter=`` counts as the logs side, ``exporter=`` as the traces
+  side): nothing is derived from one signal's URL for the other.
+
+There are no port options: the port is part of each URL.
 
 Endpoint per signal (priority order)
 ------------------------------------
@@ -30,21 +34,26 @@ Code arguments always win over env vars, as in the OTel exporters.
 2. ``endpoint=`` parameter: base URL (see the base rule below).
 3. ``OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT`` env var: full URL, used as-is.
 4. ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var: base URL.
-5. The Data Prepper default base ``http://localhost:21890/opentelemetry``.
+5. The default base ``http://localhost:4318`` (a local OTel Collector).
 
 Base rule: over HTTP ``/v1/<signal>`` is appended to the base; over gRPC the
-base is used as-is (gRPC has no per-signal path).
+base is used as-is (gRPC has no per-signal path). A base whose path ends with
+``/v1/traces`` or ``/v1/logs`` raises ``ValueError``: it is a full signal URL,
+not a base. (Up to 0.2.9 ``endpoint=`` was the full traces URL.)
 
 Protocol per signal (priority order)
 ------------------------------------
 1. ``protocol=`` parameter: ``"http"`` or ``"grpc"``.
-2. ``OTEL_EXPORTER_OTLP_<SIGNAL>_PROTOCOL`` env var.
-3. ``OTEL_EXPORTER_OTLP_PROTOCOL`` env var.
-4. Inferred from that signal's URL scheme: ``grpc://`` / ``grpcs://`` is
-   gRPC, everything else (``http://``, ``https://``) is HTTP.
+2. A ``grpc://`` / ``grpcs://`` scheme on that signal's URL passed in code
+   (``<signal>_endpoint=`` or ``endpoint=``).
+3. ``OTEL_EXPORTER_OTLP_<SIGNAL>_PROTOCOL`` env var.
+4. ``OTEL_EXPORTER_OTLP_PROTOCOL`` env var.
+5. That signal's URL scheme: ``grpc://`` / ``grpcs://`` is gRPC.
+6. Otherwise HTTP.
 
-Each signal's protocol is checked against that signal's own URL. A protocol
-that contradicts a ``grpc://`` or ``grpcs://`` scheme raises ``ValueError``.
+``protocol="http"`` with a ``grpc://`` or ``grpcs://`` URL raises
+``ValueError``, as does an HTTP protocol env var with a ``grpc://`` URL
+from an env var.
 
 Supported protocols
 --------------------
@@ -54,19 +63,35 @@ Supported protocols
 
 ``http/json`` is not supported.
 
-AWS SigV4 (for example AWS OpenSearch Ingestion, OSIS)
-------------------------------------------------------
-``sigv4={"service": "osis", "region": "us-east-1"}`` (or ``sigv4=True``)
-makes register() build signed exporters for both signals. OSIS has one
-pipeline per signal, so pass both URLs:
+Setups
+------
+(a) Local OTel Collector (for example the observability stack): nothing to
+set, or ``register(endpoint="http://localhost:4318")``.
+
+(b) One OTLP source serving both signals under a pipeline path, for example
+an OpenSearch Ingestion (OSIS) or Data Prepper ``otlp`` source with
+``traces_path: /<pipeline>/v1/traces`` and ``logs_path: /<pipeline>/v1/logs``:
 
     register(
-        traces_endpoint="https://traces-pipe.us-east-1.osis.amazonaws.com/v1/traces",
-        logs_endpoint="https://logs-pipe.us-east-1.osis.amazonaws.com/v1/logs",
-        sigv4={"service": "osis", "region": "us-east-1"},
+        endpoint="https://<host>/<pipeline>",
+        sigv4={"service": "osis", "region": "us-east-1"},  # OSIS only
     )
 
-SigV4 is HTTP-only: a signal resolved to gRPC raises ``ValueError``.
+(c) Separate trace and log pipelines (``otel_trace_source`` and
+``otel_logs_source``): pass both full URLs. On Data Prepper the default ports
+are 21890 (traces) and 21892 (logs); set ``path:`` and
+``unframed_requests: true`` on each source:
+
+    register(
+        traces_endpoint="http://data-prepper:21890/v1/traces",
+        logs_endpoint="http://data-prepper:21892/v1/logs",
+    )
+
+AWS SigV4
+---------
+``sigv4={"service": "osis", "region": "us-east-1"}`` (or ``sigv4=True``)
+makes register() build signed exporters for both signals. SigV4 is
+HTTP-only: a signal resolved to gRPC raises ``ValueError``.
 
 Escape hatches
 --------------
@@ -76,32 +101,16 @@ no ``log_exporter=``, a plain (or SigV4) OTLP log exporter is built only if
 a logs destination is configured (``logs_endpoint=``, ``endpoint=``,
 ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`` or ``OTEL_EXPORTER_OTLP_ENDPOINT``);
 otherwise a warning is logged and evaluation events are not exported.
-
-Compatibility
--------------
-Up to 0.2.9 ``endpoint=`` was the full traces URL. Such a value is still
-accepted for one release and emits a ``DeprecationWarning``:
-
-- A path ending with ``/v1/traces``: the suffix is removed to get the base,
-  so traces go to the same URL as before and logs to ``/v1/logs`` next to it.
-- Any other path whose last segment is ``traces`` (for example
-  ``https://gw/otlp/traces``): it is used as the traces URL as-is, and logs
-  go to the sibling path with ``logs`` as the last segment
-  (``https://gw/otlp/logs``). Pass ``logs_endpoint=`` if that is wrong.
-
-In both cases it sits where ``endpoint=`` sits in the order above: only
-``traces_endpoint=`` / ``logs_endpoint=`` win over it.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import warnings
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from typing import Any, Literal
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 from opentelemetry import _logs, trace
 from opentelemetry.sdk._logs import LoggerProvider
@@ -119,15 +128,14 @@ from opensearch_genai_observability_sdk_py._internal import set_agent_defaults
 
 logger = logging.getLogger(__name__)
 
-# Data Prepper ``otlp`` source: one base serves /v1/traces and /v1/logs.
-DEFAULT_BASE_ENDPOINT = "http://localhost:21890/opentelemetry"
+# OTel standard OTLP/HTTP base (a local OTel Collector): /v1/traces, /v1/logs.
+DEFAULT_BASE_ENDPOINT = "http://localhost:4318"
 DEFAULT_ENDPOINT = DEFAULT_BASE_ENDPOINT + "/v1/traces"
 DEFAULT_LOGS_ENDPOINT = DEFAULT_BASE_ENDPOINT + "/v1/logs"
 
 Signal = Literal["traces", "logs"]
 
-_LEGACY_TRACES_SUFFIX = "/v1/traces"
-_LEGACY_TRACES_SEGMENT = "traces"
+_SIGNAL_PATH_SUFFIXES = ("/v1/traces", "/v1/logs")
 _SIGV4_KEYS = frozenset({"service", "region"})
 
 # Entry point group to discover instrumentors from.
@@ -135,23 +143,6 @@ _SIGV4_KEYS = frozenset({"service", "region"})
 _INSTRUMENTOR_GROUPS = [
     "opentelemetry_instrumentor",
 ]
-
-
-@dataclass(frozen=True)
-class _EndpointArg:
-    """``endpoint=`` after the 0.2.9 compatibility shim.
-
-    ``base`` is the base URL for all signals. ``traces`` / ``logs`` are full
-    per-signal URLs derived from a legacy full traces URL that has no
-    ``/v1/traces`` suffix; they take the place of the base for that signal.
-    """
-
-    base: str | None = None
-    traces: str | None = None
-    logs: str | None = None
-
-    def signal_url(self, signal: Signal) -> str | None:
-        return self.traces if signal == "traces" else self.logs
 
 
 @dataclass(frozen=True)
@@ -199,30 +190,33 @@ def register(
     3. ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` / ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``
        (full URL, used as-is)
     4. ``OTEL_EXPORTER_OTLP_ENDPOINT`` (base URL)
-    5. ``http://localhost:21890/opentelemetry`` (Data Prepper default base)
+    5. ``http://localhost:4318`` (default base, a local OTel Collector)
 
     A base URL gets ``/v1/traces`` or ``/v1/logs`` appended over HTTP and is
-    used as-is over gRPC.
+    used as-is over gRPC. There are no port options: the port is part of
+    each URL.
 
     Protocol per signal, in priority order:
 
     1. ``protocol=``
-    2. ``OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`` / ``OTEL_EXPORTER_OTLP_LOGS_PROTOCOL``
-    3. ``OTEL_EXPORTER_OTLP_PROTOCOL``
-    4. Inferred from that signal's URL scheme (``grpc://`` / ``grpcs://`` is
-       gRPC, else HTTP)
+    2. A ``grpc://`` / ``grpcs://`` scheme on that signal's URL passed in code
+    3. ``OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`` / ``OTEL_EXPORTER_OTLP_LOGS_PROTOCOL``
+    4. ``OTEL_EXPORTER_OTLP_PROTOCOL``
+    5. That signal's URL scheme (``grpc://`` / ``grpcs://`` is gRPC)
+    6. Otherwise HTTP
 
     Args:
         endpoint: Base OTLP URL for all signals, same meaning as
             ``OTEL_EXPORTER_OTLP_ENDPOINT`` (for example
-            ``http://collector:4318`` or ``grpc://collector:4317``). A full
-            traces URL (the 0.2.9 meaning) is deprecated: a path ending with
-            ``/v1/traces`` warns and the suffix is removed; any other path
-            whose last segment is ``traces`` warns and is used as the traces
-            URL as-is, with logs sent to the sibling ``.../logs`` path.
+            ``http://collector:4318``, ``https://<host>/<pipeline>`` or
+            ``grpc://collector:4317``). A path ending with ``/v1/traces`` or
+            ``/v1/logs`` raises ``ValueError``: pass the base, or
+            ``traces_endpoint=`` and ``logs_endpoint=``.
         traces_endpoint: Full OTLP traces URL. Overrides the base for traces.
+            Pass it together with ``logs_endpoint=`` (or ``log_exporter=``).
         logs_endpoint: Full OTLP logs URL (evaluation events), for example
-            the OSIS logs pipeline. Overrides the base for logs.
+            the OSIS logs pipeline. Overrides the base for logs. Pass it
+            together with ``traces_endpoint=`` (or ``exporter=``).
         protocol: Force ``"http"`` or ``"grpc"`` for both signals. When
             omitted, resolved per signal from the env vars, then the URL
             scheme. Raises ``ValueError`` if it contradicts a ``grpc://`` or
@@ -270,21 +264,26 @@ def register(
         ``register()`` created.
 
     Raises:
-        ValueError: If a protocol contradicts its URL scheme, a protocol
-            value is unsupported, ``sigv4`` is used with gRPC, or ``sigv4``
-            has unknown keys.
+        ValueError: If a base URL ends with ``/v1/traces`` or ``/v1/logs``,
+            only one of ``traces_endpoint=`` / ``logs_endpoint=`` is passed,
+            a protocol contradicts its URL scheme, a protocol value is
+            unsupported, ``sigv4`` is used with gRPC, or ``sigv4`` has
+            unknown keys.
 
     Examples:
-        # Self-hosted Data Prepper: zero config
-        register()
-
-        # OTel Collector serving traces and logs (or OTEL_EXPORTER_OTLP_ENDPOINT)
-        register(endpoint="http://collector:4318")
+        # (a) Local OTel Collector or observability stack: zero config
+        register()  # same as register(endpoint="http://localhost:4318")
 
         # gRPC: the same host:port for both signals
         register(endpoint="grpc://collector:4317")
 
-        # AWS OSIS with SigV4 signing: one pipeline per signal
+        # (b) One OSIS / Data Prepper ``otlp`` source for both signals
+        register(
+            endpoint="https://<host>/<pipeline>",
+            sigv4={"service": "osis", "region": "us-east-1"},
+        )
+
+        # (c) Separate trace and log pipelines: both full URLs
         register(
             traces_endpoint="https://traces-pipe.us-east-1.osis.amazonaws.com/v1/traces",
             logs_endpoint="https://logs-pipe.us-east-1.osis.amazonaws.com/v1/logs",
@@ -292,7 +291,14 @@ def register(
         )
     """
     set_agent_defaults(agent_name, agent_version)
-    endpoint_arg = _parse_endpoint_arg(endpoint)
+    if endpoint:
+        _check_base(endpoint, "endpoint=")
+    _check_signal_pair(
+        traces_endpoint,
+        logs_endpoint,
+        has_exporter=exporter is not None,
+        logs_needed=enable_logs and set_global and log_exporter is None,
+    )
     sigv4_opts = _sigv4_options(sigv4)
 
     name = (
@@ -316,7 +322,7 @@ def register(
     custom_exporter = exporter is not None
     traces_url = "custom exporter"
     if exporter is None:
-        target = _resolve_signal("traces", traces_endpoint, endpoint_arg, protocol)
+        target = _resolve_signal("traces", traces_endpoint, endpoint, protocol)
         traces_url = target.url
         exporter = _create_exporter(target, headers, sigv4_opts)
 
@@ -339,7 +345,7 @@ def register(
             resource=resource,
             batch=batch,
             custom_exporter=custom_exporter,
-            endpoint_arg=endpoint_arg,
+            endpoint=endpoint,
             logs_endpoint=logs_endpoint,
             protocol=protocol,
             headers=headers,
@@ -360,38 +366,45 @@ def register(
     return provider
 
 
-def _parse_endpoint_arg(endpoint: str | None) -> _EndpointArg:
-    """Accept the 0.2.9 meaning of ``endpoint=`` (full traces URL) for one release."""
-    if not endpoint:
-        return _EndpointArg()
-    parsed = urlparse(endpoint)
-    path = parsed.path.rstrip("/")
-    if path.endswith(_LEGACY_TRACES_SUFFIX):
-        base = urlunparse(parsed._replace(path=path[: -len(_LEGACY_TRACES_SUFFIX)]))
-        warnings.warn(
-            f"register(endpoint='{endpoint}'): endpoint= is now the base URL for all signals "
-            f"(like OTEL_EXPORTER_OTLP_ENDPOINT). Pass endpoint='{base}', or "
-            "traces_endpoint= for a full traces URL. The /v1/traces suffix is removed for "
-            "now; this will stop working in a future release.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        return _EndpointArg(base=base)
+def _check_base(base: str, source: str) -> None:
+    """Reject a base URL that is really a full signal URL."""
+    path = urlparse(base).path.rstrip("/")
+    for suffix in _SIGNAL_PATH_SUFFIXES:
+        if path.endswith(suffix):
+            if source == "endpoint=":
+                fix = "pass traces_endpoint= and logs_endpoint="
+            else:
+                fix = "set OTEL_EXPORTER_OTLP_TRACES_ENDPOINT and OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
+            raise ValueError(
+                f"{source} is the OTLP base URL (e.g. http://host:4318). "
+                f"Remove '{suffix}', or {fix}. Got {base!r}."
+            )
 
-    parent, _, last = path.rpartition("/")
-    if last != _LEGACY_TRACES_SEGMENT:
-        return _EndpointArg(base=endpoint)
-    logs = urlunparse(parsed._replace(path=f"{parent}/logs"))
-    warnings.warn(
-        f"register(endpoint='{endpoint}'): endpoint= is now the base URL for all signals "
-        "(like OTEL_EXPORTER_OTLP_ENDPOINT), and /v1/<signal> is appended to it over "
-        f"HTTP. Pass traces_endpoint='{endpoint}' (and logs_endpoint=) for full URLs. "
-        f"For now it is used as the traces URL and logs go to '{logs}'; this will stop "
-        "working in a future release.",
-        DeprecationWarning,
-        stacklevel=3,
+
+def _check_signal_pair(
+    traces_endpoint: str | None,
+    logs_endpoint: str | None,
+    *,
+    has_exporter: bool,
+    logs_needed: bool,
+) -> None:
+    """``traces_endpoint=`` and ``logs_endpoint=`` go together.
+
+    Nothing is derived from one signal's URL for the other, so a lone full
+    URL would silently send the other signal to the base. ``exporter=``
+    stands in for the traces side and ``log_exporter=`` (or no logs
+    pipeline) for the logs side.
+    """
+    if traces_endpoint and not logs_endpoint and logs_needed:
+        missing, given = "logs_endpoint=", "traces_endpoint="
+    elif logs_endpoint and not traces_endpoint and not has_exporter:
+        missing, given = "traces_endpoint=", "logs_endpoint="
+    else:
+        return
+    raise ValueError(
+        f"{given} was passed without {missing}: pass traces_endpoint= and logs_endpoint= "
+        "together (full URLs), or endpoint= (the OTLP base URL) for both signals."
     )
-    return _EndpointArg(traces=endpoint, logs=logs)
 
 
 def _sigv4_options(sigv4: bool | dict[str, str] | None) -> dict[str, str] | None:
@@ -410,19 +423,26 @@ def _sigv4_options(sigv4: bool | dict[str, str] | None) -> dict[str, str] | None
     return {k: str(v) for k, v in sigv4.items() if v}
 
 
-def _signal_protocol(signal: Signal, protocol: str | None) -> str | None:
-    """The configured protocol for one signal (not yet checked against a URL)."""
-    if protocol is not None:
-        return protocol
+def _env_protocol(signal: Signal) -> str | None:
+    """The protocol env var for one signal, if set."""
     return os.environ.get(f"OTEL_EXPORTER_OTLP_{signal.upper()}_PROTOCOL") or os.environ.get(
         "OTEL_EXPORTER_OTLP_PROTOCOL"
     )
 
 
+def _resolve_protocol(signal: Signal, url: str, protocol: str | None, from_code: bool) -> str:
+    """Resolve one signal's protocol (see the module docstring)."""
+    if protocol is not None:
+        return _infer_protocol(url, protocol)
+    if from_code and _is_grpc_url(url):
+        return "grpc"
+    return _infer_protocol(url, _env_protocol(signal))
+
+
 def _resolve_signal(
     signal: Signal,
     signal_endpoint: str | None,
-    endpoint_arg: _EndpointArg,
+    endpoint: str | None,
     protocol: str | None,
 ) -> _SignalTarget:
     """Resolve one signal's URL and protocol (see the module docstring).
@@ -430,23 +450,26 @@ def _resolve_signal(
     Args:
         signal: ``"traces"`` or ``"logs"``.
         signal_endpoint: The ``<signal>_endpoint=`` parameter (full URL).
-        endpoint_arg: The ``endpoint=`` parameter, after the 0.2.9 shim.
+        endpoint: The ``endpoint=`` parameter (base URL).
         protocol: The ``protocol=`` parameter.
     """
-    configured_protocol = _signal_protocol(signal, protocol)
-
     # Code arguments first, then env vars (same order as the OTel exporters).
-    full, base = signal_endpoint, None
-    if not full:
-        full, base = endpoint_arg.signal_url(signal), endpoint_arg.base
-    if not full and not base:
-        full = os.environ.get(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT")
-        base = None if full else os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if full:
-        return _SignalTarget(full, _infer_protocol(full, configured_protocol), True)
+    if signal_endpoint:
+        full, base, from_code = signal_endpoint, None, True
+    elif endpoint:
+        full, base, from_code = None, endpoint, True
+    else:
+        from_code = False
+        full = os.environ.get(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT") or None
+        base = None if full else (os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") or None)
 
+    if full:
+        return _SignalTarget(full, _resolve_protocol(signal, full, protocol, from_code), True)
+
+    if base:
+        _check_base(base, "endpoint=" if from_code else "OTEL_EXPORTER_OTLP_ENDPOINT")
     resolved_base = base or DEFAULT_BASE_ENDPOINT
-    resolved_protocol = _infer_protocol(resolved_base, configured_protocol)
+    resolved_protocol = _resolve_protocol(signal, resolved_base, protocol, from_code)
     if resolved_protocol == "grpc":
         url = resolved_base
     else:
@@ -488,7 +511,7 @@ def _setup_logs(
     resource: Resource,
     batch: bool,
     custom_exporter: bool,
-    endpoint_arg: _EndpointArg,
+    endpoint: str | None,
     logs_endpoint: str | None,
     protocol: str | None,
     headers: dict | None,
@@ -503,7 +526,7 @@ def _setup_logs(
         return None
 
     if log_exporter is None:
-        target = _resolve_signal("logs", logs_endpoint, endpoint_arg, protocol)
+        target = _resolve_signal("logs", logs_endpoint, endpoint, protocol)
         if custom_exporter and not target.configured:
             logger.warning(
                 "register(): a custom exporter= was passed and no logs destination is "
@@ -595,6 +618,10 @@ def _normalize_protocol(value: str) -> str:
     raise ValueError(f"Unknown OTLP protocol '{value}'. Supported values: 'http/protobuf', 'grpc'.")
 
 
+def _is_grpc_url(url: str) -> bool:
+    return urlparse(url).scheme.lower() in ("grpc", "grpcs")
+
+
 def _infer_protocol(endpoint: str, protocol: str | None) -> str:
     """Determine the OTLP transport protocol from explicit setting or URL scheme.
 
@@ -610,9 +637,8 @@ def _infer_protocol(endpoint: str, protocol: str | None) -> str:
         ValueError: If ``protocol`` contradicts a ``grpc://`` or ``grpcs://``
             URL scheme, or if the protocol value is unsupported.
     """
-    parsed = urlparse(endpoint)
-    scheme = parsed.scheme.lower()
-    url_implies_grpc = scheme in ("grpc", "grpcs")
+    scheme = urlparse(endpoint).scheme.lower()
+    url_implies_grpc = _is_grpc_url(endpoint)
 
     if protocol is not None:
         resolved = _normalize_protocol(protocol)

@@ -26,8 +26,8 @@ returns the ``BenchmarkResult`` (or a list of them). This script:
    mean at least; ``name<=12``: mean at most, for ``direction="minimize"``
    scorers such as latency). An errored case without a value for a gated
    evaluation also fails that gate,
-6. exits 2 on a configuration error (bad ``--suite``, bad gate, a suite that
-   does not return a ``BenchmarkResult``).
+6. exits 2 on a configuration error (bad ``--suite``, bad gate, endpoints
+   ``register()`` rejects, a suite that does not return a ``BenchmarkResult``).
 
 Gates key on the evaluation name (``gen_ai.evaluation.name``, the
 ``EvalScore.name`` or ``@scorer(name=...)``, else the scorer function name),
@@ -396,7 +396,11 @@ def main(argv: list[str] | None = None) -> int:
     os.chdir(args.working_directory)
     sys.path.insert(0, os.getcwd())
 
-    provider = setup_telemetry(args)
+    try:
+        provider = setup_telemetry(args)
+    except ValueError as exc:  # for example a base URL ending in /v1/traces
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     try:
         suite = load_suite(args.suite)
     except ValueError as exc:

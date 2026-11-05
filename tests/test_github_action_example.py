@@ -319,6 +319,19 @@ class TestMain:
     def test_missing_suite(self):
         assert rs.main(["--suite", ""]) == 2
 
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["--endpoint", "http://c:4318/v1/traces"],
+            ["--traces-endpoint", "http://t:4318/v1/traces"],
+        ],
+    )
+    def test_rejected_endpoints_are_a_config_error(self, argv, capsys, monkeypatch):
+        for var in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"):
+            monkeypatch.delenv(var, raising=False)
+        assert rs.main(["--suite", "x:y", *argv]) == 2
+        assert "error:" in capsys.readouterr().err
+
     def _main(self, tmp_path, suite, *extra):
         provider = MagicMock()
         with patch.object(rs, "setup_telemetry", return_value=provider):
