@@ -90,6 +90,8 @@ Three setups:
 register(service_name="travel-agent")  # same as endpoint="http://localhost:4318"
 ```
 
+For gRPC, pass `endpoint="grpc://localhost:4317"`. gRPC is for a local OTel Collector or a self-hosted Data Prepper, whose OTLP sources accept framed gRPC natively; OSI does not support it.
+
 (b) One OTLP source for both signals under a pipeline path: an OpenSearch Ingestion (OSI) or Data Prepper `otlp` source with `traces_path: /<pipeline>/v1/traces` and `logs_path: /<pipeline>/v1/logs`, as in the [Data Prepper pipeline](#a-self-managed-data-prepper) below. Pass the pipeline base. `sigv4=` signs both exporters for OSI:
 
 ```python
@@ -452,6 +454,8 @@ genai-evaluation-pipeline:
 ### b) Amazon OpenSearch Ingestion (OSI)
 
 OSI does not have the evaluation index type yet. Use the same pipeline shape in an OSI pipeline and create the index template once before ingesting.
+
+OSI accepts OTLP/HTTP only (protobuf), signed with SigV4 service `osis`; gRPC is not supported. Use `https://` endpoints with `sigv4=`. `register()` raises `ValueError` if `sigv4=` is set and a signal resolves to gRPC (a `grpc://` / `grpcs://` URL, `protocol="grpc"`, or a gRPC protocol env var).
 
 1. Create the index template on the domain or collection, for example in Dashboards Dev Tools:
 

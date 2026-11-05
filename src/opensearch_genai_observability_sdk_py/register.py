@@ -63,6 +63,10 @@ Supported protocols
 
 ``http/json`` is not supported.
 
+Use gRPC with a local OTel Collector (default ``localhost:4317``) or a
+self-hosted Data Prepper, whose OTLP sources accept framed gRPC natively.
+OpenSearch Ingestion (OSIS) does not support gRPC.
+
 Compression
 -----------
 ``compression=`` (``"none"`` or ``"gzip"``), then
@@ -98,8 +102,11 @@ are 21890 (traces) and 21892 (logs); set ``path:`` and
 AWS SigV4
 ---------
 ``sigv4={"service": "osis", "region": "us-east-1"}`` (or ``sigv4=True``)
-makes register() build signed exporters for both signals. SigV4 is
-HTTP-only: a signal resolved to gRPC raises ``ValueError``.
+makes register() build signed exporters for both signals. OpenSearch
+Ingestion (OSIS) accepts OTLP/HTTP only (protobuf), signed with SigV4 service
+``osis``; gRPC is not supported. SigV4 is therefore HTTP-only: a signal
+resolved to gRPC (a ``grpc://`` / ``grpcs://`` URL, ``protocol="grpc"`` or a
+gRPC protocol env var) raises ``ValueError``.
 
 Escape hatches
 --------------
@@ -261,7 +268,8 @@ def register(
         sigv4: Sign the exporters register() builds with AWS SigV4.
             ``True`` uses service ``"osis"`` and the botocore region; a dict
             may set ``"service"`` (``"osis"`` or ``"es"``) and ``"region"``.
-            HTTP only.
+            OTLP/HTTP only (OSIS has no gRPC endpoint): combined with a
+            signal that resolves to gRPC it raises ``ValueError``.
         enable_logs: Also configure a ``LoggerProvider`` (OTLP logs) so that
             evaluation events are exported (default: ``True``).
             Only done when ``set_global`` is ``True`` and no global

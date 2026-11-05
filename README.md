@@ -246,6 +246,8 @@ register()
 
 `http/json` is not supported. `protocol="http"` with a `grpc://` or `grpcs://` URL raises `ValueError`, as does an HTTP protocol env var with a `grpc://` URL from an env var.
 
+Use gRPC with a local OTel Collector (default `localhost:4317`) or a self-hosted Data Prepper, whose OTLP sources accept framed gRPC natively. OpenSearch Ingestion (OSIS) does not support gRPC: use `https://` with `sigv4=`.
+
 **Compression.** `compression="none"` or `"gzip"` applies to both exporters `register()` builds (HTTP, gRPC and SigV4). When omitted it comes from `OTEL_EXPORTER_OTLP_TRACES_COMPRESSION` / `OTEL_EXPORTER_OTLP_LOGS_COMPRESSION`, then `OTEL_EXPORTER_OTLP_COMPRESSION`, else `none`; the argument wins over the env vars. It must match the receiving pipeline's `compression` setting: OpenSearch Ingestion accepts only `none` and `gzip`, so other values (for example `deflate`) raise `ValueError`. With SigV4 the signature covers the gzip bytes that are sent.
 
 **Request size.** OpenSearch Ingestion `otel_*` sources cap each request at 1 MB to 4 MB (1 MB by default with the persistent buffer). GenAI spans with prompts and completions are large, so lower the batch size if exports are rejected: `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` (spans, default 512) and `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` (evaluation events). `gzip` also helps when the pipeline is set to it.
@@ -254,7 +256,7 @@ register()
 
 Headers (`headers=`) and SigV4 (`sigv4=`) apply to both exporters `register()` builds. Over gRPC, headers are sent as gRPC metadata with lowercase names (gRPC rejects uppercase keys). Without `headers=`, the exporters read the standard `OTEL_EXPORTER_OTLP_HEADERS`.
 
-`sigv4=` makes `register()` build an `AWSSigV4OTLPExporter` and an `AWSSigV4OTLPLogExporter`, signed with botocore credentials. `service` defaults to `"osis"` (use `"es"` for OpenSearch Service direct) and `region` to the botocore region. SigV4 is HTTP-only: a signal resolved to gRPC raises `ValueError` (AWS OSIS has no gRPC endpoint). The logs pipeline needs an OTLP logs source; Data Prepper routes the evaluation events to `otel-v1-genai-evaluation-*`.
+`sigv4=` makes `register()` build an `AWSSigV4OTLPExporter` and an `AWSSigV4OTLPLogExporter`, signed with botocore credentials. `service` defaults to `"osis"` (use `"es"` for OpenSearch Service direct) and `region` to the botocore region. OpenSearch Ingestion (OSIS) accepts OTLP/HTTP only (protobuf), signed with SigV4 service `osis`; gRPC is not supported. `sigv4=` therefore signs HTTP only: if a signal resolves to gRPC (a `grpc://` / `grpcs://` URL, `protocol="grpc"`, or a gRPC protocol env var), `register()` raises `ValueError` when it builds that signal's exporter. The logs pipeline needs an OTLP logs source; Data Prepper routes the evaluation events to `otel-v1-genai-evaluation-*`.
 
 **Environment variables only:**
 
