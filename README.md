@@ -171,11 +171,28 @@ An unknown agent is left out, never invented. `evaluate()` also stamps the agent
 - `endpoint=` is the base URL for all signals, same as `OTEL_EXPORTER_OTLP_ENDPOINT`.
 - `traces_endpoint=` / `logs_endpoint=` are full-URL overrides for one signal, same as `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`.
 
-**Endpoint per signal (priority order):**
+**Endpoint resolution (per signal, priority order).** Code arguments always win over env vars, as in the OTel exporters:
 
 1. `traces_endpoint=` / `logs_endpoint=`: full URL, used as-is
-2. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: full URL, used as-is
-3. The base (`endpoint=`, else `OTEL_EXPORTER_OTLP_ENDPOINT`, else the Data Prepper default `http://localhost:21890/opentelemetry`) with `/v1/traces` or `/v1/logs` appended over HTTP. Over gRPC the base is used as-is for both signals (gRPC has no per-signal path).
+2. `endpoint=`: base URL
+3. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: full URL, used as-is
+4. `OTEL_EXPORTER_OTLP_ENDPOINT`: base URL
+5. The Data Prepper default base `http://localhost:21890/opentelemetry`
+
+A base URL gets `/v1/traces` or `/v1/logs` appended over HTTP. Over gRPC it is used as-is for both signals (gRPC has no per-signal path).
+
+For example, with `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://env:4318/v1/traces` set in the environment:
+
+```python
+register(endpoint="http://collector:4318")
+# traces -> http://collector:4318/v1/traces  (endpoint= beats the env var)
+# logs   -> http://collector:4318/v1/logs
+
+register()
+# traces -> http://env:4318/v1/traces
+# logs   -> OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, else OTEL_EXPORTER_OTLP_ENDPOINT + /v1/logs,
+#           else http://localhost:21890/opentelemetry/v1/logs
+```
 
 **Protocol per signal (priority order):**
 

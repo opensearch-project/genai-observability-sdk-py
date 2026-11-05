@@ -24,12 +24,16 @@ Endpoints follow the OTel exporter spec, one rule per signal (traces, logs):
 
 Endpoint per signal (priority order)
 ------------------------------------
+Code arguments always win over env vars, as in the OTel exporters.
+
 1. ``<signal>_endpoint=`` parameter: full URL, used as-is.
-2. ``OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT`` env var: full URL, used as-is.
-3. The base: ``endpoint=``, else ``OTEL_EXPORTER_OTLP_ENDPOINT``, else the
-   Data Prepper default ``http://localhost:21890/opentelemetry``. Over HTTP
-   ``/v1/<signal>`` is appended; over gRPC the base is used as-is (gRPC has
-   no per-signal path).
+2. ``endpoint=`` parameter: base URL (see the base rule below).
+3. ``OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT`` env var: full URL, used as-is.
+4. ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var: base URL.
+5. The Data Prepper default base ``http://localhost:21890/opentelemetry``.
+
+Base rule: over HTTP ``/v1/<signal>`` is appended to the base; over gRPC the
+base is used as-is (gRPC has no per-signal path).
 
 Protocol per signal (priority order)
 ------------------------------------
@@ -85,8 +89,8 @@ accepted for one release and emits a ``DeprecationWarning``:
   go to the sibling path with ``logs`` as the last segment
   (``https://gw/otlp/logs``). Pass ``logs_endpoint=`` if that is wrong.
 
-In both cases it sits where ``endpoint=`` sits in the order above, so
-``traces_endpoint=``, ``logs_endpoint=`` and the per-signal env vars still win.
+In both cases it sits where ``endpoint=`` sits in the order above: only
+``traces_endpoint=`` / ``logs_endpoint=`` win over it.
 """
 
 from __future__ import annotations
@@ -187,14 +191,18 @@ def register(
     exporter, sets up a LoggerProvider for evaluation events, and
     auto-discovers installed instrumentor packages.
 
-    Endpoint per signal (traces, logs), in priority order:
+    Endpoint per signal (traces, logs), in priority order. Code arguments
+    always win over env vars:
 
     1. ``traces_endpoint=`` / ``logs_endpoint=`` (full URL, used as-is)
-    2. ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` / ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``
+    2. ``endpoint=`` (base URL)
+    3. ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`` / ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``
        (full URL, used as-is)
-    3. The base (``endpoint=``, else ``OTEL_EXPORTER_OTLP_ENDPOINT``, else
-       ``http://localhost:21890/opentelemetry``) plus ``/v1/traces`` or
-       ``/v1/logs`` over HTTP, or the base as-is over gRPC
+    4. ``OTEL_EXPORTER_OTLP_ENDPOINT`` (base URL)
+    5. ``http://localhost:21890/opentelemetry`` (Data Prepper default base)
+
+    A base URL gets ``/v1/traces`` or ``/v1/logs`` appended over HTTP and is
+    used as-is over gRPC.
 
     Protocol per signal, in priority order:
 
@@ -427,22 +435,23 @@ def _resolve_signal(
     """
     configured_protocol = _signal_protocol(signal, protocol)
 
-    full = (
-        signal_endpoint
-        or os.environ.get(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT")
-        or endpoint_arg.signal_url(signal)
-    )
+    # Code arguments first, then env vars (same order as the OTel exporters).
+    full, base = signal_endpoint, None
+    if not full:
+        full, base = endpoint_arg.signal_url(signal), endpoint_arg.base
+    if not full and not base:
+        full = os.environ.get(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT")
+        base = None if full else os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     if full:
         return _SignalTarget(full, _infer_protocol(full, configured_protocol), True)
 
-    configured_base = endpoint_arg.base or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-    resolved_base = configured_base or DEFAULT_BASE_ENDPOINT
+    resolved_base = base or DEFAULT_BASE_ENDPOINT
     resolved_protocol = _infer_protocol(resolved_base, configured_protocol)
     if resolved_protocol == "grpc":
         url = resolved_base
     else:
         url = resolved_base.rstrip("/") + f"/v1/{signal}"
-    return _SignalTarget(url, resolved_protocol, bool(configured_base))
+    return _SignalTarget(url, resolved_protocol, bool(base))
 
 
 def _global_logger_provider_is_set() -> bool:

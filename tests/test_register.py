@@ -107,9 +107,22 @@ class TestResolveSignal:
         )
 
     @pytest.mark.parametrize("signal", ["traces", "logs"])
-    def test_signal_env_beats_base(self, signal, clean_otlp_env, monkeypatch):
+    def test_code_endpoint_wins(self, signal, clean_otlp_env, monkeypatch):
+        """``endpoint=`` beats both the per-signal and the base env vars."""
         monkeypatch.setenv(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT", "http://env:1/x")
-        assert _resolve(signal, None, "http://base:4318")[0] == "http://env:1/x"
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://base-env:4318")
+        assert _resolve(signal, None, "http://base:4318")[0] == f"http://base:4318/v1/{signal}"
+
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_code_grpc_endpoint_wins(self, signal, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT", "http://env:1/x")
+        assert _resolve(signal, None, "grpc://c:4317") == ("grpc://c:4317", "grpc")
+
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_signal_env_beats_base_env(self, signal, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv(f"OTEL_EXPORTER_OTLP_{signal.upper()}_ENDPOINT", "http://env:1/x")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://base-env:4318")
+        assert _resolve(signal)[0] == "http://env:1/x"
 
     @pytest.mark.parametrize("signal", ["traces", "logs"])
     def test_base_param_appends_signal_path(self, signal, clean_otlp_env, monkeypatch):
@@ -239,13 +252,15 @@ class TestLegacyEndpoint:
         assert parsed == _register_mod._EndpointArg(traces=endpoint, logs=logs)
         assert logs in str(record[0].message)
 
-    def test_legacy_traces_url_is_below_the_signal_env_var(self, clean_otlp_env, monkeypatch):
+    def test_legacy_traces_url_sits_where_endpoint_sits(self, clean_otlp_env, monkeypatch):
+        """Beats the env vars, loses to traces_endpoint= / logs_endpoint=."""
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://env:4318/v1/traces")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "http://env:4318/v1/logs")
         with pytest.warns(DeprecationWarning):
             parsed = _register_mod._parse_endpoint_arg("https://gw/otlp/traces")
         traces = _register_mod._resolve_signal("traces", None, parsed, None)
         logs = _register_mod._resolve_signal("logs", None, parsed, None)
-        assert traces.url == "http://env:4318/v1/traces"
+        assert traces.url == "https://gw/otlp/traces"
         assert (logs.url, logs.configured) == ("https://gw/otlp/logs", True)
         explicit = _register_mod._resolve_signal("logs", "https://l/v1/logs", parsed, None)
         assert explicit.url == "https://l/v1/logs"
@@ -684,6 +699,41 @@ class TestRegisterLogs:
         register(auto_instrument=False)
         mock_http.assert_called_once_with("http://t:4318/v1/traces", None)
         assert _log_target(mock_log).url == "http://l:4318/v1/logs"
+
+    @patch.object(_register_mod, "_create_log_exporter")
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_code_endpoint_beats_signal_env_endpoints(
+        self, mock_http, mock_log, fresh_globals, clean_otlp_env, monkeypatch
+    ):
+        """endpoint= wins over OTEL_EXPORTER_OTLP_TRACES_/LOGS_ENDPOINT for both signals."""
+        from opensearch_genai_observability_sdk_py.register import register
+
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://t:4318/v1/traces")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "http://l:4318/v1/logs")
+        mock_http.return_value = MagicMock()
+        mock_log.return_value = _in_memory_log_exporter()
+        register(endpoint="http://code:4318", auto_instrument=False)
+        mock_http.assert_called_once_with("http://code:4318/v1/traces", None)
+        assert _log_target(mock_log).url == "http://code:4318/v1/logs"
+
+    @patch.object(_register_mod, "_create_log_exporter")
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_signal_param_and_endpoint_beat_env(
+        self, mock_http, mock_log, fresh_globals, clean_otlp_env, monkeypatch
+    ):
+        """traces_endpoint= for traces; endpoint= (not the logs env var) for logs."""
+        from opensearch_genai_observability_sdk_py.register import register
+
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "http://l:4318/v1/logs")
+        mock_http.return_value = MagicMock()
+        mock_log.return_value = _in_memory_log_exporter()
+        register(
+            endpoint="http://code:4318",
+            traces_endpoint="http://t:4318/ingest",
+            auto_instrument=False,
+        )
+        mock_http.assert_called_once_with("http://t:4318/ingest", None)
+        assert _log_target(mock_log).url == "http://code:4318/v1/logs"
 
     @patch.object(_register_mod, "_create_log_exporter")
     @patch.object(_register_mod, "_create_http_exporter")
