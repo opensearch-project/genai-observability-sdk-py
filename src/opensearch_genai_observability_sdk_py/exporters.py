@@ -34,6 +34,11 @@ body hash in the Authorization header always matches what AWS receives.
 ``OTLPSpanExporter`` (and its parent ``OTLPExporterMixin``) accept a
 ``session=`` constructor argument and use it for all HTTP calls, so there
 is no need to override ``export()`` or touch ``_session`` after init.
+
+Compression: with ``compression=Compression.Gzip`` the upstream exporter
+gzips the payload before calling the session, so ``data=`` holds the gzip
+bytes and the signature is computed over them, which is what AWS hashes.
+The client compression must match the pipeline's ``compression`` setting.
 """
 
 from __future__ import annotations
@@ -86,10 +91,14 @@ class _SigV4AuthSession(requests.Session):
         )
         signer.add_auth(aws_request)
 
-        # Merge all SigV4 headers into the headers that will be sent.
-        # Copy every header botocore added (Authorization, X-Amz-Date,
-        # X-Amz-Security-Token, X-Amz-Content-Sha256, etc.) — OSIS requires
-        # X-Amz-Content-Sha256 and will drop the connection if it is missing.
+        # Merge the SigV4 headers into the headers that will be sent: botocore's
+        # SigV4Auth adds Authorization and X-Amz-Date, plus X-Amz-Security-Token
+        # for temporary credentials. The signed headers are content-type, host,
+        # x-amz-date (and x-amz-security-token). SigV4Auth does not add an
+        # X-Amz-Content-SHA256 header: the SHA-256 of the body is part of the
+        # canonical request only, so the signature covers the exact bytes in
+        # data=, which are the gzip bytes when the exporter compresses.
+        # Content-Encoding is set by the OTLP exporter and is not signed.
         headers = kwargs.get("headers") or {}
         for key, value in aws_request.headers.items():
             if key.lower() != "content-type":  # already set by the OTLP exporter

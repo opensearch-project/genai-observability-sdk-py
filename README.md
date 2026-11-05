@@ -246,6 +246,12 @@ register()
 
 `http/json` is not supported. `protocol="http"` with a `grpc://` or `grpcs://` URL raises `ValueError`, as does an HTTP protocol env var with a `grpc://` URL from an env var.
 
+**Compression.** `compression="none"` or `"gzip"` applies to both exporters `register()` builds (HTTP, gRPC and SigV4). When omitted it comes from `OTEL_EXPORTER_OTLP_TRACES_COMPRESSION` / `OTEL_EXPORTER_OTLP_LOGS_COMPRESSION`, then `OTEL_EXPORTER_OTLP_COMPRESSION`, else `none`; the argument wins over the env vars. It must match the receiving pipeline's `compression` setting: OpenSearch Ingestion accepts only `none` and `gzip`, so other values (for example `deflate`) raise `ValueError`. With SigV4 the signature covers the gzip bytes that are sent.
+
+**Request size.** OpenSearch Ingestion `otel_*` sources cap each request at 1 MB to 4 MB (1 MB by default with the persistent buffer). GenAI spans with prompts and completions are large, so lower the batch size if exports are rejected: `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` (spans, default 512) and `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` (evaluation events). `gzip` also helps when the pipeline is set to it.
+
+**Self-hosted Data Prepper.** For OTLP/HTTP from the SDK, set `unframed_requests: true` on the source and the paths the SDK sends to: `traces_path` / `logs_path` on an `otlp` source (setup (b)), or `path:` on `otel_trace_source` / `otel_logs_source` (setup (c)). Use `ssl: false` on the source for plain `http://`, or serve TLS with a certificate the client trusts; for a private CA, point the exporters at it with `OTEL_EXPORTER_OTLP_CERTIFICATE` (or the per-signal `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE` / `OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE`).
+
 Headers (`headers=`) and SigV4 (`sigv4=`) apply to both exporters `register()` builds. Over gRPC, headers are sent as gRPC metadata with lowercase names (gRPC rejects uppercase keys). Without `headers=`, the exporters read the standard `OTEL_EXPORTER_OTLP_HEADERS`.
 
 `sigv4=` makes `register()` build an `AWSSigV4OTLPExporter` and an `AWSSigV4OTLPLogExporter`, signed with botocore credentials. `service` defaults to `"osis"` (use `"es"` for OpenSearch Service direct) and `region` to the botocore region. SigV4 is HTTP-only: a signal resolved to gRPC raises `ValueError` (AWS OSIS has no gRPC endpoint). The logs pipeline needs an OTLP logs source; Data Prepper routes the evaluation events to `otel-v1-genai-evaluation-*`.
@@ -269,6 +275,7 @@ export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://logs-pipe-def.us-east-1.osis.ama
 | `traces_endpoint` | resolved | Full OTLP traces URL; pass with `logs_endpoint` |
 | `logs_endpoint` | resolved | Full OTLP logs URL, for example the OSIS logs pipeline; pass with `traces_endpoint` |
 | `protocol` | resolved | `"http"` or `"grpc"` for both signals |
+| `compression` | resolved | `"none"` or `"gzip"` for both signals; must match the pipeline |
 | `headers` | `None` | Extra headers for both exporters (lowercased gRPC metadata over gRPC); default `OTEL_EXPORTER_OTLP_HEADERS` |
 | `sigv4` | `None` | `True` or `{"service": ..., "region": ...}`: sign both exporters with AWS SigV4 |
 | `enable_logs` | `True` | Set up the logs pipeline for evaluation events |
@@ -711,6 +718,10 @@ Requires the `[opensearch]` extra: `pip install opensearch-genai-observability-s
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | Protocol for all signals (`http/protobuf`, `grpc`) | — |
 | `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Full OTLP logs endpoint URL (evaluation events), e.g. the OSIS logs pipeline | see [Endpoints](#endpoints-traces-and-evaluation-logs) |
 | `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | Protocol for logs (`http/protobuf`, `grpc`) | `OTEL_EXPORTER_OTLP_PROTOCOL` |
+| `OTEL_EXPORTER_OTLP_COMPRESSION` | Compression for all signals (`none`, `gzip`); must match the pipeline | `none` |
+| `OTEL_EXPORTER_OTLP_TRACES_COMPRESSION` / `OTEL_EXPORTER_OTLP_LOGS_COMPRESSION` | Compression for one signal | `OTEL_EXPORTER_OTLP_COMPRESSION` |
+| `OTEL_EXPORTER_OTLP_CERTIFICATE` | CA file to trust for an `https://` / `grpcs://` endpoint with a private CA | system CAs |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | Spans per export request; lower it for OSIS request size limits | `512` |
 | `OTEL_SERVICE_NAME` | Service name for spans | `"default"` |
 | `OPENSEARCH_PROJECT` | Project/service name (fallback) | `"default"` |
 | `AWS_DEFAULT_REGION` | AWS region for SigV4 signing | auto-detected |

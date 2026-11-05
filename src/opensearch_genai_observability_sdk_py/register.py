@@ -63,6 +63,14 @@ Supported protocols
 
 ``http/json`` is not supported.
 
+Compression
+-----------
+``compression=`` (``"none"`` or ``"gzip"``), then
+``OTEL_EXPORTER_OTLP_<SIGNAL>_COMPRESSION``, then
+``OTEL_EXPORTER_OTLP_COMPRESSION``, else none. It must match the pipeline's
+``compression`` setting (OpenSearch Ingestion accepts only ``none`` and
+``gzip``); other values raise ``ValueError``.
+
 Setups
 ------
 (a) Local OTel Collector (for example the observability stack): nothing to
@@ -136,6 +144,7 @@ DEFAULT_LOGS_ENDPOINT = DEFAULT_BASE_ENDPOINT + "/v1/logs"
 Signal = Literal["traces", "logs"]
 
 _SIGNAL_PATH_SUFFIXES = ("/v1/traces", "/v1/logs")
+_COMPRESSIONS = ("none", "gzip")
 _SIGV4_KEYS = frozenset({"service", "region"})
 
 # Entry point group to discover instrumentors from.
@@ -152,8 +161,9 @@ class _SignalTarget:
     url: str
     protocol: str  # "http" or "grpc"
     # True if the URL came from configuration (a parameter or env var),
-    # False if it is the Data Prepper default.
+    # False if it is the default base.
     configured: bool
+    compression: str = "none"  # "none" or "gzip"
 
 
 def register(
@@ -162,6 +172,7 @@ def register(
     traces_endpoint: str | None = None,
     logs_endpoint: str | None = None,
     protocol: Literal["http", "grpc"] | None = None,
+    compression: Literal["none", "gzip"] | None = None,
     project_name: str | None = None,
     service_name: str | None = None,
     service_version: str | None = None,
@@ -218,9 +229,17 @@ def register(
             the OSIS logs pipeline. Overrides the base for logs. Pass it
             together with ``traces_endpoint=`` (or ``exporter=``).
         protocol: Force ``"http"`` or ``"grpc"`` for both signals. When
-            omitted, resolved per signal from the env vars, then the URL
-            scheme. Raises ``ValueError`` if it contradicts a ``grpc://`` or
-            ``grpcs://`` URL.
+            omitted, resolved per signal: a ``grpc://`` / ``grpcs://`` URL
+            passed in code, then the env vars, then the URL scheme. Raises
+            ``ValueError`` if it contradicts a ``grpc://`` or ``grpcs://`` URL.
+        compression: ``"none"`` or ``"gzip"`` for both exporters register()
+            builds (HTTP, gRPC and SigV4). When omitted, resolved per signal
+            from ``OTEL_EXPORTER_OTLP_<SIGNAL>_COMPRESSION``, then
+            ``OTEL_EXPORTER_OTLP_COMPRESSION``, else ``"none"``. It must
+            match the receiving pipeline's ``compression`` setting (OSIS
+            accepts only ``none`` and ``gzip``). Other values raise
+            ``ValueError``. With SigV4 the signature covers the compressed
+            body.
         project_name: Project/service name attached to all spans.
             Defaults to ``OTEL_SERVICE_NAME`` or ``OPENSEARCH_PROJECT``
             env var, or ``"default"``.
@@ -300,6 +319,8 @@ def register(
         logs_needed=enable_logs and set_global and log_exporter is None,
     )
     sigv4_opts = _sigv4_options(sigv4)
+    if compression is not None:
+        _normalize_compression(compression, "compression=")
 
     name = (
         service_name
@@ -322,7 +343,7 @@ def register(
     custom_exporter = exporter is not None
     traces_url = "custom exporter"
     if exporter is None:
-        target = _resolve_signal("traces", traces_endpoint, endpoint, protocol)
+        target = _resolve_signal("traces", traces_endpoint, endpoint, protocol, compression)
         traces_url = target.url
         exporter = _create_exporter(target, headers, sigv4_opts)
 
@@ -348,6 +369,7 @@ def register(
             endpoint=endpoint,
             logs_endpoint=logs_endpoint,
             protocol=protocol,
+            compression=compression,
             headers=headers,
             sigv4=sigv4_opts,
             log_exporter=log_exporter,
@@ -423,6 +445,44 @@ def _sigv4_options(sigv4: bool | dict[str, str] | None) -> dict[str, str] | None
     return {k: str(v) for k, v in sigv4.items() if v}
 
 
+def _normalize_compression(value: str, source: str) -> str:
+    """``"none"`` or ``"gzip"``; anything else raises ``ValueError``."""
+    v = value.strip().lower()
+    if v in _COMPRESSIONS:
+        return v
+    raise ValueError(
+        f"Unsupported OTLP compression {value!r} from {source}. Supported values: "
+        "'none', 'gzip' (OpenSearch Ingestion accepts only these). It must match the "
+        "pipeline's compression setting."
+    )
+
+
+def _resolve_compression(signal: Signal, compression: str | None) -> str:
+    """``compression=``, then the per-signal env var, then the general one, else none."""
+    if compression is not None:
+        return _normalize_compression(compression, "compression=")
+    for var in (
+        f"OTEL_EXPORTER_OTLP_{signal.upper()}_COMPRESSION",
+        "OTEL_EXPORTER_OTLP_COMPRESSION",
+    ):
+        value = os.environ.get(var)
+        if value:
+            return _normalize_compression(value, var)
+    return "none"
+
+
+def _http_compression(compression: str) -> Any:
+    from opentelemetry.exporter.otlp.proto.http import Compression
+
+    return Compression.Gzip if compression == "gzip" else Compression.NoCompression
+
+
+def _grpc_compression(compression: str) -> Any:
+    import grpc
+
+    return grpc.Compression.Gzip if compression == "gzip" else grpc.Compression.NoCompression
+
+
 def _env_protocol(signal: Signal) -> str | None:
     """The protocol env var for one signal, if set."""
     return os.environ.get(f"OTEL_EXPORTER_OTLP_{signal.upper()}_PROTOCOL") or os.environ.get(
@@ -444,6 +504,7 @@ def _resolve_signal(
     signal_endpoint: str | None,
     endpoint: str | None,
     protocol: str | None,
+    compression: str | None = None,
 ) -> _SignalTarget:
     """Resolve one signal's URL and protocol (see the module docstring).
 
@@ -452,7 +513,9 @@ def _resolve_signal(
         signal_endpoint: The ``<signal>_endpoint=`` parameter (full URL).
         endpoint: The ``endpoint=`` parameter (base URL).
         protocol: The ``protocol=`` parameter.
+        compression: The ``compression=`` parameter.
     """
+    resolved_compression = _resolve_compression(signal, compression)
     # Code arguments first, then env vars (same order as the OTel exporters).
     if signal_endpoint:
         full, base, from_code = signal_endpoint, None, True
@@ -464,7 +527,12 @@ def _resolve_signal(
         base = None if full else (os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") or None)
 
     if full:
-        return _SignalTarget(full, _resolve_protocol(signal, full, protocol, from_code), True)
+        return _SignalTarget(
+            full,
+            _resolve_protocol(signal, full, protocol, from_code),
+            True,
+            resolved_compression,
+        )
 
     if base:
         _check_base(base, "endpoint=" if from_code else "OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -474,7 +542,7 @@ def _resolve_signal(
         url = resolved_base
     else:
         url = resolved_base.rstrip("/") + f"/v1/{signal}"
-    return _SignalTarget(url, resolved_protocol, bool(base))
+    return _SignalTarget(url, resolved_protocol, bool(base), resolved_compression)
 
 
 def _global_logger_provider_is_set() -> bool:
@@ -514,6 +582,7 @@ def _setup_logs(
     endpoint: str | None,
     logs_endpoint: str | None,
     protocol: str | None,
+    compression: str | None,
     headers: dict | None,
     sigv4: dict[str, str] | None,
     log_exporter: Any | None,
@@ -526,7 +595,7 @@ def _setup_logs(
         return None
 
     if log_exporter is None:
-        target = _resolve_signal("logs", logs_endpoint, endpoint, protocol)
+        target = _resolve_signal("logs", logs_endpoint, endpoint, protocol, compression)
         if custom_exporter and not target.configured:
             logger.warning(
                 "register(): a custom exporter= was passed and no logs destination is "
@@ -582,7 +651,12 @@ def _create_log_exporter(
         _require_http_for_sigv4(target, "logs")
         from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPLogExporter
 
-        return AWSSigV4OTLPLogExporter(endpoint=target.url, headers=headers, **sigv4)
+        return AWSSigV4OTLPLogExporter(
+            endpoint=target.url,
+            headers=headers,
+            compression=_http_compression(target.compression),
+            **sigv4,
+        )
 
     if target.protocol == "grpc":
         from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
@@ -591,12 +665,17 @@ def _create_log_exporter(
 
         grpc_endpoint, insecure = _grpc_target(target.url)
         return GRPCLogExporter(
-            endpoint=grpc_endpoint, insecure=insecure, headers=_grpc_headers(headers)
+            endpoint=grpc_endpoint,
+            insecure=insecure,
+            headers=_grpc_headers(headers),
+            compression=_grpc_compression(target.compression),
         )
 
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
-    return OTLPLogExporter(endpoint=target.url, headers=headers)
+    return OTLPLogExporter(
+        endpoint=target.url, headers=headers, compression=_http_compression(target.compression)
+    )
 
 
 def _normalize_protocol(value: str) -> str:
@@ -665,29 +744,38 @@ def _create_exporter(
         _require_http_for_sigv4(target, "traces")
         from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
 
-        signed: SpanExporter = AWSSigV4OTLPExporter(endpoint=target.url, headers=headers, **sigv4)
+        signed: SpanExporter = AWSSigV4OTLPExporter(
+            endpoint=target.url,
+            headers=headers,
+            compression=_http_compression(target.compression),
+            **sigv4,
+        )
         return signed
 
     if target.protocol == "grpc":
-        return _create_grpc_exporter(target.url, headers)
+        return _create_grpc_exporter(target.url, headers, target.compression)
 
-    return _create_http_exporter(target.url, headers)
+    return _create_http_exporter(target.url, headers, target.compression)
 
 
 def _create_http_exporter(
     endpoint: str,
     headers: dict | None,
+    compression: str = "none",
 ) -> SpanExporter:
     """Create a plain HTTP OTLP exporter."""
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-    exporter: SpanExporter = OTLPSpanExporter(endpoint=endpoint, headers=headers)
+    exporter: SpanExporter = OTLPSpanExporter(
+        endpoint=endpoint, headers=headers, compression=_http_compression(compression)
+    )
     return exporter
 
 
 def _create_grpc_exporter(
     endpoint: str,
     headers: dict | None,
+    compression: str = "none",
 ) -> SpanExporter:
     """Create a gRPC OTLP exporter."""
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
@@ -702,6 +790,7 @@ def _create_grpc_exporter(
         endpoint=grpc_endpoint,
         insecure=insecure,
         headers=_grpc_headers(headers),
+        compression=_grpc_compression(compression),
     )
     return exporter
 

@@ -122,6 +122,12 @@ register(
 )
 ```
 
+Pipeline settings the client must match:
+
+- **Compression.** `register(compression="gzip")` (or `OTEL_EXPORTER_OTLP_COMPRESSION=gzip`) must match the pipeline's `compression` setting. OSI accepts only `none` and `gzip`; other values raise `ValueError`. The argument wins over the env vars.
+- **Request size.** OSI `otel_*` sources cap requests at 1 MB to 4 MB (1 MB by default with the persistent buffer). For large GenAI spans, lower `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` (and `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` for evaluation events).
+- **Self-hosted Data Prepper.** Set `unframed_requests: true` and the paths (`traces_path` / `logs_path`, or `path:`), and either `ssl: false` with `http://`, or TLS with a CA the client trusts (`OTEL_EXPORTER_OTLP_CERTIFICATE=/path/to/ca.pem`).
+
 If you configure OpenTelemetry yourself instead of calling `register()`, set a global `LoggerProvider` with an OTLP log exporter, or the events are dropped.
 
 ## Online evaluation
@@ -428,7 +434,7 @@ genai-evaluation-pipeline:
         template_file: /usr/share/data-prepper/templates/genai-evaluation-index-template.json
 ```
 
-Point the SDK at the pipeline base: `register(endpoint="http://<data-prepper-host>:21890/otlp-pipeline")` sends to `/otlp-pipeline/v1/traces` and `/otlp-pipeline/v1/logs`, the paths set on the source. `otel-logs-pipeline` and `otel-traces-pipeline` are your existing logs and traces pipelines. Save the [index template JSON](#index-template) as the `template_file`.
+`ssl: false` serves plain HTTP; with TLS, the client must trust the certificate (`OTEL_EXPORTER_OTLP_CERTIFICATE` for a private CA). If you set `compression: gzip` on the source, pass `register(compression="gzip")` too. Point the SDK at the pipeline base: `register(endpoint="http://<data-prepper-host>:21890/otlp-pipeline")` sends to `/otlp-pipeline/v1/traces` and `/otlp-pipeline/v1/logs`, the paths set on the source. `otel-logs-pipeline` and `otel-traces-pipeline` are your existing logs and traces pipelines. Save the [index template JSON](#index-template) as the `template_file`.
 
 **Experimental: `index_type: genai-evaluation-plain`.** The Data Prepper draft [opensearch-project/data-prepper#7243](https://github.com/opensearch-project/data-prepper/pull/7243) adds this index type to the OpenSearch sink. It is not in a Data Prepper release and its mappings may change. The sink manages the template, so drop `index`, `template_type` and `template_file`:
 

@@ -305,6 +305,75 @@ class TestAWSSigV4OTLPLogExporter:
 
 
 # ---------------------------------------------------------------------------
+# gzip: the signature covers the compressed bytes that are sent
+# ---------------------------------------------------------------------------
+
+
+class TestSigV4Gzip:
+    """With gzip the upstream exporter compresses first; the signed hash is of those bytes."""
+
+    _mock_botocore = TestAWSSigV4OTLPExporterInit._mock_botocore
+
+    @pytest.mark.parametrize("kind", ["traces", "logs"])
+    def test_payload_hash_matches_compressed_body(self, kind):
+        import gzip
+        import hashlib
+
+        from opentelemetry.exporter.otlp.proto.http import Compression
+
+        hashes: list[str] = []
+        original_payload = botocore.auth.SigV4Auth.payload
+
+        def spy_payload(self, request):
+            value = original_payload(self, request)
+            hashes.append(value)
+            return value
+
+        with self._mock_botocore():
+            if kind == "traces":
+                exporter = AWSSigV4OTLPExporter(endpoint=ENDPOINT, compression=Compression.Gzip)
+            else:
+                exporter = AWSSigV4OTLPLogExporter(
+                    endpoint=ENDPOINT.replace("traces", "logs"), compression=Compression.Gzip
+                )
+        response = MagicMock(status_code=200, ok=True)
+        with (
+            patch("requests.Session.request", return_value=response) as sent,
+            patch.object(botocore.auth.SigV4Auth, "payload", spy_payload),
+        ):
+            self._export_one(exporter, kind)
+
+        body = sent.call_args.kwargs["data"]
+        headers = sent.call_args.kwargs["headers"]
+        assert headers.get("Content-Encoding") == "gzip"
+        assert gzip.decompress(body)  # really gzip bytes
+        assert hashes == [hashlib.sha256(body).hexdigest()]
+        assert hashes[0] != hashlib.sha256(gzip.decompress(body)).hexdigest()
+        # botocore puts the hash in the canonical request only, not in a header.
+        assert "x-amz-content-sha256" not in {k.lower() for k in headers}
+        signed = headers["Authorization"].split("SignedHeaders=")[1].split(",")[0]
+        assert signed == "content-type;host;x-amz-date;x-amz-security-token"
+
+    @staticmethod
+    def _export_one(exporter, kind):
+        if kind == "traces":
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+            provider = TracerProvider()
+            provider.add_span_processor(SimpleSpanProcessor(exporter))
+            provider.get_tracer("test").start_span("span").end()
+        else:
+            from opentelemetry.sdk._logs import LoggerProvider
+            from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
+
+            provider = LoggerProvider()
+            provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+            provider.get_logger("test").emit(event_name="gen_ai.evaluation.result")
+        provider.shutdown()
+
+
+# ---------------------------------------------------------------------------
 # Canonical request structure — independent mathematical verification
 # ---------------------------------------------------------------------------
 

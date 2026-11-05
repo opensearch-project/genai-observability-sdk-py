@@ -80,6 +80,9 @@ _OTLP_ENV_VARS = (
     "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
     "OTEL_EXPORTER_OTLP_PROTOCOL",
     "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_COMPRESSION",
+    "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION",
+    "OTEL_EXPORTER_OTLP_LOGS_COMPRESSION",
 )
 
 
@@ -307,7 +310,7 @@ class TestSignalPair:
             log_exporter=_in_memory_log_exporter(),
             auto_instrument=False,
         )
-        mock_http.assert_called_once_with("http://t:4318/v1/traces", None)
+        mock_http.assert_called_once_with("http://t:4318/v1/traces", None, "none")
 
     @patch.object(_register_mod, "_create_log_exporter")
     def test_exporter_satisfies_traces_side(self, mock_log, fresh_globals, clean_otlp_env):
@@ -324,7 +327,7 @@ class TestSignalPair:
 
         mock_http.return_value = MagicMock()
         register(traces_endpoint="http://t:4318/v1/traces", auto_instrument=False, **kwargs)
-        mock_http.assert_called_once_with("http://t:4318/v1/traces", None)
+        mock_http.assert_called_once_with("http://t:4318/v1/traces", None, "none")
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +359,7 @@ class TestRegister:
         monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
         mock_create_http.return_value = MagicMock()
         register(set_global=False, auto_instrument=False)
-        mock_create_http.assert_called_once_with(DEFAULT_ENDPOINT, None)
+        mock_create_http.assert_called_once_with(DEFAULT_ENDPOINT, None, "none")
 
     @patch.object(_register_mod, "_create_http_exporter")
     def test_register_uses_provided_endpoint(self, mock_create_http):
@@ -368,7 +371,7 @@ class TestRegister:
             set_global=False,
             auto_instrument=False,
         )
-        mock_create_http.assert_called_once_with("http://my-collector:4318/v1/traces", None)
+        mock_create_http.assert_called_once_with("http://my-collector:4318/v1/traces", None, "none")
 
     @patch.object(_register_mod, "_create_http_exporter")
     def test_register_traces_endpoint_param(self, mock_create_http, monkeypatch):
@@ -382,7 +385,7 @@ class TestRegister:
             set_global=False,
             auto_instrument=False,
         )
-        mock_create_http.assert_called_once_with("http://t:4318/custom", None)
+        mock_create_http.assert_called_once_with("http://t:4318/custom", None, "none")
 
     @patch.object(_register_mod, "_create_http_exporter")
     def test_register_uses_otel_traces_endpoint_env_var(self, mock_create_http, monkeypatch):
@@ -392,7 +395,7 @@ class TestRegister:
         monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
         mock_create_http.return_value = MagicMock()
         register(set_global=False, auto_instrument=False)
-        mock_create_http.assert_called_once_with("http://otel:4318/v1/traces", None)
+        mock_create_http.assert_called_once_with("http://otel:4318/v1/traces", None, "none")
 
     @patch.object(_register_mod, "_create_http_exporter")
     def test_register_uses_otel_base_endpoint_env_var(self, mock_create_http, monkeypatch):
@@ -402,7 +405,7 @@ class TestRegister:
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
         mock_create_http.return_value = MagicMock()
         register(set_global=False, auto_instrument=False)
-        mock_create_http.assert_called_once_with("http://localhost:4318/v1/traces", None)
+        mock_create_http.assert_called_once_with("http://localhost:4318/v1/traces", None, "none")
 
     @patch.object(_register_mod, "_create_grpc_exporter")
     def test_register_uses_grpc_for_grpc_scheme(self, mock_create_grpc):
@@ -496,7 +499,7 @@ class TestRegister:
             auto_instrument=False,
         )
         mock_create_http.assert_called_once_with(
-            _register_mod.DEFAULT_ENDPOINT, {"X-Custom": "value"}
+            _register_mod.DEFAULT_ENDPOINT, {"X-Custom": "value"}, "none"
         )
 
 
@@ -529,6 +532,128 @@ class _Spy:
 def _log_target(mock_log):
     """The resolved logs target passed to the patched _create_log_exporter."""
     return mock_log.call_args.args[0]
+
+
+class TestCompression:
+    """``compression=`` (none / gzip), then the per-signal and general env vars, else none."""
+
+    @staticmethod
+    def _c(signal, compression=None):
+        return _register_mod._resolve_signal(signal, None, None, None, compression).compression
+
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_default_none(self, signal, clean_otlp_env):
+        assert self._c(signal) == "none"
+
+    @pytest.mark.parametrize("value", ["gzip", "GZIP", " none "])
+    def test_param(self, value, clean_otlp_env):
+        assert self._c("traces", value) == value.strip().lower()
+
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_signal_env_beats_general_env(self, signal, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv(f"OTEL_EXPORTER_OTLP_{signal.upper()}_COMPRESSION", "gzip")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "none")
+        assert self._c(signal) == "gzip"
+        other = "logs" if signal == "traces" else "traces"
+        assert self._c(other) == "none"
+
+    def test_general_env(self, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "gzip")
+        assert (self._c("traces"), self._c("logs")) == ("gzip", "gzip")
+
+    @pytest.mark.parametrize("signal", ["traces", "logs"])
+    def test_code_beats_env(self, signal, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv(f"OTEL_EXPORTER_OTLP_{signal.upper()}_COMPRESSION", "gzip")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "gzip")
+        assert self._c(signal, "none") == "none"
+
+    @pytest.mark.parametrize("value", ["deflate", "zstd", "br", ""])
+    def test_bad_param_raises(self, value, clean_otlp_env):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        with pytest.raises(ValueError, match="Supported values: 'none', 'gzip'"):
+            register(compression=value, set_global=False, auto_instrument=False)
+
+    @pytest.mark.parametrize(
+        "var", ["OTEL_EXPORTER_OTLP_COMPRESSION", "OTEL_EXPORTER_OTLP_LOGS_COMPRESSION"]
+    )
+    def test_bad_env_raises(self, var, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv(var, "deflate")
+        with pytest.raises(ValueError, match=var):
+            self._c("logs")
+
+    def test_bad_env_ignored_when_code_sets_it(self, clean_otlp_env, monkeypatch):
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "deflate")
+        assert self._c("logs", "gzip") == "gzip"
+
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_register_passes_it_to_the_traces_exporter(self, mock_http, clean_otlp_env):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        mock_http.return_value = MagicMock()
+        register(compression="gzip", set_global=False, auto_instrument=False)
+        mock_http.assert_called_once_with(_register_mod.DEFAULT_ENDPOINT, None, "gzip")
+
+    @patch.object(_register_mod, "_create_log_exporter")
+    @patch.object(_register_mod, "_create_http_exporter")
+    def test_register_logs_target_gets_it(
+        self, mock_http, mock_log, fresh_globals, clean_otlp_env, monkeypatch
+    ):
+        from opensearch_genai_observability_sdk_py.register import register
+
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_LOGS_COMPRESSION", "gzip")
+        mock_http.return_value = MagicMock()
+        mock_log.return_value = _in_memory_log_exporter()
+        register(auto_instrument=False)
+        mock_http.assert_called_once_with(_register_mod.DEFAULT_ENDPOINT, None, "none")
+        assert _log_target(mock_log).compression == "gzip"
+
+    @pytest.mark.parametrize("value", ["gzip", "none"])
+    def test_http_exporters_get_it(self, value):
+        from opentelemetry.exporter.otlp.proto.http import Compression
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+        expected = Compression.Gzip if value == "gzip" else Compression.NoCompression
+        target = _register_mod._SignalTarget("http://h:4318/v1/logs", "http", True, value)
+        with patch.object(OTLPLogExporter, "__init__", return_value=None) as init:
+            _register_mod._create_log_exporter(target, None)
+        assert init.call_args.kwargs["compression"] == expected
+        with patch.object(OTLPSpanExporter, "__init__", return_value=None) as init:
+            _register_mod._create_http_exporter("http://h:4318/v1/traces", None, value)
+        assert init.call_args.kwargs["compression"] == expected
+
+    @pytest.mark.parametrize("value", ["gzip", "none"])
+    def test_grpc_exporters_get_it(self, value):
+        import grpc
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+
+        expected = grpc.Compression.Gzip if value == "gzip" else grpc.Compression.NoCompression
+        target = _register_mod._SignalTarget("grpc://h:4317", "grpc", True, value)
+        with patch.object(OTLPLogExporter, "__init__", return_value=None) as init:
+            _register_mod._create_log_exporter(target, None)
+        assert init.call_args.kwargs["compression"] == expected
+        with patch.object(OTLPSpanExporter, "__init__", return_value=None) as init:
+            _register_mod._create_grpc_exporter("grpc://h:4317", None, value)
+        assert init.call_args.kwargs["compression"] == expected
+
+    def test_sigv4_exporters_get_it(self):
+        from opentelemetry.exporter.otlp.proto.http import Compression
+
+        from opensearch_genai_observability_sdk_py import exporters
+
+        traces = _register_mod._SignalTarget("https://t/v1/traces", "http", True, "gzip")
+        logs = _register_mod._SignalTarget("https://l/v1/logs", "http", True, "gzip")
+        with (
+            patch.object(exporters.AWSSigV4OTLPExporter, "__init__", return_value=None) as span,
+            patch.object(exporters.AWSSigV4OTLPLogExporter, "__init__", return_value=None) as log,
+        ):
+            _register_mod._create_exporter(traces, None, {"region": "us-east-1"})
+            _register_mod._create_log_exporter(logs, None, {"region": "us-east-1"})
+        assert span.call_args.kwargs["compression"] == Compression.Gzip
+        assert log.call_args.kwargs["compression"] == Compression.Gzip
+        assert span.call_args.kwargs["region"] == "us-east-1"
 
 
 class TestCreateLogExporter:
@@ -604,7 +729,7 @@ class TestRegisterLogs:
             auto_instrument=False,
         )
         mock_http.assert_called_once_with(
-            "http://my-collector:4318/v1/traces", {"Authorization": "Basic x"}
+            "http://my-collector:4318/v1/traces", {"Authorization": "Basic x"}, "none"
         )
         target = _log_target(mock_log)
         assert (target.url, target.protocol) == ("http://my-collector:4318/v1/logs", "http")
@@ -623,7 +748,7 @@ class TestRegisterLogs:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             register(endpoint="https://h/otlp-pipeline", auto_instrument=False)
-        mock_http.assert_called_once_with("https://h/otlp-pipeline/v1/traces", None)
+        mock_http.assert_called_once_with("https://h/otlp-pipeline/v1/traces", None, "none")
         assert _log_target(mock_log).url == "https://h/otlp-pipeline/v1/logs"
 
     @pytest.mark.parametrize(
@@ -667,7 +792,7 @@ class TestRegisterLogs:
         mock_grpc.return_value = MagicMock()
         mock_log.return_value = _in_memory_log_exporter()
         register(auto_instrument=False)
-        mock_grpc.assert_called_once_with("http://collector:4317", None)
+        mock_grpc.assert_called_once_with("http://collector:4317", None, "none")
         target = _log_target(mock_log)
         assert (target.url, target.protocol) == ("http://collector:4317", "grpc")
 
@@ -705,7 +830,7 @@ class TestRegisterLogs:
             logs_endpoint="http://logs-host:4318/v1/logs",
             auto_instrument=False,
         )
-        mock_http.assert_called_once_with("http://traces-host:4318/ingest", None)
+        mock_http.assert_called_once_with("http://traces-host:4318/ingest", None, "none")
         assert _log_target(mock_log).url == "http://logs-host:4318/v1/logs"
 
     @patch.object(_register_mod, "_create_log_exporter")
@@ -720,7 +845,7 @@ class TestRegisterLogs:
         mock_http.return_value = MagicMock()
         mock_log.return_value = _in_memory_log_exporter()
         register(auto_instrument=False)
-        mock_http.assert_called_once_with("http://t:4318/v1/traces", None)
+        mock_http.assert_called_once_with("http://t:4318/v1/traces", None, "none")
         assert _log_target(mock_log).url == "http://l:4318/v1/logs"
 
     @patch.object(_register_mod, "_create_log_exporter")
@@ -736,7 +861,7 @@ class TestRegisterLogs:
         mock_http.return_value = MagicMock()
         mock_log.return_value = _in_memory_log_exporter()
         register(endpoint="http://code:4318", auto_instrument=False)
-        mock_http.assert_called_once_with("http://code:4318/v1/traces", None)
+        mock_http.assert_called_once_with("http://code:4318/v1/traces", None, "none")
         assert _log_target(mock_log).url == "http://code:4318/v1/logs"
 
     @patch.object(_register_mod, "_create_log_exporter")
@@ -757,7 +882,7 @@ class TestRegisterLogs:
             logs_endpoint="http://data-prepper:21892/v1/logs",
             auto_instrument=False,
         )
-        mock_http.assert_called_once_with("http://data-prepper:21890/v1/traces", None)
+        mock_http.assert_called_once_with("http://data-prepper:21890/v1/traces", None, "none")
         assert _log_target(mock_log).url == "http://data-prepper:21892/v1/logs"
 
     @patch.object(_register_mod, "_create_log_exporter")
