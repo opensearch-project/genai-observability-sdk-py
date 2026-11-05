@@ -9,7 +9,8 @@
 
 """OpenSearch AI Observability SDK.
 
-OTEL-native tracing and scoring for LLM applications.
+OTEL-native tracing and scoring for LLM applications. Evaluation results are
+emitted as ``gen_ai.evaluation.result`` OTel log events.
 """
 
 from opensearch_genai_observability_sdk_py.benchmark import (
@@ -17,12 +18,17 @@ from opensearch_genai_observability_sdk_py.benchmark import (
     BenchmarkResult,
     BenchmarkSummary,
     EvalScore,
+    ScorerSpec,
     ScoreSummary,
     TestCaseResult,
     evaluate,
+    scorer,
 )
 from opensearch_genai_observability_sdk_py.enrich import enrich, mark_agent_root
-from opensearch_genai_observability_sdk_py.exporters import AWSSigV4OTLPExporter
+from opensearch_genai_observability_sdk_py.exporters import (
+    AWSSigV4OTLPExporter,
+    AWSSigV4OTLPLogExporter,
+)
 from opensearch_genai_observability_sdk_py.observe import Op, observe
 from opensearch_genai_observability_sdk_py.register import register
 from opensearch_genai_observability_sdk_py.retrieval import OpenSearchTraceRetriever
@@ -42,6 +48,8 @@ __all__ = [
     "Benchmark",
     "evaluate",
     "EvalScore",
+    "scorer",
+    "ScorerSpec",
     "BenchmarkResult",
     "BenchmarkSummary",
     "ScoreSummary",
@@ -50,4 +58,5 @@ __all__ = [
     "OpenSearchTraceRetriever",
     # Exporters
     "AWSSigV4OTLPExporter",
+    "AWSSigV4OTLPLogExporter",
 ]

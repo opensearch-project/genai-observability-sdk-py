@@ -7,10 +7,11 @@
 # Modifications Copyright OpenSearch Contributors. See
 # GitHub history for details.
 
-"""Mini OTEL Collector — HTTP receiver, prints spans to terminal.
+"""Mini OTEL Collector: HTTP receiver, prints spans and evaluation events.
 
 No Docker needed. Receives OTLP/HTTP protobuf on port 4318 and
-pretty-prints every span.
+pretty-prints every span (/v1/traces) and every log record (/v1/logs),
+highlighting gen_ai.evaluation.result events emitted by score().
 
 Usage:
     # Terminal 1: start the collector
@@ -22,6 +23,10 @@ Usage:
 
 import uvicorn
 from fastapi import FastAPI, Request, Response
+from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (
+    ExportLogsServiceRequest,
+    ExportLogsServiceResponse,
+)
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
     ExportTraceServiceResponse,
@@ -63,10 +68,9 @@ def ns_to_ms(ns: int) -> float:
     return ns / 1_000_000
 
 
-def print_span(span, resource_attrs: dict):
-    """Pretty-print a single span."""
+def attrs_to_dict(kvs) -> dict:
     attrs = {}
-    for kv in span.attributes:
+    for kv in kvs:
         key = kv.key
         val = kv.value
         if val.HasField("string_value"):
@@ -79,6 +83,12 @@ def print_span(span, resource_attrs: dict):
             attrs[key] = val.bool_value
         else:
             attrs[key] = str(val)
+    return attrs
+
+
+def print_span(span, resource_attrs: dict):
+    """Pretty-print a single span."""
+    attrs = attrs_to_dict(span.attributes)
 
     span_kind = attrs.get("gen_ai.operation.name", "")
     is_score = "gen_ai.evaluation.name" in attrs
@@ -113,10 +123,7 @@ def print_span(span, resource_attrs: dict):
         "gen_ai.tool.call.result",
         "gen_ai.evaluation.name",
         "gen_ai.evaluation.score.value",
-        "gen_ai.evaluation.source",
         "gen_ai.evaluation.explanation",
-        "gen_ai.evaluation.trace_id",
-        "gen_ai.evaluation.span_id",
         "gen_ai.conversation.id",
     ]:
         if key in attrs:
@@ -126,6 +133,55 @@ def print_span(span, resource_attrs: dict):
             if len(val_str) > 120:
                 val_str = val_str[:120] + "..."
             print(f"  {CYAN}{key}{RESET}: {val_str}")
+
+
+def print_log_record(record, scope, resource_attrs: dict):
+    """Pretty-print a log record (evaluation events in particular)."""
+    attrs = attrs_to_dict(record.attributes)
+    event_name = record.event_name or "(log)"
+    is_eval = event_name == "gen_ai.evaluation.result"
+    label = f"{RED}evaluation{RESET}" if is_eval else "log"
+    trace_id = record.trace_id.hex() or "none"
+    span_id = record.span_id.hex() or "none"
+
+    print(f"\n{BOLD}{'─' * 70}{RESET}")
+    print(f"  {BOLD}Event:{RESET} {event_name}  [{label}]  severity={record.severity_number}")
+    print(f"  {DIM}Trace:  {trace_id}{RESET}")
+    print(f"  {DIM}Span:   {span_id}{RESET}")
+    print(f"  {DIM}Scope:  {scope.name} {scope.version}{RESET}")
+    print(f"  {DIM}Service: {resource_attrs.get('service.name', 'unknown')}{RESET}")
+    for key, val in attrs.items():
+        val_str = str(val)
+        if len(val_str) > 120:
+            val_str = val_str[:120] + "..."
+        print(f"  {CYAN}{key}{RESET}: {val_str}")
+
+
+@app.post("/v1/logs")
+@app.post("/opentelemetry/v1/logs")
+async def receive_logs(request: Request):
+    """OTLP/HTTP logs receiver (evaluation events from score())."""
+    body = await request.body()
+
+    req = ExportLogsServiceRequest()
+    req.ParseFromString(body)
+
+    count = 0
+    for resource_logs in req.resource_logs:
+        resource_attrs = attrs_to_dict(resource_logs.resource.attributes)
+        for scope_logs in resource_logs.scope_logs:
+            for record in scope_logs.log_records:
+                print_log_record(record, scope_logs.scope, resource_attrs)
+                count += 1
+
+    if count > 0:
+        print(f"\n{GREEN}✓ Received {count} log record(s) via HTTP{RESET}\n")
+
+    resp = ExportLogsServiceResponse()
+    return Response(
+        content=resp.SerializeToString(),
+        media_type="application/x-protobuf",
+    )
 
 
 @app.post("/v1/traces")
@@ -167,6 +223,8 @@ if __name__ == "__main__":
     print("  Listening:")
     print("    http://0.0.0.0:4318/v1/traces                    (OTel Collector)")
     print("    http://0.0.0.0:4318/opentelemetry/v1/traces      (Data Prepper)")
+    print("    http://0.0.0.0:4318/v1/logs                      (evaluation events)")
+    print("    http://0.0.0.0:4318/opentelemetry/v1/logs        (Data Prepper)")
     print("  Protocol:  OTLP/HTTP (protobuf)")
     print()
     print("  Test with:")

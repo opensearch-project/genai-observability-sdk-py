@@ -13,6 +13,13 @@ Most teams already have eval pipelines (RAGAS, DeepEval, pytest, custom).
 This example shows how to upload those results to OpenSearch via the SDK,
 so you can visualize and compare them in the agent-health UI.
 
+Each b.log() emits one gen_ai.evaluation.result log event per score, with
+the test.* ids, the agent and the run and case metadata. Closing the
+Benchmark returns the local summary and sends nothing. The events are
+exported to /v1/logs and indexed in otel-v1-genai-evaluation-*. With
+trace_id/span_id the score events are parented to that agent span; without
+them they carry no trace context. Benchmark creates no spans.
+
 Three patterns:
     A. Upload from a list of dicts (any eval framework)
     B. Upload from RAGAS results
@@ -32,7 +39,7 @@ import os
 from opensearch_genai_observability_sdk_py import Benchmark, register
 
 register(
-    endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/traces"),
+    endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318"),
     service_name="my-rag-agent",
 )
 
@@ -44,7 +51,7 @@ register(
 def upload_custom_results():
     """Upload results from your own eval pipeline."""
 
-    # Your eval results — could come from pytest, a notebook, CI, etc.
+    # Your eval results: could come from pytest, a notebook, CI, etc.
     results = [
         {
             "question": "What is Python?",
@@ -72,7 +79,6 @@ def upload_custom_results():
     with Benchmark(
         name="custom-eval",
         metadata={"framework": "custom", "model": "gpt-4o-mini"},
-        record_io=True,
     ) as b:
         for r in results:
             b.log(
@@ -87,7 +93,7 @@ def upload_custom_results():
 
 
 # ---------------------------------------------------------------------------
-# Pattern B: Upload from RAGAS (commented out — requires ragas package)
+# Pattern B: Upload from RAGAS (commented out, requires ragas package)
 # ---------------------------------------------------------------------------
 
 def upload_ragas_results():
@@ -110,7 +116,6 @@ def upload_ragas_results():
     # with Benchmark(
     #     name="ragas-eval",
     #     metadata={"framework": "ragas", "model": "gpt-4o"},
-    #     record_io=True,
     # ) as b:
     #     for _, row in df.iterrows():
     #         b.log(
@@ -159,15 +164,15 @@ def upload_with_trace_links():
     with Benchmark(
         name="ci-nightly",
         metadata={"framework": "pytest", "commit": "abc123", "branch": "main"},
-        record_io=True,
     ) as b:
         for r in ci_results:
             b.log(
                 input=r["question"],
                 output=r["answer"],
                 scores={"accuracy": r["accuracy"]},
-                trace_id=r["trace_id"],  # Links to the original agent trace
-                span_id=r["span_id"],    # Links to the specific agent span
+                status="pass" if r["accuracy"] >= 0.9 else "fail",
+                trace_id=r["trace_id"],  # The original agent trace
+                span_id=r["span_id"],    # Score events are parented to this span
                 case_id=r["question"][:20].replace(" ", "_").lower(),
             )
 
@@ -181,7 +186,7 @@ if __name__ == "__main__":
     upload_custom_results()
     print()
 
-    print("Pattern B: Upload RAGAS results (skipped — requires ragas)")
+    print("Pattern B: Upload RAGAS results (skipped, requires ragas)")
     upload_ragas_results()
     print()
 

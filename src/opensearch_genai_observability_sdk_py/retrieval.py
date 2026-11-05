@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from opensearch_genai_observability_sdk_py.score import EVALUATION_EVENT_NAME
+
 if TYPE_CHECKING:
     from opensearchpy import RequestsAWSV4SignerAuth
 
@@ -165,6 +167,8 @@ class OpenSearchTraceRetriever:
     Args:
         host: OpenSearch endpoint (e.g. ``https://localhost:9200``).
         index: Index pattern for span data.
+        evaluation_index: Index pattern for evaluation results
+            (``gen_ai.evaluation.result`` events routed by Data Prepper).
         auth: Authentication — either a ``(username, password)`` tuple for
             basic auth, or a ``RequestsAWSV4SignerAuth`` instance for SigV4.
         verify_certs: Whether to verify TLS certificates.
@@ -174,6 +178,7 @@ class OpenSearchTraceRetriever:
         self,
         host: str = "https://localhost:9200",
         index: str = "otel-v1-apm-span-*",
+        evaluation_index: str = "otel-v1-genai-evaluation*",
         auth: tuple[str, str] | RequestsAWSV4SignerAuth | None = None,
         verify_certs: bool = True,
     ):
@@ -198,6 +203,7 @@ class OpenSearchTraceRetriever:
 
         self._client = OpenSearch(**kwargs)
         self._index = index
+        self._evaluation_index = evaluation_index
 
     @staticmethod
     def _get_requests_connection() -> Any:
@@ -263,25 +269,46 @@ class OpenSearchTraceRetriever:
         return [map_span_doc(doc) for doc in self._search(body)]
 
     def find_evaluated_trace_ids(self, trace_ids: list[str]) -> set[str]:
-        """Return the subset of trace_ids that already have an evaluation span."""
+        """Return the subset of trace_ids that already have an evaluation result.
+
+        Looks for ``gen_ai.evaluation.result`` events in the evaluation index,
+        matched on ``traceId``. Test case and run events in the same index are
+        not evaluation results and are ignored. A missing evaluation index means
+        nothing is evaluated yet and returns an empty set.
+
+        Raises:
+            Exception: Any other search error (connection, auth, mapping) from
+                the OpenSearch client. It is not turned into an empty set, so
+                a failed lookup never looks like "nothing evaluated" and
+                callers do not re-run judges and write duplicate results.
+        """
         if not trace_ids:
             return set()
         body = {
             "size": 0,
             "query": {
                 "bool": {
-                    "must": [
+                    "filter": [
+                        {"term": {"eventName": EVALUATION_EVENT_NAME}},
                         {"terms": {"traceId": trace_ids}},
-                        {"term": {"attributes.gen_ai.operation.name": "evaluation"}},
                     ],
                 }
             },
-            "aggs": {"evaluated": {"terms": {"field": "traceId", "size": len(trace_ids)}}},
+            "aggs": {
+                "by_trace": {"terms": {"field": "traceId", "size": len(trace_ids)}},
+            },
         }
-        resp = self._client.search(index=self._index, body=body)
-        return {
-            b["key"] for b in resp.get("aggregations", {}).get("evaluated", {}).get("buckets", [])
-        }
+        # A missing index (or pattern with no match) returns no hits instead of an error.
+        resp = self._client.search(
+            index=self._evaluation_index,
+            body=body,
+            ignore_unavailable=True,
+            allow_no_indices=True,
+        )
+        aggs = resp.get("aggregations", {})
+        wanted = set(trace_ids)
+        found = {b["key"] for b in aggs.get("by_trace", {}).get("buckets", [])}
+        return found & wanted
 
     # --- queries ---
 

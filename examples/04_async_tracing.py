@@ -17,7 +17,7 @@ import asyncio
 from opensearch_genai_observability_sdk_py import Op, enrich, observe, register
 
 # --- Setup ---
-register(endpoint="http://localhost:21890/opentelemetry/v1/traces")
+register(endpoint="http://localhost:4318")
 
 
 @observe(name="async_search", op=Op.EXECUTE_TOOL)

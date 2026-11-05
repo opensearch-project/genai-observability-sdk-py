@@ -4,6 +4,11 @@ Connects to OpenSearch, retrieves recent agent traces, and shows how to
 feed them into an evaluation framework. The eval helper uses strands-agents
 as a concrete example but is commented out by default.
 
+Results are written back with score(), which emits a gen_ai.evaluation.result
+log event parented to the evaluated span. Data Prepper stores it in the
+otel-v1-genai-evaluation index; find_evaluated_trace_ids() checks that index
+to skip traces that are already scored.
+
 Prerequisites:
     pip install opensearch-genai-observability-sdk-py[opensearch]
 
@@ -14,10 +19,13 @@ To enable strands evaluation:
 
 from datetime import datetime, timedelta, timezone
 
-from opensearch_genai_observability_sdk_py import OpenSearchTraceRetriever, score
+from opensearch_genai_observability_sdk_py import OpenSearchTraceRetriever, register, score
 
 
 def main():
+    # Exports the evaluation events (OTLP logs) on the same pipeline as traces.
+    provider = register(service_name="trace-evaluator", auto_instrument=False)
+
     retriever = OpenSearchTraceRetriever(
         host="https://localhost:9200",
         auth=("admin", "My_password_123!@#"),
@@ -35,7 +43,10 @@ def main():
         print("No traces found. Send some first with 01_tracing_basics.py")
         return
 
-    # Skip already-evaluated traces
+    # Skip already-evaluated traces. A missing evaluation index means none yet;
+    # connection, auth or mapping errors raise, so a failed lookup never makes
+    # every trace look unevaluated (which would re-run the judges and write
+    # duplicate results).
     trace_ids = [r.trace_id for r in roots]
     already_evaluated = retriever.find_evaluated_trace_ids(trace_ids)
     to_evaluate = [r for r in roots if r.trace_id not in already_evaluated]
@@ -55,20 +66,25 @@ def main():
         tokens = f" ({span.input_tokens}→{span.output_tokens} tok)" if span.input_tokens else ""
         print(f"  {indent}{span.operation_name}: {span.name}{tokens}")
 
-    root = next(s for s in trace.spans if not s.parent_span_id)  # noqa: F841
+    root = next(s for s in trace.spans if not s.parent_span_id)
 
     # --- Uncomment to evaluate with strands-agents ---
     # evaluate_with_strands(trace, root, target.trace_id)
 
     # --- Or write a score manually from any eval framework ---
+    # Parent the result to the real root span (never derive a span id).
     score(
         name="helpfulness",
         value=0.85,
         trace_id=target.trace_id,
+        span_id=root.span_id,
         label="pass",
         explanation="Agent addressed the user query with relevant info",
+        evaluator="manual_review",
+        evaluator_type="human",
     )
-    print(f"\n✅ Score written to trace {target.trace_id[:12]}…")
+    provider.force_flush()
+    print(f"\n✅ Evaluation event written for trace {target.trace_id[:12]}…")
 
 
 def evaluate_with_strands(trace_record, root_span, trace_id):
@@ -159,10 +175,16 @@ def evaluate_with_strands(trace_record, root_span, trace_id):
         name="helpfulness",
         value=result.score,
         trace_id=trace_id,
+        span_id=root_span.span_id,
         label="pass" if result.score >= 0.7 else "fail",
-        explanation=result.reason[:500] if result.reason else "",
+        explanation=result.reason or None,  # kept whole (8 KB safety cap)
+        evaluator="strands_evals.HelpfulnessEvaluator",
+        evaluator_type="llm_judge",
+        score_min=0.0,
+        score_max=1.0,
+        direction="maximize",
     )
-    print(f"✅ Eval score written to trace {trace_id[:12]}…")
+    print(f"✅ Evaluation event written for trace {trace_id[:12]}…")
 
 
 if __name__ == "__main__":

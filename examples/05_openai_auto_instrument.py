@@ -22,7 +22,7 @@ from opensearch_genai_observability_sdk_py import Op, observe, register
 
 # Step 2: register() auto-instruments all installed libraries
 register(
-    endpoint="http://localhost:21890/opentelemetry/v1/traces",
+    endpoint="http://localhost:4318",
     service_name="my-chatbot",
 )
 

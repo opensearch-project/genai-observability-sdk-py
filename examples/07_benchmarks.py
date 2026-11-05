@@ -12,6 +12,14 @@
 Run the same test cases across different prompt versions, with full traces
 and scores stored in OpenSearch for comparison.
 
+Telemetry: no harness spans. Each case's agent run is its own trace, and its
+root span gets test.suite.name, test.suite.run.id, test.case.id and
+test.case.name. Per case the SDK emits one gen_ai.evaluation.result log event
+per score, parented to the agent run's root span, with the test.* ids, the
+agent and the run metadata. A case whose task raises gets one error result per
+scorer (error.type, no score). Data Prepper routes the events to the
+otel-v1-genai-evaluation-* index.
+
 Usage:
     AGENT_VERSION=v1 python examples/07_benchmarks.py
     AGENT_VERSION=v2 python examples/07_benchmarks.py
@@ -35,7 +43,7 @@ from opensearch_genai_observability_sdk_py import (
 )
 
 register(
-    endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/traces"),
+    endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318"),
     service_name="my-rag-agent",
 )
 
@@ -49,7 +57,7 @@ PROMPTS = {
 
 @observe(op=Op.CHAT)
 def my_agent(question: str) -> str:
-    """Your agent — instrumented with @observe for tracing."""
+    """Your agent, instrumented with @observe for tracing."""
     enrich(model="gpt-4o-mini", system=PROMPTS.get(AGENT_VERSION, PROMPTS["v1"]))
     return _simulate(question, AGENT_VERSION)
 
@@ -93,13 +101,12 @@ if __name__ == "__main__":
         task=my_agent,
         data=TEST_CASES,
         scores=[correctness, has_source],
-        metadata={"agent_version": AGENT_VERSION},
-        record_io=True,
+        metadata={"app.variant": AGENT_VERSION},
     )
 
     for case in result.cases:
         print(
-            f"  {case.case_id:<10s} {case.status:<6s} "
+            f"  {case.case_id:<10s} {case.status:<6s} trace={case.trace_id} "
             f"correctness={case.scores.get('correctness', 0):.2f} "
             f"has_source={case.scores.get('has_source', 0):.2f}"
         )

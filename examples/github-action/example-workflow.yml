@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The OpenSearch Contributors require contributions made to
+# this file be licensed under the Apache-2.0 license or a
+# compatible open source license.
+#
+# Sample workflow: copy to .github/workflows/agent-evals.yml in your repository.
+# It runs your evaluate() suite on every pull request, sends traces and
+# evaluation events to OpenSearch Ingestion (two pipelines, SigV4), writes a
+# job summary with a link to the run, and fails if a score regresses.
+
+name: Agent evals
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC for aws-actions/configure-aws-credentials
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install your agent
+        run: python -m pip install -e .
+
+      - name: AWS credentials for OSIS
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.EVALS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Run evals
+        id: evals
+        # Pin to a commit SHA of this repository in real use.
+        uses: opensearch-project/genai-observability-sdk-py/examples/github-action@main
+        with:
+          suite: evals/suite.py:suite
+          traces-endpoint: ${{ secrets.OSIS_TRACES_ENDPOINT }} # https://<traces-pipeline>/v1/traces
+          logs-endpoint: ${{ secrets.OSIS_LOGS_ENDPOINT }} # https://<logs-pipeline>/v1/logs
+          aws-region: us-east-1
+          aws-service: osis
+          service-name: my-agent-ci
+          dashboards-url: ${{ vars.OPENSEARCH_DASHBOARDS_URL }}
+          fail-on-regression: |
+            contains_expected=0.75
+            answer_length=0.5
+
+      - name: Print run link
+        if: always()
+        env:
+          RUN_URL: ${{ steps.evals.outputs.run-url }}
+        run: echo "Evaluation run: $RUN_URL"
