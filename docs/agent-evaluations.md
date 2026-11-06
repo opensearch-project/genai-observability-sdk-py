@@ -48,13 +48,21 @@ Attributes (each is set only when it has a value):
 | `opensearch.gen_ai.evaluation.score.direction` | OpenSearch | all | `maximize` or `minimize` |
 | `opensearch.gen_ai.evaluation.judge.trace_id` | OpenSearch | all | Trace of the judge's own run |
 | `opensearch.gen_ai.evaluation.judge_label` | OpenSearch | all | The evaluator's own non-verdict label (for example `relevant`) when the result also has a verdict |
+| `opensearch.gen_ai.evaluation.evaluator.description` | OpenSearch | all | What the evaluator checks (criteria or rubric summary) |
+| `gen_ai.request.model` | OTel | all | Model the LLM judge used |
+| `gen_ai.prompt.name` | OTel | all | Name of the judge prompt template |
+| `gen_ai.prompt.version` | OTel | all | Version of the judge prompt |
+| `gen_ai.system_instructions` | OTel | all, opt-in | The judge's system prompt, up to 8192 characters. Only recorded when passed explicitly (it may hold sensitive data) |
+| `opensearch.gen_ai.evaluation.system_instructions_truncated` | OpenSearch | all | `true` when the system instructions were cut |
+| `opensearch.test.suite.run.name` | OpenSearch | offline | Human-readable run name. Optional; readers fall back to the short run id |
+| `opensearch.test.suite.run.description` | OpenSearch | offline | Free-text run description, up to 1024 characters |
 | `opensearch.test.case.expected` | OpenSearch | offline | Expected output of the case, up to 4096 characters |
 | `opensearch.test.case.expected_truncated` | OpenSearch | offline | `true` when the expected output was cut |
 
 - "OTel" names are in the OTel semantic conventions registry. `test.suite.run.id` and `test.case.id` are proposed in [semantic-conventions#1262](https://github.com/open-telemetry/semantic-conventions/issues/1262) and [semantic-conventions-genai#79](https://github.com/open-telemetry/semantic-conventions-genai/issues/79).
 - `opensearch.gen_ai.evaluation.*` names mirror the OTel `gen_ai.evaluation.*` names for fields OTel does not define yet.
 - "offline" means `evaluate()` and `Benchmark.log()`. `score()` sets the `test.*` and `opensearch.test.case.*` keys only if you pass them in `attributes`.
-- `score(attributes=...)` and run, case and score metadata are added to the events too, under the SDK fields: an SDK field always wins. They cannot set the evaluation fields (`gen_ai.evaluation.*`, `opensearch.gen_ai.evaluation.*`, `error.type`), even ones the SDK leaves unset: those keys are dropped with one warning per call. `score(attributes=...)` also cannot set `gen_ai.response.id`, `gen_ai.conversation.id` or `gen_ai.agent.*` (use the arguments). Metadata also cannot set `test.suite.name`, `test.suite.run.id`, `test.case.id`, `test.case.name`, `cicd.pipeline.*` or `opensearch.test.case.*`.
+- `score(attributes=...)` and run, case and score metadata are added to the events too, under the SDK fields: an SDK field always wins. They cannot set the evaluation fields (`gen_ai.evaluation.*`, `opensearch.gen_ai.evaluation.*`, `error.type`, and the judge keys `gen_ai.request.model`, `gen_ai.prompt.name`, `gen_ai.prompt.version`, `gen_ai.system_instructions`), even ones the SDK leaves unset: those keys are dropped with one warning per call. `score(attributes=...)` also cannot set `gen_ai.response.id`, `gen_ai.conversation.id` or `gen_ai.agent.*` (use the arguments). Metadata also cannot set `test.suite.name`, `test.suite.run.id`, `test.case.id`, `test.case.name`, `cicd.pipeline.*`, `opensearch.test.suite.run.name` / `.description` or `opensearch.test.case.*`.
 
 ## Setup
 
@@ -204,6 +212,39 @@ The rule, the same for `score()`, `evaluate()` and `Benchmark.log()`:
 - `score_min` / `score_max` record the scale (`opensearch.gen_ai.evaluation.score.min` / `.max`), so a 1 to 5 judge and a 0 to 1 check can be read side by side.
 - `evaluator`, `evaluator_version` and `evaluator_type` name the evaluator (`opensearch.gen_ai.evaluation.evaluator.*`). The instrumentation scope is always the SDK.
 
+### Judge context
+
+Record what an LLM judge checked and how, so a reader can tell two judge versions apart:
+
+| `score()` argument | `@scorer(...)` argument | Attribute |
+|---|---|---|
+| `evaluator_description` | `description` | `opensearch.gen_ai.evaluation.evaluator.description` |
+| `judge_model` | `judge_model` | `gen_ai.request.model` |
+| `judge_prompt_name` | `judge_prompt_name` | `gen_ai.prompt.name` |
+| `judge_prompt_version` | `judge_prompt_version` | `gen_ai.prompt.version` |
+| `judge_system_instructions` | `judge_system_instructions` | `gen_ai.system_instructions` (opt-in) |
+
+`gen_ai.request.model`, `gen_ai.prompt.name`, `gen_ai.prompt.version` and `gen_ai.system_instructions` are the standard GenAI semantic convention names. The system instructions may contain sensitive data, so they are recorded only when you pass them. They are cut to 8192 characters, and `opensearch.gen_ai.evaluation.system_instructions_truncated` is then `true`.
+
+```python
+from opensearch_genai_observability_sdk_py import score
+
+score(
+    "answer_quality",
+    4.0,
+    trace_id="6ebb9835f43af1552f2cebb9f5165e39",
+    threshold=4,
+    score_min=1,
+    score_max=5,
+    evaluator="answer_quality_judge",
+    evaluator_type="llm_judge",
+    evaluator_description="Answer is correct and grounded in the tool output",
+    judge_model="claude-haiku-4-5",
+    judge_prompt_name="answer-quality",
+    judge_prompt_version="v2",
+)
+```
+
 ### Judge trace and errors
 
 If the judge itself is traced, pass its trace id so the result links to the judge's run:
@@ -344,6 +385,8 @@ The `"expected"` value of an `evaluate()` case, or `Benchmark.log(expected=...)`
 - It is exported by default. If your test sets hold sensitive data, pass `record_expected=False` to `evaluate()` or `Benchmark(...)`: neither attribute is written. Scorers still receive the value, and it stays on the local result. Inputs and outputs are never exported.
 
 ### Run ids
+
+`run_name` and `run_description` on `evaluate()` and `Benchmark(...)` give a run a human-readable name (`opensearch.test.suite.run.name`, for example `"v5 shorter prompt"`) and a free-text description (`opensearch.test.suite.run.description`, cut to 1024 characters). Both are optional and go on every result of the run; OpenSearch Dashboards shows the name in place of the short run id.
 
 `run_id` sets `test.suite.run.id` and is used exactly as given. Without it the SDK generates one (`run_<timestamp>_<random>`). Empty or whitespace-only values raise `ValueError`.
 

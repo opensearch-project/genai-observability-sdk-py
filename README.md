@@ -469,7 +469,12 @@ score(
 | `agent_version` | `str` | `gen_ai.agent.version` | Its version. Default: the active span's, else `register(agent_version=)` |
 | `error_type` | `str` | `error.type` | Set when the evaluator itself failed |
 | `judge_trace_id` | `str` | `opensearch.gen_ai.evaluation.judge.trace_id` | Trace of the judge's own run |
-| `attributes` | `dict` | | Extra attributes, e.g. `test.*` grouping keys from [semantic-conventions-genai#79](https://github.com/open-telemetry/semantic-conventions-genai/issues/79). The SDK fields win over them; keys the SDK owns (`gen_ai.evaluation.*`, `opensearch.gen_ai.evaluation.*`, `error.type`, `gen_ai.response.id`, `gen_ai.conversation.id`, `gen_ai.agent.*`) are dropped with one warning per call (use the matching arguments). `test.*` keys pass through |
+| `evaluator_description` | `str` | `opensearch.gen_ai.evaluation.evaluator.description` | What the evaluator checks (criteria or rubric summary) |
+| `judge_model` | `str` | `gen_ai.request.model` | Model the LLM judge used |
+| `judge_prompt_name` | `str` | `gen_ai.prompt.name` | Name of the judge prompt template |
+| `judge_prompt_version` | `str` | `gen_ai.prompt.version` | Version of the judge prompt |
+| `judge_system_instructions` | `str` | `gen_ai.system_instructions` | The judge's system prompt. Opt-in (may hold sensitive data): recorded only when passed. Cut to 8192 characters with `opensearch.gen_ai.evaluation.system_instructions_truncated` = `true` |
+| `attributes` | `dict` | | Extra attributes, e.g. `test.*` grouping keys from [semantic-conventions-genai#79](https://github.com/open-telemetry/semantic-conventions-genai/issues/79). The SDK fields win over them; keys the SDK owns (`gen_ai.evaluation.*`, `opensearch.gen_ai.evaluation.*`, `error.type`, `gen_ai.response.id`, `gen_ai.conversation.id`, `gen_ai.agent.*`, and the judge keys `gen_ai.request.model`, `gen_ai.prompt.*`, `gen_ai.system_instructions`) are dropped with one warning per call (use the matching arguments). `test.*` keys pass through |
 
 `opensearch.gen_ai.evaluation.*` names are OpenSearch extensions that mirror the OTel `gen_ai.evaluation.*` names for fields OTel does not define yet. `score()` never sets `opensearch.test.case.expected`; pass it in `attributes` if you want it on an online result.
 
@@ -514,6 +519,8 @@ result = evaluate(
     ],
     scores=[accuracy],
     metadata={"app.variant": "v2"},
+    run_name="v2 shorter prompt",  # optional, shown in place of the run id
+    run_description="Shorter system prompt, same tools",
 )
 ```
 
@@ -548,7 +555,17 @@ Each scorer is the evaluator: a named scorer function sets the grade event's `op
 from opensearch_genai_observability_sdk_py import scorer
 
 
-@scorer(name="answer_quality", threshold=4, score_min=1, score_max=5, evaluator_type="llm_judge")
+@scorer(
+    name="answer_quality",
+    threshold=4,
+    score_min=1,
+    score_max=5,
+    evaluator_type="llm_judge",
+    description="Answer is correct and grounded in the tool output",
+    judge_model="claude-haiku-4-5",
+    judge_prompt_name="answer-quality",
+    judge_prompt_version="v2",
+)
 def quality(input, output, expected):
     return judge(input, output)  # float: named "answer_quality", verdict from threshold
 
@@ -563,7 +580,7 @@ def tools(input, output, expected):
     return EvalScore(name="tool_selection", value=hit_rate, passed=hit_rate == 1)
 ```
 
-`@scorer` arguments: `name` (evaluation name of float/bool results and of the error grade; default the function name), `threshold`, `direction` (default `maximize` with a threshold), `score_min` / `score_max`, `evaluator` (`evaluator.name`; default the function name), `evaluator_type`. A scorer that raises emits its error grade under the declared `name`, so it lands on the same evaluation as its successful results.
+`@scorer` arguments: `name` (evaluation name of float/bool results and of the error grade; default the function name), `threshold`, `direction` (default `maximize` with a threshold), `score_min` / `score_max`, `evaluator` (`evaluator.name`; default the function name), `evaluator_type`, `description` (`opensearch.gen_ai.evaluation.evaluator.description`), `judge_model` (`gen_ai.request.model`), `judge_prompt_name` / `judge_prompt_version` (`gen_ai.prompt.name` / `.version`), and the opt-in `judge_system_instructions` (`gen_ai.system_instructions`, cut to 8192 characters). The description and judge context go on every result of the scorer, error results included. A scorer that raises emits its error grade under the declared `name`, so it lands on the same evaluation as its successful results.
 
 **Case status** (local `TestCaseResult.status`, not sent): `error` if the task or any scorer raised; else `fail` if any score of the case has a `fail` verdict; else `pass`. A score's verdict comes from the first of a `pass` / `fail` `label`, `passed`, then `threshold` + `direction`; the same verdict is stored as the event's label, so the event and the local status always agree. Scores with no declared rule never fail a case. The summary keeps `pass_count`, `fail_count` and `error_count`.
 
@@ -580,6 +597,8 @@ def tools(input, output, expected):
 | `agent_name` / `agent_version` | `str` | Agent under test (see [Agent identity](#agent-identity)) |
 | `ci_pipeline` | `dict` | `cicd.pipeline.*` overrides |
 | `record_expected` | `bool` | Export `"expected"` as `opensearch.test.case.expected` (default `True`). Pass `False` if test sets hold sensitive data |
+| `run_name` | `str` | Human-readable run name (`opensearch.test.suite.run.name`), for example `"v5 shorter prompt"`. Optional; OpenSearch Dashboards falls back to the short run id |
+| `run_description` | `str` | Free-text run description (`opensearch.test.suite.run.description`), cut to 1024 characters. Optional |
 
 Returns `BenchmarkResult` with `.summary` (aggregate stats) and `.cases` (per-case results).
 
@@ -588,6 +607,8 @@ Returns `BenchmarkResult` with `.summary` (aggregate stats) and `.cases` (per-ca
 Upload pre-computed evaluation results from any framework (RAGAS, DeepEval, pytest, custom). Each `log()` emits one `gen_ai.evaluation.result` event per score, parented to the evaluated agent span when `trace_id` and `span_id` are given; otherwise the events have no trace context. Each result carries the `test.*` ids, `opensearch.test.case.expected` when `expected` is given (unless `Benchmark(record_expected=False)`), the agent, `cicd.pipeline.*` in CI, and the run `metadata` plus the case `metadata` passed to `log()` (reserved keys are dropped; the score's own `metadata` and the SDK attributes win). `scores` is `{name: value}` or a list of `EvalScore` (to declare `label` / `threshold` / bounds). Use when you already have results and want to visualize them in agent-health or OpenSearch Dashboards.
 
 `error`, `error_type` and `status` set the local result: `error` or `error_type` marks the case `error`; otherwise a `fail` verdict marks it `fail`; `status` sets `pass`, `fail` or `error` explicitly. With `error_type`, every score in `scores` is emitted as an evaluator error result: `error.type` = `error_type`, no score value and no label. `close()` returns the local summary and sends nothing. No spans are created.
+
+`Benchmark(...)` also takes `run_name` and `run_description` (`opensearch.test.suite.run.name` / `.description`, the description cut to 1024 characters), set on every result of the run.
 
 Pass `run_id` to set `test.suite.run.id` (default: generated): use the same id from every CI shard so they report into one run, or an existing run's id to re-score it (send the new results with the same run id). An empty or whitespace-only `run_id` raises `ValueError`.
 
