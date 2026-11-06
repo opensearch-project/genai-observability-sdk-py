@@ -1492,3 +1492,110 @@ class TestScorerReturnTypes:
         assert grades["f32"].log_record.attributes["gen_ai.evaluation.score.value"] == 0.5
         assert grades["nb"].log_record.attributes["error.type"] == "TypeError"
         assert result.cases[0].status == "error"
+
+
+# ---------------------------------------------------------------------------
+# Run name / description and scorer judge context
+# ---------------------------------------------------------------------------
+
+RUN_NAME_KEY = "opensearch.test.suite.run.name"
+RUN_DESC_KEY = "opensearch.test.suite.run.description"
+
+
+class TestRunLabels:
+    def test_evaluate_run_name_and_description(self, events):
+        evaluate(
+            "suite",
+            task=lambda x: x,
+            data=[{"input": "a"}, {"input": "b"}],
+            scores=[lambda i, o, e: 1.0],
+            run_name="v5 shorter prompt",
+            run_description="Shorter system prompt",
+        )
+        recs = events(EVALUATION)
+        assert len(recs) == 2
+        for r in recs:
+            a = r.log_record.attributes
+            assert a[RUN_NAME_KEY] == "v5 shorter prompt"
+            assert a[RUN_DESC_KEY] == "Shorter system prompt"
+            assert a["test.suite.run.id"]
+
+    def test_evaluate_without_run_labels(self, events):
+        evaluate("suite", task=lambda x: x, data=[{"input": "a"}], scores=[lambda i, o, e: 1.0])
+        a = events(EVALUATION)[0].log_record.attributes
+        assert RUN_NAME_KEY not in a
+        assert RUN_DESC_KEY not in a
+
+    def test_description_truncated_to_1024(self, events):
+        evaluate(
+            "suite",
+            task=lambda x: x,
+            data=[{"input": "a"}],
+            scores=[lambda i, o, e: 1.0],
+            run_description="d" * 2000,
+        )
+        a = events(EVALUATION)[0].log_record.attributes
+        assert len(a[RUN_DESC_KEY]) == 1024
+
+    def test_benchmark_run_name_and_description(self, events):
+        with Benchmark(name="b", run_name="nightly", run_description="desc") as b:
+            b.log(input="q", scores={"acc": 1.0})
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a[RUN_NAME_KEY] == "nightly"
+        assert a[RUN_DESC_KEY] == "desc"
+
+    def test_metadata_cannot_set_run_labels(self, events):
+        with Benchmark(name="b", run_name="real", metadata={RUN_NAME_KEY: "spoofed"}) as b:
+            b.log(input="q", scores={"acc": 1.0}, metadata={RUN_DESC_KEY: "spoofed"})
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a[RUN_NAME_KEY] == "real"
+        assert RUN_DESC_KEY not in a
+
+
+class TestScorerJudgeContext:
+    def _judge(self, **extra):
+        @scorer(
+            name="answer_quality",
+            evaluator_type="llm_judge",
+            description="Correct and grounded",
+            judge_model="claude-haiku-4-5",
+            judge_prompt_name="answer-quality",
+            judge_prompt_version="v2",
+            **extra,
+        )
+        def quality(i, o, e):
+            return 4.0
+
+        return quality
+
+    def test_judge_context_on_events(self, events):
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[self._judge()])
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["opensearch.gen_ai.evaluation.evaluator.description"] == "Correct and grounded"
+        assert a["gen_ai.request.model"] == "claude-haiku-4-5"
+        assert a["gen_ai.prompt.name"] == "answer-quality"
+        assert a["gen_ai.prompt.version"] == "v2"
+        assert "gen_ai.system_instructions" not in a
+
+    def test_system_instructions_opt_in_and_truncated(self, events):
+        q = self._judge(judge_system_instructions="s" * 9000)
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[q])
+        a = events(EVALUATION)[0].log_record.attributes
+        assert len(a["gen_ai.system_instructions"]) == 8192
+        assert a["opensearch.gen_ai.evaluation.system_instructions_truncated"] is True
+
+    def test_judge_context_on_error_results(self, events):
+        @scorer(name="q", judge_model="m1", description="d")
+        def broken(i, o, e):
+            raise RuntimeError("boom")
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[broken])
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["error.type"] == "RuntimeError"
+        assert a["gen_ai.request.model"] == "m1"
+        assert a["opensearch.gen_ai.evaluation.evaluator.description"] == "d"
+
+    def test_spec_holds_fields(self):
+        q = self._judge()
+        assert q.scorer_spec.description == "Correct and grounded"
+        assert q.scorer_spec.judge_model == "claude-haiku-4-5"
