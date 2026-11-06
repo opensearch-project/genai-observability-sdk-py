@@ -1,0 +1,10 @@
+# Needs run_name / judge_model and the other judge context parameters (after 0.2.9).
+# Until that release is on PyPI, install the SDK from this repository first:
+#   pip install -e "../..[opensearch]"
+opensearch-genai-observability-sdk-py[opensearch]
+strands-agents>=1.40
+opensearch-py>=2.6
+boto3>=1.35
+# Optional model providers (MODEL_PROVIDER=openai or anthropic):
+# strands-agents[openai]
+# strands-agents[anthropic]
