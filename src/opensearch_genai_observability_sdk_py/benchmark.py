@@ -99,6 +99,7 @@ from opensearch_genai_observability_sdk_py._internal import (
     drop_reserved_keys,
     expected_attributes,
     resolve_agent,
+    run_label_attributes,
 )
 from opensearch_genai_observability_sdk_py.score import (
     _VALID_DIRECTIONS,
@@ -106,6 +107,7 @@ from opensearch_genai_observability_sdk_py.score import (
     _no_span_context,
     build_evaluation_attributes,
     emit_evaluation_event,
+    judge_context_attributes,
     resolve_verdict,
     span_context_for,
 )
@@ -180,6 +182,21 @@ class ScorerSpec:
     score_max: float | None = None
     evaluator: str | None = None
     evaluator_type: str | None = None
+    description: str | None = None
+    judge_model: str | None = None
+    judge_prompt_name: str | None = None
+    judge_prompt_version: str | None = None
+    judge_system_instructions: str | None = None
+
+    def judge_attributes(self) -> dict[str, Any]:
+        """The evaluator description and judge context attributes it declares."""
+        return judge_context_attributes(
+            evaluator_description=self.description,
+            judge_model=self.judge_model,
+            judge_prompt_name=self.judge_prompt_name,
+            judge_prompt_version=self.judge_prompt_version,
+            judge_system_instructions=self.judge_system_instructions,
+        )
 
 
 def scorer(
@@ -192,6 +209,11 @@ def scorer(
     score_max: float | None = None,
     evaluator: str | None = None,
     evaluator_type: str | None = None,
+    description: str | None = None,
+    judge_model: str | None = None,
+    judge_prompt_name: str | None = None,
+    judge_prompt_version: str | None = None,
+    judge_system_instructions: str | None = None,
 ) -> Any:
     """Declare a scorer's evaluation name and pass rule for ``evaluate()``.
 
@@ -214,6 +236,18 @@ def scorer(
     - ``evaluator``: evaluator name
       (``opensearch.gen_ai.evaluation.evaluator.name``; default: the function name).
     - ``evaluator_type``: ``llm_judge``, ``code``, ``human`` or ``external``.
+    - ``description``: what the evaluator checks
+      (``opensearch.gen_ai.evaluation.evaluator.description``).
+    - ``judge_model`` / ``judge_prompt_name`` / ``judge_prompt_version``: the
+      LLM judge's model and prompt (``gen_ai.request.model``,
+      ``gen_ai.prompt.name``, ``gen_ai.prompt.version``).
+    - ``judge_system_instructions``: the judge's system prompt
+      (``gen_ai.system_instructions``). Opt-in, as it may hold sensitive
+      data; cut to 8192 characters with
+      ``opensearch.gen_ai.evaluation.system_instructions_truncated`` set.
+
+    All of these are set on every result the scorer produces, including its
+    error results.
 
     Raises:
         ValueError: ``direction`` or ``evaluator_type`` is not a known value.
@@ -236,6 +270,11 @@ def scorer(
         score_max=score_max,
         evaluator=evaluator,
         evaluator_type=evaluator_type,
+        description=description,
+        judge_model=judge_model,
+        judge_prompt_name=judge_prompt_name,
+        judge_prompt_version=judge_prompt_version,
+        judge_system_instructions=judge_system_instructions,
     )
 
     def decorate(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -517,6 +556,7 @@ def _emit_scores(
     evaluator_type: str | None = None,
     error_type: str | None = None,
     metadata: dict[str, Any] | None = None,
+    spec: ScorerSpec | None = None,
 ) -> None:
     """Emit one ``gen_ai.evaluation.result`` event per score.
 
@@ -548,6 +588,8 @@ def _emit_scores(
             error_type=error_type,
             judge_trace_id=s.judge_trace_id,
         )
+        if spec is not None:
+            attrs.update(spec.judge_attributes())
         emit_evaluation_event({**extra, **attrs}, context=context)
 
 
@@ -662,6 +704,12 @@ class Benchmark:
             ``opensearch.test.case.expected_truncated`` is written. The
             expected value is still passed to the scorers and kept on the
             local result. Inputs and outputs are never exported.
+        run_name: Human-readable run name, for example ``"v5 shorter prompt"``
+            (``opensearch.test.suite.run.name``), on every evaluation event of
+            the run. Optional: readers fall back to the short run id.
+        run_description: Free-text run description
+            (``opensearch.test.suite.run.description``), cut to 1024
+            characters. Optional.
 
     Raises:
         ValueError: ``run_id`` is empty or whitespace.
@@ -677,8 +725,11 @@ class Benchmark:
         agent_version: str | None = None,
         ci_pipeline: dict[str, str] | None = None,
         record_expected: bool = True,
+        run_name: str | None = None,
+        run_description: str | None = None,
     ) -> None:
         self._name = name
+        self._run_labels = run_label_attributes(run_name, run_description)
         self._run_id = _resolve_run_id(run_id)
         # OTel cicd.pipeline.* of the CI run this runs in (empty outside CI).
         self._ci = ci_pipeline_attributes(ci_pipeline)
@@ -776,6 +827,7 @@ class Benchmark:
 
         grouping = {
             **_grouping(self._name, self._run_id, resolved_case_id, case_name),
+            **self._run_labels,
             **(expected_attributes(expected) if self._record_expected else {}),
             **self._agent,
             **self._ci,
@@ -925,6 +977,8 @@ def evaluate(
     agent_version: str | None = None,
     ci_pipeline: dict[str, str] | None = None,
     record_expected: bool = True,
+    run_name: str | None = None,
+    run_description: str | None = None,
 ) -> BenchmarkResult:
     """Run a task against a dataset, score outputs, and record the results.
 
@@ -999,6 +1053,12 @@ def evaluate(
             ``opensearch.test.case.expected_truncated`` is written. The
             expected value is still passed to the scorers and kept on the
             local result. Inputs and outputs are never exported.
+        run_name: Human-readable run name, for example ``"v5 shorter prompt"``
+            (``opensearch.test.suite.run.name``), on every evaluation event of
+            the run. Optional: readers fall back to the short run id.
+        run_description: Free-text run description
+            (``opensearch.test.suite.run.description``), cut to 1024
+            characters. Optional.
 
     Returns:
         ``BenchmarkResult`` with summary and per-case results.
@@ -1016,6 +1076,7 @@ def evaluate(
     declared_agent = resolve_agent(agent_name, agent_version)
     # OTel cicd.pipeline.* of the CI run this runs in (empty outside CI).
     ci = ci_pipeline_attributes(ci_pipeline)
+    run_labels = run_label_attributes(run_name, run_description)
 
     # Materialize iterable upfront so generators work
     data_list = list(data)
@@ -1027,7 +1088,11 @@ def evaluate(
         case_id = item.get("case_id") or _make_case_id(input_val)
         case_name_val = item.get("case_name")
 
-        grouping = {**_grouping(name, resolved_run_id, case_id, case_name_val), **ci}
+        grouping = {
+            **_grouping(name, resolved_run_id, case_id, case_name_val),
+            **run_labels,
+            **ci,
+        }
         # Root spans get the declared agent (where they name none themselves).
         span_stamp = {**grouping, **declared_agent}
 
@@ -1088,6 +1153,7 @@ def evaluate(
                     evaluator_type=evaluator_type,
                     error_type=error_type,
                     metadata=safe_meta,
+                    spec=spec,
                 )
                 continue
 
@@ -1126,6 +1192,7 @@ def evaluate(
                     evaluator_type=evaluator_type,
                     error_type=err_type,
                     metadata=safe_meta,
+                    spec=spec,
                 )
                 continue
 
@@ -1141,6 +1208,7 @@ def evaluate(
                 evaluator=evaluator,
                 evaluator_type=evaluator_type,
                 metadata=safe_meta,
+                spec=spec,
             )
 
         ev_trace_id, ev_span_id = _span_ids(event_ctx)

@@ -166,6 +166,25 @@ TEST_CASE_EXPECTED_KEY = "opensearch.test.case.expected"
 TEST_CASE_EXPECTED_TRUNCATED_KEY = "opensearch.test.case.expected_truncated"
 EXPECTED_MAX_CHARS = 4096
 
+# OpenSearch attributes (no OTel name yet) for a human-readable run name and
+# description, set on every gen_ai.evaluation.result event of the run.
+TEST_SUITE_RUN_NAME_KEY = "opensearch.test.suite.run.name"
+TEST_SUITE_RUN_DESCRIPTION_KEY = "opensearch.test.suite.run.description"
+RUN_DESCRIPTION_MAX_CHARS = 1024
+
+
+def run_label_attributes(run_name: str | None, run_description: str | None) -> dict[str, Any]:
+    """``opensearch.test.suite.run.name`` / ``.description`` (only set keys).
+
+    The description is cut to ``RUN_DESCRIPTION_MAX_CHARS`` characters.
+    """
+    attrs: dict[str, Any] = {}
+    if run_name:
+        attrs[TEST_SUITE_RUN_NAME_KEY] = run_name
+    if run_description:
+        attrs[TEST_SUITE_RUN_DESCRIPTION_KEY] = run_description[:RUN_DESCRIPTION_MAX_CHARS]
+    return attrs
+
 
 def expected_attributes(expected: Any) -> dict[str, Any]:
     """``opensearch.test.case.expected`` (+ ``_truncated``) for an expected value.
@@ -197,6 +216,8 @@ _RESERVED_KEYS = frozenset(
         "test.suite.run.id",
         "test.case.id",
         "test.case.name",
+        TEST_SUITE_RUN_NAME_KEY,
+        TEST_SUITE_RUN_DESCRIPTION_KEY,
         TEST_CASE_EXPECTED_KEY,
         TEST_CASE_EXPECTED_TRUNCATED_KEY,
         "cicd.pipeline.name",
@@ -221,7 +242,17 @@ def parse_hex(value: str) -> int | None:
 # attributes and metadata must not set them, even when the SDK leaves one
 # unset (for example the label of an error result).
 _EVALUATION_FIELD_PREFIXES = ("gen_ai.evaluation.", "opensearch.gen_ai.evaluation.")
-_EVALUATION_FIELD_KEYS = frozenset({"error.type"})
+# The judge context keys (standard GenAI names) are set from score() /
+# @scorer arguments only.
+_EVALUATION_FIELD_KEYS = frozenset(
+    {
+        "error.type",
+        "gen_ai.request.model",
+        "gen_ai.prompt.name",
+        "gen_ai.prompt.version",
+        "gen_ai.system_instructions",
+    }
+)
 
 
 def is_evaluation_field_key(key: str) -> bool:

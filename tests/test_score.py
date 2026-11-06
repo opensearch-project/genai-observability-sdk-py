@@ -15,7 +15,11 @@ from opentelemetry._logs import SeverityNumber
 
 from opensearch_genai_observability_sdk_py._internal import SDK_SCOPE_NAME, SDK_VERSION
 from opensearch_genai_observability_sdk_py._internal import parse_hex as _parse_hex
-from opensearch_genai_observability_sdk_py.score import EXPLANATION_MAX_CHARS, score
+from opensearch_genai_observability_sdk_py.score import (
+    EXPLANATION_MAX_CHARS,
+    SYSTEM_INSTRUCTIONS_MAX_CHARS,
+    score,
+)
 
 TRACE_ID = "6ebb9835f43af1552f2cebb9f5165e39"
 SPAN_ID = "89829115c2128845"
@@ -514,3 +518,78 @@ class TestResolveVerdict:
         from opensearch_genai_observability_sdk_py.score import resolve_verdict
 
         assert resolve_verdict(**kwargs) == (verdict, conflicts)
+
+
+# ---------------------------------------------------------------------------
+# Evaluator description and judge context
+# ---------------------------------------------------------------------------
+
+
+class TestJudgeContext:
+    def test_judge_context_attributes(self, eval_events):
+        score(
+            "answer_quality",
+            4.0,
+            trace_id=TRACE_ID,
+            evaluator_type="llm_judge",
+            evaluator_description="Correct and grounded in tool output",
+            judge_model="claude-haiku-4-5",
+            judge_prompt_name="answer-quality",
+            judge_prompt_version="v2",
+        )
+        a = _one_event(eval_events).log_record.attributes
+        assert a["opensearch.gen_ai.evaluation.evaluator.description"] == (
+            "Correct and grounded in tool output"
+        )
+        assert a["gen_ai.request.model"] == "claude-haiku-4-5"
+        assert a["gen_ai.prompt.name"] == "answer-quality"
+        assert a["gen_ai.prompt.version"] == "v2"
+        # Opt-in only: never recorded unless passed.
+        assert "gen_ai.system_instructions" not in a
+        assert "opensearch.gen_ai.evaluation.system_instructions_truncated" not in a
+
+    def test_absent_by_default(self, eval_events):
+        score("accuracy", 1.0)
+        a = _one_event(eval_events).log_record.attributes
+        for key in (
+            "opensearch.gen_ai.evaluation.evaluator.description",
+            "gen_ai.request.model",
+            "gen_ai.prompt.name",
+            "gen_ai.prompt.version",
+            "gen_ai.system_instructions",
+        ):
+            assert key not in a
+
+    def test_system_instructions_opt_in(self, eval_events):
+        score("accuracy", 1.0, judge_system_instructions="You are a strict grader.")
+        a = _one_event(eval_events).log_record.attributes
+        assert a["gen_ai.system_instructions"] == "You are a strict grader."
+        assert "opensearch.gen_ai.evaluation.system_instructions_truncated" not in a
+
+    def test_system_instructions_truncated(self, eval_events):
+        score("accuracy", 1.0, judge_system_instructions="x" * (SYSTEM_INSTRUCTIONS_MAX_CHARS + 5))
+        a = _one_event(eval_events).log_record.attributes
+        assert len(a["gen_ai.system_instructions"]) == SYSTEM_INSTRUCTIONS_MAX_CHARS
+        assert a["opensearch.gen_ai.evaluation.system_instructions_truncated"] is True
+
+    def test_system_instructions_at_limit_not_truncated(self, eval_events):
+        score("accuracy", 1.0, judge_system_instructions="x" * SYSTEM_INSTRUCTIONS_MAX_CHARS)
+        a = _one_event(eval_events).log_record.attributes
+        assert len(a["gen_ai.system_instructions"]) == SYSTEM_INSTRUCTIONS_MAX_CHARS
+        assert "opensearch.gen_ai.evaluation.system_instructions_truncated" not in a
+
+    def test_attributes_cannot_set_judge_keys(self, eval_events):
+        score(
+            "accuracy",
+            1.0,
+            judge_model="real-model",
+            attributes={
+                "gen_ai.request.model": "spoofed",
+                "gen_ai.prompt.name": "spoofed",
+                "gen_ai.system_instructions": "spoofed",
+            },
+        )
+        a = _one_event(eval_events).log_record.attributes
+        assert a["gen_ai.request.model"] == "real-model"
+        assert "gen_ai.prompt.name" not in a
+        assert "gen_ai.system_instructions" not in a
