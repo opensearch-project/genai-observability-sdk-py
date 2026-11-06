@@ -12,6 +12,7 @@ OTel-native tracing and scoring for LLM applications. Instrument your AI workflo
 - **Scoring**: `score()` emits each evaluation result as an OTel `gen_ai.evaluation.result` log event, parented to the evaluated span, at span, trace, session, or tool-call level
 - **Benchmarks**: `evaluate()` runs your agent against a dataset with scorers; `Benchmark` uploads results from any eval framework (RAGAS, DeepEval, pytest). Each case is its own agent trace plus one `gen_ai.evaluation.result` log event per score
 - **Agent evaluations guide**: [docs/agent-evaluations.md](docs/agent-evaluations.md) covers what gets stored, online and offline evaluation, ingestion with Data Prepper or Amazon OpenSearch Ingestion, and how to verify results
+- **Getting started with evaluations**: [docs/getting-started-evaluations.md](docs/getting-started-evaluations.md) is the short path from an instrumented agent to online and offline results in OpenSearch Dashboards, with deep links and copyable LLM prompts
 - **AWS SigV4** — built-in SigV4 signing for AWS-hosted OpenSearch and Data Prepper endpoints
 - **Zero lock-in** — remove a decorator and your code still works; everything is standard OTel
 
@@ -494,6 +495,8 @@ If you configure OTel yourself instead of calling `register()`, install a global
 Trace-level scores never derive a span id from the trace id.
 
 ### `evaluate()`
+
+New to evaluations? Start with [Getting started with agent evaluations](docs/getting-started-evaluations.md): the agent, test suite, test case and eval run hierarchy, the online and offline paths, Dashboards deep links and copyable LLM prompts. The full reference is [docs/agent-evaluations.md](docs/agent-evaluations.md).
 
 Run a task against a dataset, score outputs, and record each score as an OTel `gen_ai.evaluation.result` log event. The SDK creates no spans of its own: each case's agent run is its own trace, exactly like production.
 

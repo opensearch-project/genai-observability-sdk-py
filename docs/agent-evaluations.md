@@ -1,5 +1,7 @@
 # Agent evaluations with the OpenSearch GenAI SDK
 
+New here? [Getting started with agent evaluations](getting-started-evaluations.md) is the short path: the hierarchy, online and offline examples, Dashboards deep links and copyable LLM prompts.
+
 This guide covers the full path of an evaluation result: what the SDK sends, how to score agents online and offline, how to ingest the results into OpenSearch with Data Prepper or Amazon OpenSearch Ingestion, and how to check that they arrived.
 
 - [What gets stored](#what-gets-stored)
