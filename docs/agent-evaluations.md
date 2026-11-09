@@ -824,7 +824,7 @@ PUT otel-v1-genai-evaluation-000001
 }
 ```
 
-On a backend without ISM or aliases (for example OpenSearch Serverless), skip steps 2 and 3 and create one index named `otel-v1-genai-evaluation` with the template's `mappings` (`PUT otel-v1-genai-evaluation` with `{"mappings": ...}`, without the `rollover_alias` setting).
+On a backend without ISM or aliases (for example OpenSearch Serverless), skip steps 2 and 3. Install a variant of the template with the same mappings, `"index_patterns": ["otel-v1-genai-evaluation"]` and no `plugins.index_state_management.rollover_alias` setting, then create the single index `otel-v1-genai-evaluation` (`PUT otel-v1-genai-evaluation`).
 
 How the template maps the result attributes:
 
@@ -896,7 +896,7 @@ Experimental. The Data Prepper draft [opensearch-project/data-prepper#7243](http
         index_type: genai-evaluation-plain  # experimental
 ```
 
-It does not create the ISM policy or the first index. On a backend with ISM, run steps 2 and 3 of [Evaluation index](#evaluation-index) first, so `otel-v1-genai-evaluation` is the rolling write alias.
+For what the index type creates beyond the template (ISM policy, write alias, first index), see the README in [opensearch-project/data-prepper#7243](https://github.com/opensearch-project/data-prepper/pull/7243).
 
 ### b) Amazon OpenSearch Ingestion (OSI)
 
@@ -944,28 +944,6 @@ Replace the host, role and region with yours. The pipeline role needs write acce
 ### c) Optional mappings you add yourself
 
 These processors are not part of the default pipeline. Add them to `genai-evaluation-pipeline` (or the OSI pipeline) after `copy_values` if you ingest results from other producers.
-
-**AgentCore results.** Copy AgentCore's evaluation level (lowercased) to `opensearch.gen_ai.evaluation.level` and its `session.id` to `gen_ai.conversation.id`, only when those are absent. The original attributes stay.
-
-```yaml
-    - add_entries:
-        entries:
-          - key: "/attributes/evl_agentcore_level"
-            value_expression: "/attributes/aws.bedrock_agentcore.evaluation_level"
-            add_when: "/attributes/opensearch.gen_ai.evaluation.level == null and /attributes/aws.bedrock_agentcore.evaluation_level != null"
-    - lowercase_string:
-        with_keys: ["/attributes/evl_agentcore_level"]
-    - add_entries:
-        entries:
-          - key: "/attributes/opensearch.gen_ai.evaluation.level"
-            value_expression: "/attributes/evl_agentcore_level"
-            add_when: "/attributes/evl_agentcore_level != null"
-          - key: "/attributes/gen_ai.conversation.id"
-            value_expression: "/attributes/session.id"
-            add_when: "/attributes/gen_ai.conversation.id == null and /attributes/session.id != null"
-    - delete_entries:
-        with_keys: ["/attributes/evl_agentcore_level"]
-```
 
 **A pass/fail label for a numeric score.** For a producer that sends only `gen_ai.evaluation.score.value`, write the label from a threshold you choose, only when `gen_ai.evaluation.score.label` is absent. This example passes `helpfulness` at 0.7 or more and records the rule:
 
