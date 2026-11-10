@@ -502,9 +502,9 @@ Evaluation events arrive on the OTLP logs path, mixed with your application logs
 
 ### Evaluation index
 
-Results are written to the alias `otel-v1-genai-evaluation`. Create the index template, the ISM policy and the first index once per cluster, for example in Dashboards Dev Tools, before the first result arrives. The automatic option, [`index_type: genai-evaluation-plain`](#automatic-option-index_type-genai-evaluation-plain) in Data Prepper, installs the same template.
+Results are written to the alias `otel-v1-genai-evaluation`. Create the index template, the ISM policy and the first index once per cluster, for example in Dashboards Dev Tools, before the first result arrives. The automatic option, the experimental Data Prepper [`index_type: genai-evaluation-plain`](#automatic-option-index_type-genai-evaluation-plain), creates all of this itself; the manual steps here are for Data Prepper versions without it and for other pipelines.
 
-1. The index template. A composable template, `"version": 1`, priority 100, for the indices `otel-v1-genai-evaluation-*`. Installs from this guide, from Data Prepper and from other tools use the same name and version, so they converge.
+1. The index template. A composable template, `"version": 1`, priority 100, for the indices `otel-v1-genai-evaluation-*`. Installs from this guide and from Data Prepper use the same name and version, so they converge: Data Prepper does not overwrite an existing template with the same name and version.
 
 <details>
 <summary>otel-v1-genai-evaluation-index-template</summary>
@@ -824,7 +824,7 @@ PUT otel-v1-genai-evaluation-000001
 }
 ```
 
-On a backend without ISM or aliases (for example OpenSearch Serverless), skip steps 2 and 3. Install a variant of the template with the same mappings, `"index_patterns": ["otel-v1-genai-evaluation"]` and no `plugins.index_state_management.rollover_alias` setting, then create the single index `otel-v1-genai-evaluation` (`PUT otel-v1-genai-evaluation`).
+On a backend without ISM or aliases (for example OpenSearch Serverless), skip steps 2 and 3. Install a variant of the template with the same mappings, `"index_patterns": ["otel-v1-genai-evaluation"]` and no `plugins.index_state_management.rollover_alias` setting, then create the single index `otel-v1-genai-evaluation` (`PUT otel-v1-genai-evaluation`). A manual install on serverless must use this `["otel-v1-genai-evaluation"]` pattern variant: Data Prepper skips a template with the same name and version, so it would keep a `-*` pattern template that never matches the serverless index.
 
 How the template maps the result attributes:
 
@@ -885,18 +885,43 @@ genai-evaluation-pipeline:
 
 #### Automatic option: `index_type: genai-evaluation-plain`
 
-Experimental. The Data Prepper draft [opensearch-project/data-prepper#7243](https://github.com/opensearch-project/data-prepper/pull/7243) adds this index type to the OpenSearch sink. It is not in a Data Prepper release and its mappings may change. The sink installs the evaluation index template itself (`otel-v1-genai-evaluation-index-template`, version 1, `template_type: index-template` by default) and writes to `otel-v1-genai-evaluation`. It replaces an existing template only when its own version is higher, so it converges with a template installed from this guide. Use it in place of `index`:
+Experimental, not yet in a Data Prepper release: the index type is added by [opensearch-project/data-prepper#7243](https://github.com/opensearch-project/data-prepper/pull/7243) and its mappings may change. Until you run a release with it, use the manual [Evaluation index](#evaluation-index) setup above.
+
+With `index_type: genai-evaluation-plain` the sink creates everything itself (`template_type` defaults to `index-template`):
+
+- On backends with ISM: the composable index template `otel-v1-genai-evaluation-index-template` (version 1, priority 100, pattern `otel-v1-genai-evaluation-*`, with the rollover alias setting), the ISM policy `otel-v1-genai-evaluation-policy` (rollover at 50 GB or 24 hours), and the first index `otel-v1-genai-evaluation-000001` as the write index of the alias `otel-v1-genai-evaluation`.
+- On serverless (`aws.serverless: true`): the template with the pattern `["otel-v1-genai-evaluation"]` and no ISM setting, and a plain index `otel-v1-genai-evaluation`, with no policy and no alias.
+- It does not overwrite an existing template with the same name and version, so it keeps a template you installed from this guide.
+
+The source must be `otel_logs_source` with `output_format: otel`. With the default `opensearch` output format, attributes are stored under `log.attributes.*` and the evaluation mappings do not apply. A tested pipeline:
 
 ```yaml
+genai-evaluation-otlp-pipeline:
+  source:
+    otel_logs_source:
+      port: 21892
+      ssl: false
+      http_path: /v1/logs
+      output_format: otel
+  route:
+    - genai-evaluation: '/eventName == "gen_ai.evaluation.result"'
+    - logs: '/eventName != "gen_ai.evaluation.result"'
   sink:
     - opensearch:
-        hosts: ["https://opensearch:9200"]
-        username: "admin"
-        password: "<password>"
-        index_type: genai-evaluation-plain  # experimental
+        hosts: ["https://OPENSEARCH_HOST:9200"]
+        username: OPENSEARCH_USERNAME
+        password: OPENSEARCH_PASSWORD
+        index_type: genai-evaluation-plain
+        routes: [genai-evaluation]
+    - opensearch:
+        hosts: ["https://OPENSEARCH_HOST:9200"]
+        username: OPENSEARCH_USERNAME
+        password: OPENSEARCH_PASSWORD
+        index_type: log-analytics-plain
+        routes: [logs]
 ```
 
-For what the index type creates beyond the template (ISM policy, write alias, first index), see the README in [opensearch-project/data-prepper#7243](https://github.com/opensearch-project/data-prepper/pull/7243).
+This is a logs-only pipeline, so send traces to your traces pipeline and the logs here, with one full URL per signal (setup (c)): `register(traces_endpoint="http://<traces-pipeline-host>:21890/v1/traces", logs_endpoint="http://<data-prepper-host>:21892/v1/logs")`.
 
 ### b) Amazon OpenSearch Ingestion (OSI)
 
