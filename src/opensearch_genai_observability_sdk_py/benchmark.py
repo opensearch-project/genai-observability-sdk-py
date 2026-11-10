@@ -148,6 +148,12 @@ class EvalScore:
     - ``score_min`` / ``score_max``: scale bounds.
     - ``judge_trace_id``: trace id of the judge's own run, if traced
       (``opensearch.gen_ai.evaluation.judge.trace_id``).
+    - ``evaluator`` / ``evaluator_type``: the evaluator that produced this
+      score (``opensearch.gen_ai.evaluation.evaluator.name`` / ``.type``),
+      for example ``"deepeval.answer_relevancy"`` and ``"llm_judge"``. They
+      win over the ``@scorer(...)`` declaration (``evaluate()``) and over the
+      ``Benchmark.log(evaluator=, evaluator_type=)`` defaults. Unset: the
+      result is recorded as before.
     """
 
     name: str
@@ -161,6 +167,8 @@ class EvalScore:
     score_min: float | None = None
     score_max: float | None = None
     judge_trace_id: str | None = None
+    evaluator: str | None = None
+    evaluator_type: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -575,8 +583,8 @@ def _emit_scores(
             passed=None if error_type else s.passed,
             explanation=s.explanation,
             level="span" if has_span else None,
-            evaluator=evaluator,
-            evaluator_type=evaluator_type,
+            evaluator=s.evaluator or evaluator,
+            evaluator_type=s.evaluator_type or evaluator_type,
             direction=s.direction,
             score_min=s.score_min,
             score_max=s.score_max,
@@ -762,6 +770,8 @@ class Benchmark:
         span_id: str | None = None,
         status: str | None = None,
         error_type: str | None = None,
+        evaluator: str | None = None,
+        evaluator_type: str | None = None,
     ) -> None:
         """Log a single test case result.
 
@@ -799,6 +809,13 @@ class Benchmark:
                 name or other low-cardinality error identifier). Every score
                 in ``scores`` is then emitted as an evaluator error result:
                 ``error.type`` set, no score value and no label.
+            evaluator: Default evaluator name
+                (``opensearch.gen_ai.evaluation.evaluator.name``) for every score
+                of this call, for example ``"deepeval"``. An ``EvalScore`` that
+                sets its own ``evaluator`` wins.
+            evaluator_type: Default ``opensearch.gen_ai.evaluation.evaluator.type``
+                (``llm_judge``, ``code``, ``human`` or ``external``) for every
+                score of this call. An ``EvalScore`` that sets its own wins.
         """
         if self._closed:
             raise RuntimeError("Benchmark is already closed")
@@ -852,6 +869,8 @@ class Benchmark:
             grouping,
             eval_scores,
             context=event_ctx,
+            evaluator=evaluator,
+            evaluator_type=evaluator_type,
             error_type=error_type,
             metadata={**self._metadata, **safe_case_meta},
         )

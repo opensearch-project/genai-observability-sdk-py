@@ -71,7 +71,7 @@ Copy [`example-workflow.yml`](example-workflow.yml) to `.github/workflows/agent-
 
 ### SDK version
 
-The action needs an SDK release after 0.2.9: that is the first release with `endpoint=` as a base URL, `traces_endpoint=` / `logs_endpoint=`, and `sigv4=` for traces and evaluation events. Until it is on PyPI, `pip` cannot resolve the default `install` and the step fails; set `install` to a git requirement pinned to a commit, for example `git+https://github.com/opensearch-project/genai-observability-sdk-py@<commit-sha>`. SigV4 needs no extra (`botocore` is a core dependency).
+The action needs an SDK release that includes PR #50 (opensearch-project/genai-observability-sdk-py#50): the first release with `endpoint=` as a base URL, `traces_endpoint=` / `logs_endpoint=`, and `sigv4=` for traces and evaluation events. Until it is on PyPI, `pip` cannot resolve the default `install` and the step fails; set `install` to a git requirement pinned to a commit, for example `git+https://github.com/opensearch-project/genai-observability-sdk-py@<commit-sha>`. SigV4 needs no extra (`botocore` is a core dependency).
 
 ### Outputs
 
@@ -90,7 +90,7 @@ Exit codes:
 
 ### CI/CD attributes
 
-Inside GitHub Actions the SDK stamps the OTel `cicd.pipeline.*` attributes on every evaluation result and the agent root spans, from the job's environment:
+Inside GitHub Actions the SDK stamps the OTel `cicd.pipeline.*` attributes on every evaluation result and, for suites run with `evaluate()`, on the agent root spans it starts (`Benchmark` stamps results only), from the job's environment:
 
 | Attribute | From |
 |---|---|

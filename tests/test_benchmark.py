@@ -1604,3 +1604,71 @@ class TestScorerJudgeContext:
         q = self._judge()
         assert q.scorer_spec.description == "Correct and grounded"
         assert q.scorer_spec.judge_model == "claude-haiku-4-5"
+
+
+class TestEvalScoreEvaluator:
+    NAME = "opensearch.gen_ai.evaluation.evaluator.name"
+    TYPE = "opensearch.gen_ai.evaluation.evaluator.type"
+
+    def test_benchmark_evalscore_names_its_evaluator(self, events):
+        with Benchmark(name="b") as b:
+            b.log(
+                input="q",
+                scores=[
+                    EvalScore(
+                        name="answer_relevancy",
+                        value=0.9,
+                        evaluator="deepeval.answer_relevancy",
+                        evaluator_type="llm_judge",
+                    ),
+                    EvalScore(name="exact", value=1.0),
+                ],
+            )
+        named, plain = events(EVALUATION)
+        assert named.log_record.attributes[self.NAME] == "deepeval.answer_relevancy"
+        assert named.log_record.attributes[self.TYPE] == "llm_judge"
+        # Unset: recorded as before (no evaluator attributes from Benchmark).
+        assert self.NAME not in plain.log_record.attributes
+        assert self.TYPE not in plain.log_record.attributes
+
+    def test_benchmark_log_defaults_and_evalscore_wins(self, events):
+        with Benchmark(name="b") as b:
+            b.log(
+                input="q",
+                scores=[
+                    EvalScore(name="a", value=1.0),
+                    EvalScore(name="b", value=1.0, evaluator="own", evaluator_type="code"),
+                ],
+                evaluator="ragas",
+                evaluator_type="llm_judge",
+            )
+            b.log(input="q2", scores={"c": 0.5}, evaluator="ragas")
+        a, own, c = (r.log_record.attributes for r in events(EVALUATION))
+        assert (a[self.NAME], a[self.TYPE]) == ("ragas", "llm_judge")
+        assert (own[self.NAME], own[self.TYPE]) == ("own", "code")
+        assert c[self.NAME] == "ragas"
+        assert self.TYPE not in c
+
+    def test_benchmark_error_results_keep_evaluator(self, events):
+        with Benchmark(name="b") as b:
+            b.log(
+                input="q",
+                scores=[EvalScore(name="a", value=None, evaluator="judge_x")],
+                error_type="TimeoutError",
+            )
+        (r,) = events(EVALUATION)
+        assert r.log_record.attributes["error.type"] == "TimeoutError"
+        assert r.log_record.attributes[self.NAME] == "judge_x"
+
+    def test_evaluate_evalscore_wins_over_scorer_declaration(self, events):
+        @scorer(name="q", evaluator="declared", evaluator_type="code")
+        def q(i, o, e):
+            return [
+                EvalScore(name="q", value=1.0),
+                EvalScore(name="q2", value=1.0, evaluator="own", evaluator_type="llm_judge"),
+            ]
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[q])
+        declared, own = (r.log_record.attributes for r in events(EVALUATION))
+        assert (declared[self.NAME], declared[self.TYPE]) == ("declared", "code")
+        assert (own[self.NAME], own[self.TYPE]) == ("own", "llm_judge")

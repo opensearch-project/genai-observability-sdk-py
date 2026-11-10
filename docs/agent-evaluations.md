@@ -126,7 +126,7 @@ Three setups:
 (a) Local OTel Collector or the observability stack: nothing to set.
 
 ```python
-register(service_name="travel-agent")  # same as endpoint="http://localhost:4318"
+register(service_name="travel-agent", agent_name="travel_planner")  # endpoint http://localhost:4318
 ```
 
 For gRPC, pass `endpoint="grpc://localhost:4317"`. gRPC is for a local OTel Collector or a self-hosted Data Prepper, whose OTLP sources accept framed gRPC natively; OSI does not support it.
@@ -414,6 +414,7 @@ if result.summary.fail_count or result.summary.error_count:
 - A scorer receives `(input, output, expected)` and returns a number (any `numbers.Real`, for example `numpy.float32`), a bool (a verdict), an `EvalScore` or a list of `EvalScore`. Scorers are synchronous. Any other return (`numpy.bool_`, `Decimal`, `None`, a dict, a coroutine) logs a warning and emits an error result with `error.type` = `TypeError`, and the case status is `error`. An `async def` scorer is not called; wrap the async judge with `asyncio.run()` in a sync scorer.
 - `@scorer(...)` declares the evaluation name, `threshold`, `direction`, `score_min`, `score_max`, `evaluator` and `evaluator_type`. Fields set on a returned `EvalScore` win.
 - `EvalScore(judge_trace_id=...)` sets `opensearch.gen_ai.evaluation.judge.trace_id`, in `evaluate()` and in `Benchmark.log()`.
+- `EvalScore(evaluator=..., evaluator_type=...)` names the evaluator of that score and wins over the `@scorer(...)` declaration.
 - Scorers run outside the agent trace, so a traced judge gets its own trace.
 
 ### Benchmark
@@ -441,7 +442,39 @@ b.log(input="Capital of Peru?", expected={"city": "Lima"}, scores={"exact_match"
 summary = b.close()
 ```
 
-`scores` is `{name: value}` or a list of `EvalScore`. `Benchmark` creates no spans.
+`scores` is `{name: value}` or a list of `EvalScore`. `Benchmark` creates no spans, and it stamps the `test.*` and `cicd.pipeline.*` ids only on the results, not on the agent's spans (only `evaluate()` stamps the spans it starts).
+
+Name the evaluator of each score with `EvalScore(evaluator=..., evaluator_type=...)` (`opensearch.gen_ai.evaluation.evaluator.name` / `.type`, the same keys `evaluate()` and `@scorer` write), or pass `Benchmark.log(evaluator=..., evaluator_type=...)` as the default for every score of that call; an `EvalScore` that sets its own wins. Without either, the result has no evaluator name, as before.
+
+```python
+b.log(
+    input=question,
+    output=answer,
+    scores=[EvalScore(name="answer_relevancy", value=0.9, threshold=0.7)],
+    evaluator="deepeval.answer_relevancy",
+    evaluator_type="llm_judge",
+    trace_id=trace_id,  # from ask() below
+    span_id=span_id,
+)
+```
+
+To link each result to its agent run, run the agent inside an `@observe(op=Op.INVOKE_AGENT)` function and return the span ids with the answer. Without `trace_id` and `span_id` the results are not linked to a trace, so the run page has no trace link and the result shows no agent input or output.
+
+```python
+from opentelemetry import trace
+
+from opensearch_genai_observability_sdk_py import Op, observe
+
+
+@observe(name="my_agent", op=Op.INVOKE_AGENT)
+def ask(question: str) -> tuple[str, str, str]:
+    answer = my_agent(question)  # your agent call
+    ctx = trace.get_current_span().get_span_context()
+    return answer, format(ctx.trace_id, "032x"), format(ctx.span_id, "016x")
+
+
+answer, trace_id, span_id = ask("Capital of France?")
+```
 
 ### Expected output
 
@@ -472,7 +505,7 @@ b = Benchmark(name="travel-capitals", run_id=run_id)
 
 ### CI pipeline attributes
 
-Inside CI, results and agent root spans also get `cicd.pipeline.name`, `cicd.pipeline.run.id` and `cicd.pipeline.run.url.full`. Outside CI nothing is added.
+Inside CI, every result gets `cicd.pipeline.name`, `cicd.pipeline.run.id` and `cicd.pipeline.run.url.full`, and `evaluate()` also stamps them on the agent root spans it starts (`Benchmark` only on results). Outside CI nothing is added.
 
 | CI system | Detected by | `cicd.pipeline.name` | `cicd.pipeline.run.id` | `cicd.pipeline.run.url.full` |
 |---|---|---|---|---|
