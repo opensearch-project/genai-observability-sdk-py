@@ -1138,3 +1138,158 @@ class TestSigV4:
     def test_bad_options(self, value):
         with pytest.raises(ValueError, match="sigv4="):
             _register_mod._sigv4_options(value)
+
+
+# ---------------------------------------------------------------------------
+# _auto_instrument: activate only instrumentors whose library is installed
+# ---------------------------------------------------------------------------
+
+
+class _FakeDist:
+    def __init__(self, requires):
+        self.requires = requires
+
+
+class _FakeEntryPoint:
+    def __init__(self, name, load, dist=None):
+        self.name = name
+        self.dist = dist
+        self._load = load
+
+    def load(self):
+        return self._load()
+
+
+def _instrumentor_class(deps):
+    """A real BaseInstrumentor subclass (a fresh singleton per call) that records instrument()."""
+    from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+
+    class FakeInstrumentor(BaseInstrumentor):
+        calls: list = []
+
+        def instrumentation_dependencies(self):
+            return deps
+
+        def _instrument(self, **kwargs):
+            type(self).calls.append(kwargs)
+
+        def _uninstrument(self, **kwargs):
+            pass
+
+    return FakeInstrumentor
+
+
+_SATISFIED = ["opentelemetry-api >= 1.0"]  # installed with the SDK
+_MISSING = ["no-such-library-for-sdk-tests >= 1.0"]
+
+
+class TestAutoInstrument:
+    def _run(self, eps, caplog):
+        caplog.set_level("DEBUG")
+        with patch.object(_register_mod, "entry_points", return_value=eps):
+            _register_mod._auto_instrument(MagicMock())
+        return caplog.records
+
+    @staticmethod
+    def _messages(records, level=None):
+        return [r.getMessage() for r in records if level is None or r.levelname == level]
+
+    def test_installed_library_is_instrumented_and_counted(self, caplog):
+        cls = _instrumentor_class(_SATISFIED)
+        records = self._run([_FakeEntryPoint("present", lambda: cls)], caplog)
+        assert len(cls.calls) == 1
+        assert "tracer_provider" in cls.calls[0]
+        assert "Auto-instrumented 1 libraries: present" in self._messages(records, "INFO")
+
+    def test_missing_library_from_dist_metadata_is_skipped_quietly(self, caplog):
+        cls = _instrumentor_class(_MISSING)
+        dist = _FakeDist(['no-such-library-for-sdk-tests >= 1.0; extra == "instruments"'])
+        records = self._run([_FakeEntryPoint("absent", lambda: cls, dist)], caplog)
+        assert cls.calls == []
+        assert not [r for r in records if r.levelname == "ERROR"]
+        debug = self._messages(records, "DEBUG")
+        assert any(m.startswith("Skipped instrumentor absent:") for m in debug)
+
+    def test_missing_library_from_instrumentor_deps_is_skipped_without_error(self, caplog):
+        """No dist metadata: the instance's instrumentation_dependencies() is checked."""
+        cls = _instrumentor_class(_MISSING)
+        records = self._run([_FakeEntryPoint("absent", lambda: cls)], caplog)
+        assert cls.calls == []
+        assert not cls().is_instrumented_by_opentelemetry
+        # BaseInstrumentor.instrument() would have logged "... only instruments ..." at ERROR.
+        assert not [r for r in records if r.levelname == "ERROR"]
+
+    def test_import_error_on_load_is_skipped(self, caplog):
+        def load():
+            raise ModuleNotFoundError("No module named 'google.genai'")
+
+        records = self._run([_FakeEntryPoint("google_generativeai", load)], caplog)
+        assert any(
+            "google_generativeai: library not importable" in m
+            for m in self._messages(records, "DEBUG")
+        )
+
+    def test_only_real_activations_are_counted(self, caplog):
+        present = _instrumentor_class(_SATISFIED)
+        absent = _instrumentor_class(_MISSING)
+
+        def broken():
+            raise ImportError("No module named 'vertexai'")
+
+        eps = [
+            _FakeEntryPoint("present", lambda: present),
+            _FakeEntryPoint("absent", lambda: absent),
+            _FakeEntryPoint("vertexai", broken),
+        ]
+        records = self._run(eps, caplog)
+        assert self._messages(records, "INFO") == ["Auto-instrumented 1 libraries: present"]
+        assert not self._messages(records, "WARNING")
+
+    def test_installed_instrumentors_without_libraries_say_so(self, caplog):
+        """The [google] case: instrumentors installed, libraries not. Not "no packages found"."""
+
+        def broken():
+            raise ImportError("No module named 'google.genai'")
+
+        eps = [
+            _FakeEntryPoint("google_generativeai", broken),
+            _FakeEntryPoint("vertexai", lambda: _instrumentor_class(_MISSING)),
+        ]
+        warnings_ = self._messages(self._run(eps, caplog), "WARNING")
+        assert len(warnings_) == 1
+        assert warnings_[0].startswith("No instrumented libraries found: 2 instrumentor package(s)")
+        assert "google_generativeai, vertexai" in warnings_[0]
+        assert "No instrumentor packages found" not in warnings_[0]
+
+    def test_no_instrumentor_packages(self, caplog):
+        warnings_ = self._messages(self._run([], caplog), "WARNING")
+        assert len(warnings_) == 1
+        assert warnings_[0].startswith("No instrumentor packages found")
+
+    def test_already_instrumented_counts_without_instrumenting_again(self, caplog):
+        cls = _instrumentor_class(_SATISFIED)
+        cls().instrument()
+        records = self._run([_FakeEntryPoint("present", lambda: cls)], caplog)
+        assert len(cls.calls) == 1  # only the call above
+        assert "Auto-instrumented 1 libraries: present" in self._messages(records, "INFO")
+        assert "Attempting to instrument while already instrumented" not in self._messages(records)
+
+    def test_instrument_that_does_not_activate_is_not_counted(self, caplog):
+        class Inert:
+            is_instrumented_by_opentelemetry = False
+
+            def instrumentation_dependencies(self):
+                return []
+
+            def instrument(self, **kwargs):
+                return None  # e.g. its own conflict check said no
+
+        records = self._run([_FakeEntryPoint("inert", lambda: Inert)], caplog)
+        assert any("inert: not activated" in m for m in self._messages(records, "DEBUG"))
+        assert self._messages(records, "WARNING")[0].startswith("No instrumented libraries found")
+
+    def test_duplicate_names_instrumented_once(self, caplog):
+        cls = _instrumentor_class(_SATISFIED)
+        eps = [_FakeEntryPoint("dup", lambda: cls), _FakeEntryPoint("dup", lambda: cls)]
+        self._run(eps, caplog)
+        assert len(cls.calls) == 1
