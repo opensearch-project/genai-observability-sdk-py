@@ -82,7 +82,7 @@ In production nothing in the agent changes, only the endpoint and auth: see [8. 
 ## 3. Instrument the agent
 
 ```bash
-pip install "opensearch-genai-observability-sdk-py[opensearch]" strands-agents
+pip install "opensearch-genai-observability-sdk-py[opensearch]>=0.3.0" strands-agents
 ```
 
 ```python
@@ -468,7 +468,7 @@ Paste these into your coding assistant, in your agent's repository.
 
 ```text
 Instrument this agent with the OpenSearch GenAI observability SDK
-(pip package opensearch-genai-observability-sdk-py, docs:
+(pip package opensearch-genai-observability-sdk-py>=0.3.0, docs:
 https://github.com/opensearch-project/genai-observability-sdk-py).
 
 - Call register(service_name=..., agent_name=..., agent_version=...) once at startup.
