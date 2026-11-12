@@ -270,7 +270,7 @@ export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://logs-pipe-def.us-east-1.osis.ama
 
 **Custom exporters:** `exporter=` (traces) and `log_exporter=` (logs) are used as-is; nothing is derived from them. With `exporter=` and no `log_exporter=`, `register()` builds the log exporter only if a logs destination is configured (`logs_endpoint=`, `endpoint=`, `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT`); otherwise it logs a warning and evaluation events are not exported.
 
-**Upgrading to a release that includes PR #50:** `endpoint=` used to be the full traces URL; it is now the OTLP base URL. A value ending with `/v1/traces` (or `/v1/logs`) raises `ValueError`: remove the suffix (`endpoint="http://host:4318"`), or pass `traces_endpoint=` and `logs_endpoint=`. The default moved from `http://localhost:21890/opentelemetry` to `http://localhost:4318`. `register(exporter=AWSSigV4OTLPExporter(...))` still works for traces; use `sigv4=` to also sign the evaluation events.
+**Upgrading to 0.3.0** (`opensearch-genai-observability-sdk-py>=0.3.0`): `endpoint=` used to be the full traces URL; it is now the OTLP base URL. A value ending with `/v1/traces` (or `/v1/logs`) raises `ValueError`: remove the suffix (`endpoint="http://host:4318"`), or pass `traces_endpoint=` and `logs_endpoint=`. The default moved from `http://localhost:21890/opentelemetry` to `http://localhost:4318`. `register(exporter=AWSSigV4OTLPExporter(...))` still works for traces; use `sigv4=` to also sign the evaluation events.
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -328,7 +328,7 @@ with observe("thinking", op=Op.CHAT) as span:
 | Attribute | When set |
 |---|---|
 | `gen_ai.operation.name` | When `op` is provided |
-| `gen_ai.agent.name` | All ops except `execute_tool` |
+| `gen_ai.agent.name` | `op` is `invoke_agent` or `create_agent` only (a `chat` span, such as a traced LLM judge call, is not an agent) |
 | `gen_ai.tool.name` | When `op=Op.EXECUTE_TOOL` |
 | `gen_ai.input.messages` / `gen_ai.output.messages` | All ops except `execute_tool` (decorator only) |
 | `gen_ai.tool.call.arguments` / `gen_ai.tool.call.result` | When `op=Op.EXECUTE_TOOL` (decorator only) |

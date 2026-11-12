@@ -102,7 +102,8 @@ class TestDecoratorSync:
         span = spans[0]
         assert span.name == "chat my_chat"
         assert span.attributes["gen_ai.operation.name"] == "chat"
-        assert span.attributes["gen_ai.agent.name"] == "my_chat"
+        # A chat span (for example a traced LLM judge) is not an agent.
+        assert "gen_ai.agent.name" not in span.attributes
 
     def test_retrieval_span(self, exporter):
         result = sync_retrieval("query")
@@ -593,3 +594,46 @@ class TestToolTypeAttribute:
         agent_fn()
         span = exporter.get_finished_spans()[0]
         assert "gen_ai.tool.type" not in span.attributes
+
+
+class TestAgentNameOnlyForAgentOps:
+    """gen_ai.agent.name only on invoke_agent / create_agent spans, or when set explicitly."""
+
+    @pytest.mark.parametrize("op", [Op.INVOKE_AGENT, Op.CREATE_AGENT])
+    def test_agent_ops_name_the_agent(self, exporter, op):
+        with observe("planner", op=op):
+            pass
+        assert exporter.get_finished_spans()[0].attributes["gen_ai.agent.name"] == "planner"
+
+    @pytest.mark.parametrize(
+        "op",
+        [Op.CHAT, Op.RETRIEVAL, Op.EMBEDDINGS, Op.GENERATE_CONTENT, Op.TEXT_COMPLETION],
+    )
+    def test_non_agent_ops_do_not(self, exporter, op):
+        with observe("judge", op=op):
+            pass
+        attrs = exporter.get_finished_spans()[0].attributes
+        assert attrs["gen_ai.operation.name"] == op
+        assert "gen_ai.agent.name" not in attrs
+
+    def test_tool_names_the_tool_not_an_agent(self, exporter):
+        with observe("lookup", op=Op.EXECUTE_TOOL):
+            pass
+        attrs = exporter.get_finished_spans()[0].attributes
+        assert attrs["gen_ai.tool.name"] == "lookup"
+        assert "gen_ai.agent.name" not in attrs
+
+    def test_no_op_sets_no_genai_attributes(self, exporter):
+        with observe("plain"):
+            pass
+        attrs = exporter.get_finished_spans()[0].attributes
+        assert "gen_ai.agent.name" not in attrs
+        assert "gen_ai.operation.name" not in attrs
+
+    def test_explicit_agent_name_on_a_chat_span_is_kept(self, exporter):
+        from opensearch_genai_observability_sdk_py import enrich
+
+        with observe("judge", op=Op.CHAT):
+            enrich(**{"gen_ai.agent.name": "judge_agent"})
+        attrs = exporter.get_finished_spans()[0].attributes
+        assert attrs["gen_ai.agent.name"] == "judge_agent"

@@ -82,11 +82,15 @@ _PREFIXED_OPS = {
     Op.TEXT_COMPLETION,
 }
 
-# Name attribute key per op
+# Name attribute key per op. Only agent operations name an agent: a chat,
+# retrieval or embeddings span (for example a traced LLM judge call) must not
+# carry gen_ai.agent.name, or Agent Traces would list it as an agent. Set the
+# agent name explicitly, enrich(**{"gen_ai.agent.name": ...}), if a span needs it.
 _NAME_ATTR = {
+    Op.INVOKE_AGENT: "gen_ai.agent.name",
+    Op.CREATE_AGENT: "gen_ai.agent.name",
     Op.EXECUTE_TOOL: "gen_ai.tool.name",
 }
-_DEFAULT_NAME_ATTR = "gen_ai.agent.name"
 
 
 def _make_span_name(name: str, op: str | None) -> str:
@@ -101,8 +105,9 @@ def _set_span_op_attributes(span: trace.Span, name: str, op: str | None) -> None
     if op is None:
         return
     span.set_attribute("gen_ai.operation.name", op)
-    attr_key = _NAME_ATTR.get(op, _DEFAULT_NAME_ATTR)
-    span.set_attribute(attr_key, name)
+    attr_key = _NAME_ATTR.get(op)
+    if attr_key:
+        span.set_attribute(attr_key, name)
     if op == Op.EXECUTE_TOOL:
         span.set_attribute("gen_ai.tool.type", "function")
 
