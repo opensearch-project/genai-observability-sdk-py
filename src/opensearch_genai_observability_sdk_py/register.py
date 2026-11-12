@@ -809,8 +809,8 @@ def _dependency_conflict(requirements: Any) -> Any:
     """The OTel dependency conflict for *requirements*, or ``None`` when satisfied.
 
     Uses ``opentelemetry.instrumentation.dependencies`` (installed with every
-    instrumentor package), the check ``opentelemetry-instrument`` runs before
-    it activates an instrumentor.
+    instrumentor package), the check ``BaseInstrumentor.instrument()`` runs
+    on the instrumentor's ``instrumentation_dependencies()``.
     """
     try:
         from opentelemetry.instrumentation.dependencies import get_dependency_conflicts
@@ -821,31 +821,23 @@ def _dependency_conflict(requirements: Any) -> Any:
     return get_dependency_conflicts(requirements)
 
 
-def _dist_conflict(ep: Any) -> Any:
-    """The conflict for the library an entry point's distribution instruments, if known."""
-    dist = getattr(ep, "dist", None)
-    if dist is None:
-        return None
-    try:
-        from opentelemetry.instrumentation.dependencies import get_dist_dependency_conflicts
-    except ImportError:
-        return None
-    try:
-        return get_dist_dependency_conflicts(dist)
-    except Exception:  # unusual distribution metadata: fall back to the instance check
-        return None
-
-
 def _auto_instrument(provider: TracerProvider) -> None:
     """Discover and activate installed instrumentor packages.
 
     Searches the OpenTelemetry entry point group so instrumentors
     from the OTel ecosystem are discovered automatically. An instrumentor is
-    activated only when the library it instruments is installed (and
-    importable): the instrumentor's declared dependencies are checked first,
-    as ``opentelemetry-instrument`` does, so a missing library is skipped
-    quietly (DEBUG) instead of the instrumentor logging an ERROR line. Only
-    instrumentors that really activated are counted.
+    activated only when the library it instruments is installed: it is
+    skipped when it cannot be imported (instrumentors import their library),
+    or when its own ``instrumentation_dependencies()`` are not met, the same
+    check ``BaseInstrumentor.instrument()`` runs. Running it first skips a
+    missing library quietly (DEBUG) instead of the instrumentor logging an
+    ERROR line. Only instrumentors that really activated are counted.
+
+    The instrumentor distribution's ``instruments`` extra is deliberately not
+    used: it can name an umbrella package the instrumentor does not need
+    (``langchain`` for an instrumentor that patches ``langchain-core``,
+    ``llama-index`` for one that patches ``llama-index-core``), which would
+    skip it in normal LangGraph and LlamaIndex installs.
     """
     activated: list[str] = []
     skipped: list[str] = []
@@ -860,11 +852,6 @@ def _auto_instrument(provider: TracerProvider) -> None:
                 continue
             seen_names.add(ep.name)
 
-            conflict = _dist_conflict(ep)
-            if conflict:
-                skipped.append(ep.name)
-                logger.debug("Skipped instrumentor %s: %s", ep.name, conflict)
-                continue
             try:
                 instrumentor = ep.load()()
             except ImportError as exc:

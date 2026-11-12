@@ -1201,14 +1201,30 @@ class TestAutoInstrument:
         assert "tracer_provider" in cls.calls[0]
         assert "Auto-instrumented 1 libraries: present" in self._messages(records, "INFO")
 
-    def test_missing_library_from_dist_metadata_is_skipped_quietly(self, caplog):
-        cls = _instrumentor_class(_MISSING)
+    def test_umbrella_package_in_dist_metadata_does_not_block_langchain(self, caplog):
+        """S1 regression: the dist names `langchain`, the instrumentor needs only langchain-core.
+
+        A LangGraph install has langchain-core but not langchain. The instrumentor's own
+        instrumentation_dependencies() decide, as in BaseInstrumentor.instrument().
+        """
+        cls = _instrumentor_class(_SATISFIED)  # stands in for ('langchain-core > 0.1.0',)
         dist = _FakeDist(['no-such-library-for-sdk-tests >= 1.0; extra == "instruments"'])
-        records = self._run([_FakeEntryPoint("absent", lambda: cls, dist)], caplog)
-        assert cls.calls == []
-        assert not [r for r in records if r.levelname == "ERROR"]
-        debug = self._messages(records, "DEBUG")
-        assert any(m.startswith("Skipped instrumentor absent:") for m in debug)
+        records = self._run([_FakeEntryPoint("langchain", lambda: cls, dist)], caplog)
+        assert len(cls.calls) == 1
+        assert "Auto-instrumented 1 libraries: langchain" in self._messages(records, "INFO")
+        assert not self._messages(records, "WARNING")
+
+    def test_umbrella_package_in_dist_metadata_does_not_block_llamaindex(self, caplog):
+        """S1 regression: the dist names `llama-index`, the instrumentor declares no deps.
+
+        A LlamaIndex install has llama-index-core but not llama-index; the instrumentor
+        imports llama_index.core at load time, so loading it is the library check.
+        """
+        cls = _instrumentor_class(())
+        dist = _FakeDist(['no-such-library-for-sdk-tests >= 1.0; extra == "instruments"'])
+        records = self._run([_FakeEntryPoint("llama-index", lambda: cls, dist)], caplog)
+        assert len(cls.calls) == 1
+        assert "Auto-instrumented 1 libraries: llama-index" in self._messages(records, "INFO")
 
     def test_missing_library_from_instrumentor_deps_is_skipped_without_error(self, caplog):
         """No dist metadata: the instance's instrumentation_dependencies() is checked."""
