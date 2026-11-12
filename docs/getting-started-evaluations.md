@@ -213,7 +213,10 @@ retriever = OpenSearchTraceRetriever(
 since = datetime.now(timezone.utc) - timedelta(minutes=60)  # time window
 roots = retriever.list_root_spans(services=["observability-assistant"], since=since, max_results=50)
 roots = [r for r in roots if r.agent_name == AGENT_NAME]
-done = retriever.find_evaluated_trace_ids([r.trace_id for r in roots])
+done = retriever.find_evaluated_trace_ids(
+    [r.trace_id for r in roots],
+    evaluator="answer_quality_judge",  # this job's own results
+)
 
 for root in roots:
     if root.trace_id in done or random.random() > 0.5:  # skip evaluated; 50% sampling
@@ -236,14 +239,16 @@ for root in roots:
         judge_model=JUDGE_MODEL,
         judge_prompt_name="answer-quality",
         judge_prompt_version="v1",
-        agent_name=AGENT_NAME,
-        agent_version=root.raw.get("attributes", {}).get("gen_ai.agent.version"),
+        agent_name=root.agent_name,
+        agent_version=root.agent_version or None,
     )
 ```
 
+- `list_root_spans()` returns each trace's agent root, the same span Agent Traces lists: the trace root when it is a GenAI span, or the marked agent span below an HTTP handler. Its `agent_name` and `agent_version` come from the span; pass both to `score()`, or the results are grouped under "(no version)" on the agent page.
+
 - Run it on a schedule: cron, a loop (the example's `online_eval.py --interval 300`), or a scheduled function.
 - Pair the judge with a cheap deterministic check, for example "every service the answer names exists". It costs nothing and catches what the judge misses.
-- `find_evaluated_trace_ids()` makes the job safe to re-run.
+- `find_evaluated_trace_ids(..., evaluator=)` makes the job safe to re-run. Without `evaluator=` (or `evaluation_name=`), a result from any evaluator counts, so a new judge would skip traces another evaluator already scored.
 - If the judge is itself traced, pass `judge_trace_id=` so the result links to the judge's run.
 - Online results are the ones without a `test.suite.run.id`: the **Online** source filter on the agent pages shows them, next to the offline runs.
 
@@ -514,15 +519,16 @@ Add an online evaluator for this agent with the OpenSearch GenAI observability S
 
 - Use OpenSearchTraceRetriever (host, auth, verify_certs from env) to list root spans
   of the agent's service from the last N minutes (list_root_spans), keep the ones
-  whose agent_name is our agent, and skip the trace ids find_evaluated_trace_ids()
-  returns.
+  whose agent_name is our agent, and skip the trace ids
+  find_evaluated_trace_ids(trace_ids, evaluator=<this judge's evaluator name>) returns.
 - Sample with a configurable rate (--sample-rate, default 0.5) and window
   (--minutes, default 60).
 - Read the question and answer from the root span's input_messages / output_messages.
 - Score each trace with an LLM judge (1 to 5, threshold 4) and one cheap
   deterministic check, and post each with score(..., trace_id=, span_id=,
   evaluator=, evaluator_type=, evaluator_description=, judge_model=,
-  judge_prompt_name=, judge_prompt_version=, agent_name=, agent_version=).
+  judge_prompt_name=, judge_prompt_version=, agent_name=root.agent_name,
+  agent_version=root.agent_version).
 - Support one pass (default) or a loop with --interval <seconds>.
 - Never re-score a trace that already has a result.
 ```

@@ -15,12 +15,27 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-from opensearch_genai_observability_sdk_py.score import EVALUATION_EVENT_NAME
+from opensearch_genai_observability_sdk_py.enrich import AGENT_ROOT_ATTRIBUTE
+from opensearch_genai_observability_sdk_py.score import (
+    EVAL_EVALUATOR_NAME_KEY,
+    EVALUATION_EVENT_NAME,
+)
 
 if TYPE_CHECKING:
     from opensearchpy import RequestsAWSV4SignerAuth
 
 logger = logging.getLogger(__name__)
+
+# Agent Traces lists a trace by its AI root: a trace root that is a GenAI span
+# (has gen_ai.operation.name), or a span marked with derived.gen_ai.is_root
+# (by Data Prepper, an SDK or the user), for example the agent span below an
+# HTTP server span.
+_AI_ROOT_FIELD = f"attributes.{AGENT_ROOT_ATTRIBUTE}"
+_OPERATION_FIELD = "attributes.gen_ai.operation.name"
+_CONVERSATION_FIELD = "attributes.gen_ai.conversation.id"
+
+# Upper bound on the traces get_traces() collects for one conversation.
+DEFAULT_MAX_CONVERSATION_TRACES = 1000
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +63,7 @@ class SpanRecord:
     end_time: str
     operation_name: str  # invoke_agent | execute_tool | chat
     agent_name: str = ""
+    agent_version: str = ""
     model: str = ""
     input_messages: list[Message] = field(default_factory=list)
     output_messages: list[Message] = field(default_factory=list)
@@ -144,6 +160,7 @@ def map_span_doc(doc: dict[str, Any]) -> SpanRecord:
         end_time=doc.get("endTime", ""),
         operation_name=attrs.get("gen_ai.operation.name", ""),
         agent_name=attrs.get("gen_ai.agent.name", ""),
+        agent_version=str(attrs.get("gen_ai.agent.version", "") or ""),
         model=attrs.get("gen_ai.request.model", "") or attrs.get("gen_ai.response.model", ""),
         input_messages=input_msgs,
         output_messages=output_msgs,
@@ -154,6 +171,17 @@ def map_span_doc(doc: dict[str, Any]) -> SpanRecord:
         output_tokens=attrs.get("gen_ai.usage.output_tokens", 0) or 0,
         raw=doc,
     )
+
+
+def _drop_shadowed_ai_roots(docs: list[dict]) -> list[dict]:
+    """Drop marked spans whose trace is also listed through its GenAI root.
+
+    Only spans without a parent pass the GenAI-root condition, so a trace
+    with such a hit keeps that one; marked spans deeper in the same trace
+    (an SDK marking a nested span) are dropped, as in Agent Traces.
+    """
+    root_trace_ids = {d.get("traceId") for d in docs if not d.get("parentSpanId")}
+    return [d for d in docs if not d.get("parentSpanId") or d.get("traceId") not in root_trace_ids]
 
 
 # ---------------------------------------------------------------------------
@@ -211,25 +239,40 @@ class OpenSearchTraceRetriever:
 
         return RequestsHttpConnection
 
-    def get_traces(self, identifier: str, max_spans: int = 10000) -> SessionRecord:
-        """Retrieve all spans for a session or trace, grouped by traceId.
+    def get_traces(
+        self,
+        identifier: str,
+        max_spans: int = 10000,
+        *,
+        max_traces: int = DEFAULT_MAX_CONVERSATION_TRACES,
+    ) -> SessionRecord:
+        """Retrieve all spans of a conversation's traces, or of one trace.
 
-        Queries by ``gen_ai.conversation.id`` first. If no results, falls back
-        to treating *identifier* as a ``traceId``.
+        Looks up the traces whose spans carry ``gen_ai.conversation.id`` =
+        *identifier* (earliest first), then fetches every span of those
+        traces, so each ``TraceRecord`` holds the whole trace (model calls,
+        tools, and the agent span) exactly as ``get_traces(trace_id)`` does.
+        If no span has that conversation id, *identifier* is treated as a
+        ``traceId``.
 
         Args:
             identifier: A conversation/session ID or a trace ID.
-            max_spans: Maximum spans to fetch. If the result is truncated,
-                ``SessionRecord.truncated`` will be ``True``.
+            max_spans: Maximum spans to fetch, over all traces.
+            max_traces: Maximum traces to collect for a conversation (the
+                earliest ones).
+
+        ``SessionRecord.truncated`` is ``True`` when either limit was reached.
         """
-        docs = self._query_by_conversation_id(identifier, max_spans)
-        if not docs:
+        trace_ids, more_traces = self._conversation_trace_ids(identifier, max_traces)
+        if trace_ids:
+            docs = self._query_by_trace_ids(trace_ids, max_spans)
+        else:
             docs = self._query_by_trace_id(identifier, max_spans)
         if not docs:
             return SessionRecord(session_id=identifier)
 
         session = self._build_session(identifier, docs)
-        session.truncated = len(docs) >= max_spans
+        session.truncated = more_traces or len(docs) >= max_spans
         return session
 
     def list_root_spans(
@@ -239,10 +282,18 @@ class OpenSearchTraceRetriever:
         since: datetime | None = None,
         max_results: int = 50,
     ) -> list[SpanRecord]:
-        """List recent root spans, optionally filtered by service name.
+        """List the AI roots of recent traces, newest first.
 
-        Returns one ``SpanRecord`` per trace (the root span with no parent).
-        Useful for discovering traces to evaluate.
+        Uses the Agent Traces rule: a span is an AI root when it is a trace
+        root that is a GenAI span (no parent, has ``gen_ai.operation.name``)
+        or it is marked with ``derived.gen_ai.is_root``. For an agent behind
+        an HTTP handler this returns the marked agent span (with its messages
+        and agent name), not the HTTP server span. A marked span in a trace
+        that also has a GenAI root is left out, so a trace is listed once,
+        unless several agents in it are marked (one record each).
+
+        Indices where the marker is not mapped yet (no marked span so far)
+        are fine: the marker condition matches nothing there.
 
         Args:
             services: Only return traces from these service names.
@@ -254,27 +305,64 @@ class OpenSearchTraceRetriever:
             since = datetime.now(timezone.utc) - timedelta(minutes=15)
         since_iso = since.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
+        ai_root = {
+            "bool": {
+                "should": [
+                    {
+                        "bool": {
+                            "filter": [
+                                {"term": {"parentSpanId": ""}},
+                                {"exists": {"field": _OPERATION_FIELD}},
+                            ]
+                        }
+                    },
+                    {"term": {_AI_ROOT_FIELD: True}},
+                ],
+                "minimum_should_match": 1,
+            }
+        }
         must: list[dict] = [
-            {"term": {"parentSpanId": ""}},
+            ai_root,
             {"range": {"startTime": {"gte": since_iso}}},
         ]
         if services:
             must.append({"terms": {"serviceName": services}})
 
         body = {
-            "size": max_results,
+            # A shadowed marked span takes a slot in the page; fetch extra so
+            # dropping it still leaves max_results roots when there are more.
+            "size": min(max_results * 2, 10000),
             "sort": [{"startTime": "desc"}],
             "query": {"bool": {"must": must}},
         }
-        return [map_span_doc(doc) for doc in self._search(body)]
+        docs = _drop_shadowed_ai_roots(self._search(body))
+        return [map_span_doc(doc) for doc in docs[:max_results]]
 
-    def find_evaluated_trace_ids(self, trace_ids: list[str]) -> set[str]:
+    def find_evaluated_trace_ids(
+        self,
+        trace_ids: list[str],
+        *,
+        evaluator: str | None = None,
+        evaluation_name: str | None = None,
+    ) -> set[str]:
         """Return the subset of trace_ids that already have an evaluation result.
 
         Looks for ``gen_ai.evaluation.result`` events in the evaluation index,
         matched on ``traceId``. Test case and run events in the same index are
         not evaluation results and are ignored. A missing evaluation index means
         nothing is evaluated yet and returns an empty set.
+
+        Without a filter, a result from any evaluator counts. Pass *evaluator*
+        and/or *evaluation_name* so a job skips only the traces it scored
+        itself, not those another evaluator scored.
+
+        Args:
+            trace_ids: The traces to check.
+            evaluator: Only count results of this evaluator
+                (``opensearch.gen_ai.evaluation.evaluator.name``, the
+                ``evaluator=`` of ``score()``).
+            evaluation_name: Only count results with this name
+                (``gen_ai.evaluation.name``, the ``name`` of ``score()``).
 
         Raises:
             Exception: Any other search error (connection, auth, mapping) from
@@ -284,16 +372,17 @@ class OpenSearchTraceRetriever:
         """
         if not trace_ids:
             return set()
+        filters: list[dict] = [
+            {"term": {"eventName": EVALUATION_EVENT_NAME}},
+            {"terms": {"traceId": trace_ids}},
+        ]
+        if evaluator:
+            filters.append({"term": {f"attributes.{EVAL_EVALUATOR_NAME_KEY}": evaluator}})
+        if evaluation_name:
+            filters.append({"term": {"attributes.gen_ai.evaluation.name": evaluation_name}})
         body = {
             "size": 0,
-            "query": {
-                "bool": {
-                    "filter": [
-                        {"term": {"eventName": EVALUATION_EVENT_NAME}},
-                        {"terms": {"traceId": trace_ids}},
-                    ],
-                }
-            },
+            "query": {"bool": {"filter": filters}},
             "aggs": {
                 "by_trace": {"terms": {"field": "traceId", "size": len(trace_ids)}},
             },
@@ -312,10 +401,36 @@ class OpenSearchTraceRetriever:
 
     # --- queries ---
 
-    def _query_by_conversation_id(self, conversation_id: str, size: int) -> list[dict]:
+    def _conversation_trace_ids(
+        self, conversation_id: str, max_traces: int
+    ) -> tuple[list[str], bool]:
+        """Trace ids with a span carrying the conversation id, earliest first.
+
+        Returns the ids and whether more traces exist than *max_traces*.
+        """
+        body = {
+            "size": 0,
+            "query": {"term": {_CONVERSATION_FIELD: conversation_id}},
+            "aggs": {
+                "by_trace": {
+                    "terms": {
+                        "field": "traceId",
+                        "size": max_traces,
+                        "order": {"first_start": "asc"},
+                    },
+                    "aggs": {"first_start": {"min": {"field": "startTime"}}},
+                },
+            },
+        }
+        resp = self._client.search(index=self._index, body=body)
+        agg = resp.get("aggregations", {}).get("by_trace", {})
+        ids = [b["key"] for b in agg.get("buckets", [])]
+        return ids, bool(agg.get("sum_other_doc_count", 0))
+
+    def _query_by_trace_ids(self, trace_ids: list[str], size: int) -> list[dict]:
         body = {
             "size": size,
-            "query": {"term": {"attributes.gen_ai.conversation.id": conversation_id}},
+            "query": {"terms": {"traceId": trace_ids}},
             "sort": [{"startTime": "asc"}],
         }
         return self._search(body)

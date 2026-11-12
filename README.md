@@ -686,14 +686,16 @@ retriever = OpenSearchTraceRetriever(
     auth=auth,
 )
 
-# Retrieve all spans for a session or trace
+# Retrieve all spans of a conversation's traces (or of one trace, by trace ID)
 session = retriever.get_traces("my-conversation-id")
 for trace in session.traces:
     for span in trace.spans:
         print(f"{span.operation_name}: {span.name} ({span.model})")
 
-# List recent root spans (for discovering traces to evaluate)
+# List the agent roots of recent traces (for discovering traces to evaluate)
 roots = retriever.list_root_spans(services=["my-agent"], max_results=10)
+for root in roots:
+    print(root.trace_id, root.agent_name, root.agent_version)
 
 # Filter by time
 from datetime import datetime
@@ -702,6 +704,8 @@ roots = retriever.list_root_spans(services=["my-agent"], since=datetime(2026, 3,
 
 # Check which traces already have evaluation results (gen_ai.evaluation.result events)
 evaluated = retriever.find_evaluated_trace_ids(["trace-id-1", "trace-id-2"])
+# ... only results of one evaluator (and/or one evaluation name)
+mine = retriever.find_evaluated_trace_ids(["trace-id-1"], evaluator="answer_quality_judge")
 ```
 
 **Constructor:**
@@ -718,15 +722,17 @@ evaluated = retriever.find_evaluated_trace_ids(["trace-id-1", "trace-id-2"])
 
 | Method | Returns | Description |
 |---|---|---|
-| `get_traces(identifier, max_spans=10000)` | `SessionRecord` | Fetch spans by conversation ID or trace ID |
-| `list_root_spans(services=None, since=None, max_results=50)` | `list[SpanRecord]` | List recent root spans, optionally filtered by service |
-| `find_evaluated_trace_ids(trace_ids)` | `set[str]` | Return subset of trace IDs that already have evaluation results (`gen_ai.evaluation.result` events in the evaluation index). A missing index returns an empty set; other search errors raise |
+| `get_traces(identifier, max_spans=10000, max_traces=1000)` | `SessionRecord` | By conversation ID: every span of each trace in the conversation (traces whose spans carry `gen_ai.conversation.id`, earliest first). Otherwise by trace ID: every span of that trace. `truncated` is `True` when a limit was reached |
+| `list_root_spans(services=None, since=None, max_results=50)` | `list[SpanRecord]` | List the agent roots of recent traces, newest first, optionally filtered by service. Same rule as Agent Traces: a trace root that is a GenAI span, or the span marked `derived.gen_ai.is_root` (for example the agent span below an HTTP server span) |
+| `find_evaluated_trace_ids(trace_ids, evaluator=None, evaluation_name=None)` | `set[str]` | Return subset of trace IDs that already have evaluation results (`gen_ai.evaluation.result` events in the evaluation index). Without a filter, a result from any evaluator counts; `evaluator=` / `evaluation_name=` count only that evaluator's (`opensearch.gen_ai.evaluation.evaluator.name`) or that evaluation's (`gen_ai.evaluation.name`) results. A missing index returns an empty set; other search errors raise |
+
+Each `SpanRecord` carries the span's `agent_name` and `agent_version` (`gen_ai.agent.name`, `gen_ai.agent.version`). Pass both to `score()` when you post a result for a retrieved trace, or the result is grouped under "(no version)" on the agent page.
 
 Requires the `[opensearch]` extra: `pip install opensearch-genai-observability-sdk-py[opensearch]`
 
 ## Auto-Instrumented Libraries
 
-`register()` automatically discovers and activates any installed instrumentor packages via OTel entry points. No code changes needed — install the extras for the providers you use and their calls are traced automatically.
+`register()` automatically discovers installed instrumentor packages via OTel entry points and activates each one whose library is installed. No code changes needed: install the extras for the providers you use, plus the provider libraries themselves (an extra installs only the instrumentor), and their calls are traced automatically. Instrumentors whose library is missing are skipped (logged at DEBUG), and only the activated ones are counted in the "Auto-instrumented N libraries" log line.
 
 | Category | Extras / packages |
 |---|---|
