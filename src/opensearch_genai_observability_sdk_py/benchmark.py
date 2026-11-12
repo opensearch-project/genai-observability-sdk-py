@@ -744,6 +744,7 @@ class Benchmark:
         self._start_time = time.monotonic()
         self._cases: list[TestCaseResult] = []
         self._closed = False
+        self._summary: BenchmarkSummary | None = None
 
         logger.info("Benchmark started: name=%s run_id=%s", name, self._run_id)
 
@@ -897,17 +898,20 @@ class Benchmark:
         """Finalize the benchmark and return the local summary.
 
         Computes aggregate statistics and prints a formatted summary. Emits
-        no telemetry.
+        no telemetry. Idempotent: a later call (for example ``close()``
+        inside ``with Benchmark(...)``, then the ``with`` exit) returns the
+        same summary without printing it again.
 
         Returns:
             ``BenchmarkSummary`` with aggregate score statistics.
         """
-        if self._closed:
-            raise RuntimeError("Benchmark is already closed")
+        if self._summary is not None:
+            return self._summary
 
         self._closed = True
 
         summary = _compute_summary(self._name, self._run_id, self._cases, self._start_time)
+        self._summary = summary
 
         print(str(summary))
         logger.info("Benchmark completed: %s", self._run_id)
@@ -918,8 +922,7 @@ class Benchmark:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if not self._closed:
-            self.close()
+        self.close()
 
 
 _SYNC_SCORERS_ONLY = (

@@ -292,11 +292,19 @@ class TestBenchmarkLog:
         with pytest.raises(RuntimeError, match="already closed"):
             b.log(input="q1")
 
-    def test_double_close_raises(self):
+    def test_close_is_idempotent(self, capsys):
         b = Benchmark(name="double")
-        b.close()
-        with pytest.raises(RuntimeError, match="already closed"):
-            b.close()
+        first = b.close()
+        second = b.close()
+        assert second is first
+        assert capsys.readouterr().out.count("BENCHMARK: double") == 1
+
+    def test_close_inside_with_prints_summary_once(self, capsys):
+        with Benchmark(name="inside-with") as b:
+            b.log(input="q1", scores={"accuracy": 1.0})
+            summary = b.close()
+        assert summary.total_cases == 1
+        assert capsys.readouterr().out.count("BENCHMARK: inside-with") == 1
 
     def test_trace_id_without_span_id_raises(self):
         with Benchmark(name="link-no-span") as b:
