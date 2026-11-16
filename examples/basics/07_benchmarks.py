@@ -71,7 +71,10 @@ def _simulate(question: str, version: str) -> str:
     responses = {
         "What is Python?": {
             "v1": "A programming language.",
-            "v2": "Python is a high-level language for web dev, data science, and automation. Source: python.org",
+            "v2": (
+                "Python is a high-level language for web dev, data science, and automation."
+                " Source: python.org"
+            ),
         },
         "What causes rain?": {
             "v1": "Water falls from clouds.",

@@ -40,13 +40,17 @@ shows pass / fail; without one a result is only "Scored".
 ```python
 from opensearch_genai_observability_sdk_py import evaluate, register
 
-register(service_name="travel-assistant-evals-native", agent_name="travel_assistant", agent_version="1.0.0")
+register(
+    service_name="travel-assistant-evals-native",
+    agent_name="travel_assistant",
+    agent_version="1.0.0",
+)
 result = evaluate(
-    name="travel-assistant",          # test suite (test.suite.name), stable across runs
-    task=ask,                         # the traced agent entry point
+    name="travel-assistant",  # test suite (test.suite.name), stable across runs
+    task=ask,  # the traced agent entry point
     data=cases,
     scores=[uses_tool_data, plan_quality],
-    run_name="v1 prompt",             # shown in place of the run id
+    run_name="v1 prompt",  # shown in place of the run id
     run_description="Claude Haiku 4.5, default prompt",
     agent_name="travel_assistant",
     agent_version="1.0.0",
@@ -68,15 +72,30 @@ In CI: [basics/github-action](../basics/github-action/) and [evals/pytest](../ev
 ```python
 from opensearch_genai_observability_sdk_py import OpenSearchTraceRetriever, score
 
-retriever = OpenSearchTraceRetriever(host="https://localhost:9200", auth=("admin", password), verify_certs=False)
-roots = retriever.list_root_spans(services=["travel-assistant-evals-native"], since=since, max_results=50)
-done = retriever.find_evaluated_trace_ids([r.trace_id for r in roots], evaluator="travel_plan_judge")
+retriever = OpenSearchTraceRetriever(
+    host="https://localhost:9200", auth=("admin", password), verify_certs=False
+)
+roots = retriever.list_root_spans(
+    services=["travel-assistant-evals-native"], since=since, max_results=50
+)
+done = retriever.find_evaluated_trace_ids(
+    [r.trace_id for r in roots], evaluator="travel_plan_judge"
+)
 for root in (r for r in roots if r.trace_id not in done):
     verdict = judge(root.input_messages[0].content, root.output_messages[-1].content)
-    score("plan_quality", verdict["score"], trace_id=root.trace_id, span_id=root.span_id,
-          threshold=4, score_min=1, score_max=5, evaluator="travel_plan_judge",
-          evaluator_type="llm_judge", agent_name=root.agent_name,
-          agent_version=root.agent_version or None)
+    score(
+        "plan_quality",
+        verdict["score"],
+        trace_id=root.trace_id,
+        span_id=root.span_id,
+        threshold=4,
+        score_min=1,
+        score_max=5,
+        evaluator="travel_plan_judge",
+        evaluator_type="llm_judge",
+        agent_name=root.agent_name,
+        agent_version=root.agent_version or None,
+    )
 ```
 
 - `list_root_spans()` returns each trace's agent root, the row Agent Traces lists, with
