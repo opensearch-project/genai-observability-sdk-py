@@ -589,18 +589,21 @@ class TestJudgeContext:
         (span,) = [s for s in exporter.get_finished_spans() if s.name == "judge"]
         assert span.attributes["gen_ai.system_instructions"] == "You are a strict grader."
 
-    def test_attributes_cannot_set_judge_keys(self, eval_events):
+    def test_attributes_set_judge_keys_arguments_win(self, eval_events, caplog):
+        """Judge keys in attributes= pass through; the judge arguments win over them."""
         score(
             "accuracy",
             1.0,
             judge_model="real-model",
             attributes={
-                "gen_ai.request.model": "spoofed",
-                "gen_ai.prompt.name": "spoofed",
+                "gen_ai.request.model": "from-attributes",
+                "gen_ai.prompt.name": "from-attributes",
                 "gen_ai.system_instructions": "spoofed",
             },
         )
         a = _one_event(eval_events).log_record.attributes
         assert a["gen_ai.request.model"] == "real-model"
-        assert "gen_ai.prompt.name" not in a
+        assert a["gen_ai.prompt.name"] == "from-attributes"
         assert "gen_ai.system_instructions" not in a
+        assert "'gen_ai.system_instructions'" in caplog.text
+        assert "'gen_ai.request.model'" not in caplog.text

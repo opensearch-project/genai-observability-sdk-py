@@ -251,8 +251,13 @@ def scorer(
       ``gen_ai.system_instructions`` (the judge's instrumentation, or
       ``enrich(system_instructions=...)`` inside an ``@observe`` judge call).
 
-    All of these are set on every result the scorer produces, including its
-    error results.
+    The rule fields are defaults for every result the scorer produces,
+    including its error results. ``description`` and the judge fields are
+    set only on results of this scorer's evaluator: a returned ``EvalScore``
+    whose ``evaluator`` is unset or equals ``evaluator`` (default: the
+    function name). A scorer that returns results of other evaluators (for
+    example ``EvalScore(evaluator="deepeval.faithfulness")``) does not stamp
+    its own description or judge on them.
 
     Raises:
         ValueError: ``direction`` or ``evaluator_type`` is not a known value.
@@ -568,7 +573,9 @@ def _emit_scores(
     Attribute precedence, lowest first: ``metadata`` (run, then case), the
     score's own metadata, the ``test.*`` / agent / CI ``grouping``, then the
     evaluation fields. With ``error_type`` every score is an evaluator error
-    result: ``error.type`` set, no value and no label.
+    result: ``error.type`` set, no value and no label. The ``spec`` judge
+    attributes (description, judge model and prompt) are set only on scores
+    of the spec's evaluator: ``evaluator`` unset, or equal to ``evaluator``.
     """
     has_span = trace.get_current_span(context).get_span_context().is_valid
     for s in scores:
@@ -592,7 +599,7 @@ def _emit_scores(
             error_type=error_type,
             judge_trace_id=s.judge_trace_id,
         )
-        if spec is not None:
+        if spec is not None and s.evaluator in (None, evaluator):
             attrs.update(spec.judge_attributes())
         emit_evaluation_event({**extra, **attrs}, context=context)
 
@@ -688,7 +695,10 @@ class Benchmark:
         metadata: Run metadata, added to every ``gen_ai.evaluation.result``
             event of the run (case and score metadata and the SDK attributes
             win). Keys reserved by the SDK (``test.suite.name`` etc.) are
-            filtered out with a warning.
+            filtered out, with one warning per key per process. Judge context
+            keys (``gen_ai.request.model``, ``gen_ai.prompt.name``,
+            ``gen_ai.prompt.version``) are allowed: ``Benchmark`` has no
+            judge arguments.
         run_id: ``test.suite.run.id`` of the run, used exactly as given.
             Default: a generated id. Pass the same id from every CI shard so
             they report into one run, or the id of an existing run to re-score
@@ -793,7 +803,7 @@ class Benchmark:
                 or ``threshold`` + ``direction``) and scale bounds.
             metadata: Case metadata, added to the case's evaluation events
                 over the run metadata. Keys reserved by the SDK are filtered
-                out with a warning.
+                out, with one warning per key per process.
             error: Error message, kept on the local result. The local status
                 becomes ``"error"``.
             case_id: Explicit ``test.case.id``. If omitted, derived
@@ -1049,7 +1059,10 @@ def evaluate(
             its own trace.
         metadata: Run metadata, added to every ``gen_ai.evaluation.result``
             event of the run (score metadata and the SDK attributes win).
-            Keys reserved by the SDK are filtered out with a warning.
+            Keys reserved by the SDK are filtered out, with one warning per
+            key per process. Judge context keys (``gen_ai.request.model``,
+            ``gen_ai.prompt.*``) are allowed; ``@scorer`` judge arguments
+            win over them.
         run_id: ``test.suite.run.id`` of the run, used exactly as given.
             Default: a generated id. Pass the same id from every CI shard so
             they report into one run, or the id of an existing run to re-score

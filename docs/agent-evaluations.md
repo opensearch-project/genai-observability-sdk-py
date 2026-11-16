@@ -81,9 +81,9 @@ Attributes (each is set only when it has a value):
 | `opensearch.gen_ai.evaluation.judge.trace_id` | OpenSearch | all | Trace of the judge's own run |
 | `opensearch.gen_ai.evaluation.judge_label` | OpenSearch | all | The evaluator's own non-verdict label (for example `relevant`) when the result also has a verdict |
 | `opensearch.gen_ai.evaluation.evaluator.description` | OpenSearch | all | What the evaluator checks (criteria or rubric summary) |
-| `gen_ai.request.model` | OTel | all | Model the LLM judge used |
-| `gen_ai.prompt.name` | OTel | all | Name of the judge prompt template |
-| `gen_ai.prompt.version` | OTel | all | Version of the judge prompt (`name@version` identifies the prompt) |
+| `gen_ai.request.model` | OTel | all (`Benchmark`: metadata) | Model the LLM judge used |
+| `gen_ai.prompt.name` | OTel | all (`Benchmark`: metadata) | Name of the judge prompt template |
+| `gen_ai.prompt.version` | OTel | all (`Benchmark`: metadata) | Version of the judge prompt (`name@version` identifies the prompt) |
 | `opensearch.test.suite.run.name` | OpenSearch | offline | Human-readable run name. Optional; readers fall back to the short run id |
 | `opensearch.test.suite.run.description` | OpenSearch | offline | Free-text run description, up to 1024 characters |
 | `opensearch.test.case.expected` | OpenSearch | offline | Expected output of the case, up to 32768 characters |
@@ -93,7 +93,7 @@ Attributes (each is set only when it has a value):
 - "OTel" names are in the OTel semantic conventions registry. `test.suite.run.id` and `test.case.id` are proposed in [semantic-conventions#1262](https://github.com/open-telemetry/semantic-conventions/issues/1262) and [semantic-conventions-genai#79](https://github.com/open-telemetry/semantic-conventions-genai/issues/79).
 - `opensearch.gen_ai.evaluation.*` names mirror the OTel `gen_ai.evaluation.*` names for fields OTel does not define yet.
 - "offline" means `evaluate()` and `Benchmark.log()`. `score()` sets the `test.*` and `opensearch.test.case.*` keys only if you pass them in `attributes`.
-- `score(attributes=...)` and run, case and score metadata are added to the events too, under the SDK fields: an SDK field always wins. They cannot set the evaluation fields (`gen_ai.evaluation.*`, `opensearch.gen_ai.evaluation.*`, `error.type`, and the judge keys `gen_ai.request.model`, `gen_ai.prompt.name`, `gen_ai.prompt.version`, `gen_ai.system_instructions`), even ones the SDK leaves unset: those keys are dropped with one warning per call. `score(attributes=...)` also cannot set `gen_ai.response.id`, `gen_ai.conversation.id` or `gen_ai.agent.*` (use the arguments). Metadata also cannot set `test.suite.name`, `test.suite.run.id`, `test.case.id`, `test.case.name`, `cicd.pipeline.*`, `opensearch.test.suite.run.name` / `.description` or `opensearch.test.case.*`.
+- `score(attributes=...)` and run, case and score metadata are added to the events too, under the SDK fields: an SDK field always wins. They cannot set the evaluation fields (`gen_ai.evaluation.*`, `opensearch.gen_ai.evaluation.*`, `error.type`) or `gen_ai.system_instructions`, even ones the SDK leaves unset: those keys are dropped, with one warning per key per process. They can set the judge context keys `gen_ai.request.model`, `gen_ai.prompt.name` and `gen_ai.prompt.version`, for example `Benchmark(metadata={"gen_ai.request.model": "gpt-4o"})` for DeepEval or Ragas results; the explicit judge arguments (`score(judge_model=...)`, `@scorer(judge_model=...)` and the prompt name and version) win when both are set. On a result event `gen_ai.request.model` is the judge's model, not the agent's. `score(attributes=...)` also cannot set `gen_ai.response.id`, `gen_ai.conversation.id` or `gen_ai.agent.*` (use the arguments). Metadata also cannot set `test.suite.name`, `test.suite.run.id`, `test.case.id`, `test.case.name`, `cicd.pipeline.*`, `opensearch.test.suite.run.name` / `.description` or `opensearch.test.case.*`.
 
 ## Setup
 
@@ -254,7 +254,7 @@ Record what an LLM judge checked and how, so a reader can tell two judge version
 | `judge_prompt_name` | `judge_prompt_name` | `gen_ai.prompt.name` |
 | `judge_prompt_version` | `judge_prompt_version` | `gen_ai.prompt.version` |
 
-`gen_ai.request.model`, `gen_ai.prompt.name` and `gen_ai.prompt.version` are the standard GenAI semantic convention names. There is no argument for the judge's full system prompt: see [Judge prompt](#judge-prompt).
+`gen_ai.request.model`, `gen_ai.prompt.name` and `gen_ai.prompt.version` are the standard GenAI semantic convention names. There is no argument for the judge's full system prompt: see [Judge prompt](#judge-prompt). `Benchmark` has no judge arguments: set these keys in its run, case or `EvalScore` metadata. With `evaluate()`, the `@scorer(...)` description and judge fields apply to a returned `EvalScore` only when its `evaluator` is unset or equals the scorer's evaluator, so a scorer that returns results of other evaluators (for example `deepeval.faithfulness`) does not stamp its own judge on them.
 
 ```python
 from opensearch_genai_observability_sdk_py import score

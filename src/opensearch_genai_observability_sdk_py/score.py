@@ -221,9 +221,11 @@ def score(
             keys the SDK owns (``gen_ai.evaluation.*``,
             ``opensearch.gen_ai.evaluation.*``, ``error.type``,
             ``gen_ai.response.id``, ``gen_ai.conversation.id``,
-            ``gen_ai.agent.*`` and the judge context keys) are dropped with
-            one warning per call: set those through the matching arguments.
-            ``test.*`` keys pass through.
+            ``gen_ai.agent.*`` and ``gen_ai.system_instructions``) are
+            dropped with one warning per key per process: set those through
+            the matching arguments. ``test.*`` keys and the judge context
+            keys (``gen_ai.request.model``, ``gen_ai.prompt.*``) pass
+            through; ``judge_model`` / ``judge_prompt_*`` win over them.
         level: ``"span"``, ``"trace"``, ``"session"`` or ``"tool_call"``.
             Defaults to ``"span"`` with a span context, ``"trace"`` with only
             ``trace_id``, ``"session"`` with only ``conversation_id``.

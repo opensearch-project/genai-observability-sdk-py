@@ -1608,10 +1608,125 @@ class TestScorerJudgeContext:
         assert a["gen_ai.request.model"] == "m1"
         assert a["opensearch.gen_ai.evaluation.evaluator.description"] == "d"
 
+    def test_judge_context_only_on_the_scorers_own_evaluator(self, events):
+        @scorer(name="mixed", evaluator="checks_x", description="checks X", judge_model="m1")
+        def mixed(i, o, e):
+            return [
+                EvalScore(name="own", value=1.0),
+                EvalScore(name="same", value=1.0, evaluator="checks_x"),
+                EvalScore(name="faith", value=0.5, evaluator="deepeval.faithfulness"),
+                EvalScore(
+                    name="rel",
+                    value=0.5,
+                    evaluator="ragas.relevancy",
+                    metadata={"gen_ai.request.model": "ragas-judge"},
+                ),
+            ]
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[mixed])
+        by_name = {
+            r.log_record.attributes["gen_ai.evaluation.name"]: r.log_record.attributes
+            for r in events(EVALUATION)
+        }
+        desc = "opensearch.gen_ai.evaluation.evaluator.description"
+        for name in ("own", "same"):
+            assert by_name[name]["gen_ai.request.model"] == "m1"
+            assert by_name[name][desc] == "checks X"
+        assert desc not in by_name["faith"]
+        assert "gen_ai.request.model" not in by_name["faith"]
+        assert by_name["rel"]["gen_ai.request.model"] == "ragas-judge"
+        assert desc not in by_name["rel"]
+
+    def test_judge_context_default_evaluator_is_function_name(self, events):
+        @scorer(judge_model="m1")
+        def judge_fn(i, o, e):
+            return [
+                EvalScore(name="a", value=1.0, evaluator="judge_fn"),
+                EvalScore(name="b", value=1.0, evaluator="other"),
+            ]
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[judge_fn])
+        models = {
+            r.log_record.attributes["gen_ai.evaluation.name"]: r.log_record.attributes.get(
+                "gen_ai.request.model"
+            )
+            for r in events(EVALUATION)
+        }
+        assert models == {"a": "m1", "b": None}
+
     def test_spec_holds_fields(self):
         q = self._judge()
         assert q.scorer_spec.description == "Correct and grounded"
         assert q.scorer_spec.judge_model == "claude-haiku-4-5"
+
+
+class TestJudgeContextMetadata:
+    """Judge context keys are not reserved on metadata; explicit judge arguments win."""
+
+    JUDGE = {
+        "gen_ai.request.model": "gpt-4o",
+        "gen_ai.prompt.name": "faithfulness",
+        "gen_ai.prompt.version": "v1",
+    }
+
+    def test_benchmark_metadata_sets_judge_context(self, events, caplog):
+        with Benchmark(name="b", metadata=self.JUDGE) as b:
+            b.log(input="q", scores={"faithfulness": 0.8})
+        a = events(EVALUATION)[0].log_record.attributes
+        for key, value in self.JUDGE.items():
+            assert a[key] == value
+        assert "reserved by the SDK" not in caplog.text
+
+    def test_evalscore_metadata_sets_judge_context(self, events, caplog):
+        with Benchmark(name="b") as b:
+            b.log(input="q", scores=[EvalScore(name="f", value=0.8, metadata=self.JUDGE)])
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["gen_ai.request.model"] == "gpt-4o"
+        assert "reserved by the SDK" not in caplog.text
+
+    def test_evaluate_metadata_sets_judge_context(self, events):
+        evaluate(
+            "s",
+            task=lambda x: x,
+            data=[{"input": "a"}],
+            scores=[lambda i, o, e: 1.0],
+            metadata=self.JUDGE,
+        )
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["gen_ai.prompt.name"] == "faithfulness"
+
+    def test_scorer_judge_arguments_win_over_metadata(self, events):
+        @scorer(name="q", judge_model="spec-model", judge_prompt_version="v9")
+        def quality(i, o, e):
+            return EvalScore(name="q", value=1.0, metadata={"gen_ai.request.model": "score-meta"})
+
+        evaluate(
+            "s", task=lambda x: x, data=[{"input": "a"}], scores=[quality], metadata=self.JUDGE
+        )
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["gen_ai.request.model"] == "spec-model"
+        assert a["gen_ai.prompt.version"] == "v9"
+        assert a["gen_ai.prompt.name"] == "faithfulness"  # not declared: metadata stands
+
+    def test_system_instructions_still_reserved(self, events, caplog):
+        with Benchmark(name="b", metadata={"gen_ai.system_instructions": "prompt"}) as b:
+            b.log(input="q", scores={"a": 1.0})
+        assert "gen_ai.system_instructions" not in events(EVALUATION)[0].log_record.attributes
+        assert "'gen_ai.system_instructions'" in caplog.text
+
+    def test_ignored_key_warning_once_per_key_per_process(self, events, caplog):
+        with Benchmark(name="b", metadata={"error.type": "X"}) as b:
+            for i in range(3):
+                b.log(
+                    input=f"q{i}",
+                    scores=[
+                        EvalScore(name="a", value=1.0, metadata={"error.type": "Y"}),
+                        EvalScore(name="b", value=1.0, metadata={"gen_ai.evaluation.name": "z"}),
+                    ],
+                )
+        assert caplog.text.count("'error.type'") == 1
+        assert caplog.text.count("'gen_ai.evaluation.name'") == 1
+        assert len(events(EVALUATION)) == 6
 
 
 class TestEvalScoreEvaluator:
