@@ -1,0 +1,4 @@
+opensearch-genai-observability-sdk-py>=0.3.0
+crewai[bedrock]>=1.0.0
+opentelemetry-instrumentation-crewai>=0.52.0
+opentelemetry-instrumentation-bedrock>=0.52.0
