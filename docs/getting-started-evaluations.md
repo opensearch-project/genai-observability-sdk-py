@@ -345,7 +345,7 @@ def right_tool(input, output, expected):
 
 ### trajectory_match
 
-Compare the tool path read from the trace's `execute_tool` spans with a golden path. Flush the spans first and allow a few seconds for ingestion.
+Compare the tool path read from the trace's `execute_tool` spans with a golden path. Flush the spans first and allow a few seconds for ingestion. `spans_of()` fetches a trace once and caches it by trace id, so `trajectory_match`, `no_loops`, `latency_ok` and `cost` share one fetch per case instead of each polling OpenSearch (and sleeping) again.
 
 ```python
 import time
@@ -357,8 +357,17 @@ from opensearch_genai_observability_sdk_py import OpenSearchTraceRetriever
 retriever = OpenSearchTraceRetriever(host=OPENSEARCH_URL, auth=AUTH, verify_certs=False)
 
 
+_spans_by_trace = {}  # trace id -> spans, so every trace scorer of a case shares one fetch
+
+
 def spans_of(trace_id, timeout_s=60):
-    """The trace's spans, once the count stops changing."""
+    """The trace's spans, once the count stops changing. Fetched once per trace."""
+    if trace_id not in _spans_by_trace:
+        _spans_by_trace[trace_id] = _fetch_spans(trace_id, timeout_s)
+    return _spans_by_trace[trace_id]
+
+
+def _fetch_spans(trace_id, timeout_s):
     trace.get_tracer_provider().force_flush()  # export the agent's spans now
     spans, seen, deadline = [], -1, time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -548,7 +557,7 @@ Add an online evaluator for this agent with the OpenSearch GenAI observability S
 | No pass / fail, only "Scored" | No declared rule | Return a `bool`, pass `threshold=`, or a `pass` / `fail` label |
 | A long expected output does not match a filter | String attributes longer than the template's `ignore_above` (256) are stored but not indexed | Expected. They are still shown on the result |
 | The judge prompt is not on the result | By design: results carry `gen_ai.prompt.name` / `.version` only | Open the judge trace (`judge_trace_id`); the prompt is on its LLM span as `gen_ai.system_instructions` |
-| Trace-based scorers see too few spans | Spans are batched and ingested a few seconds later | `trace.get_tracer_provider().force_flush()`, then poll until the span count is stable (the cookbook's `spans_of`) |
+| Trace-based scorers see too few spans | Spans are batched and ingested a few seconds later | `trace.get_tracer_provider().force_flush()`, then poll until the span count is stable, once per trace (the cookbook's `spans_of`) |
 | `zsh: no matches found` on a `curl` | Unquoted `?` in the URL | Quote the URL |
 
 More in [agent-evaluations.md, Troubleshooting](agent-evaluations.md#troubleshooting).
