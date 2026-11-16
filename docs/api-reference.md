@@ -63,7 +63,7 @@ Existing setups are left alone: if a global `LoggerProvider` is already configur
 
 ## `observe()`
 
-Single tracing primitive — works as both a **decorator** and a **context manager**. Creates an OTel span with GenAI semantic convention attributes.
+Single tracing primitive: works as both a **decorator** and a **context manager**. Creates an OTel span with GenAI semantic convention attributes.
 
 **As a decorator:**
 

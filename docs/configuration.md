@@ -12,10 +12,10 @@ How `register()` finds its endpoints, how to set it up with environment variable
 
 | Environment Variable | Description | Default |
 |---|---|---|
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Full OTLP traces endpoint URL | — |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Base OTLP endpoint URL (`/v1/traces` and `/v1/logs` appended over HTTP, used as-is over gRPC) | — |
-| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | Protocol for traces (`http/protobuf`, `grpc`) | — |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | Protocol for all signals (`http/protobuf`, `grpc`) | — |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Full OTLP traces endpoint URL | none |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Base OTLP endpoint URL (`/v1/traces` and `/v1/logs` appended over HTTP, used as-is over gRPC) | none |
+| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | Protocol for traces (`http/protobuf`, `grpc`) | none |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Protocol for all signals (`http/protobuf`, `grpc`) | none |
 | `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Full OTLP logs endpoint URL (evaluation events), e.g. the OSIS logs pipeline | see [Endpoints](#endpoints-traces-and-evaluation-logs) |
 | `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | Protocol for logs (`http/protobuf`, `grpc`) | `OTEL_EXPORTER_OTLP_PROTOCOL` |
 | `OTEL_EXPORTER_OTLP_COMPRESSION` | Compression for all signals (`none`, `gzip`); must match the pipeline | `none` |
