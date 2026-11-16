@@ -1,0 +1,2 @@
+opensearch-genai-observability-sdk-py[anthropic]>=0.3.0
+anthropic[bedrock]>=1.14
