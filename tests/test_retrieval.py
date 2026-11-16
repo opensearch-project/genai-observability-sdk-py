@@ -11,6 +11,7 @@ import pytest
 from opensearch_genai_observability_sdk_py.retrieval import (
     Message,
     OpenSearchTraceRetriever,
+    SpanRecord,
     _extract_messages_from_doc,
     _parse_messages,
     map_span_doc,
@@ -233,6 +234,13 @@ class TestMapSpanDoc:
         span = map_span_doc(doc)
         assert span.agent_name == "Weather"
         assert span.agent_version == "v2"
+
+    def test_positional_fields_keep_their_order(self):
+        """agent_version is the last field: positional construction is unchanged."""
+        span = SpanRecord("t", "s", "", "chat x", "st", "et", "chat", "agent", "gpt-4o")
+        assert span.agent_name == "agent"
+        assert span.model == "gpt-4o"
+        assert span.agent_version == ""
 
     def test_agent_version_missing_is_empty(self):
         assert map_span_doc({"attributes": {"gen_ai.agent.name": "Weather"}}).agent_version == ""

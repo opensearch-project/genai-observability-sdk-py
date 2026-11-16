@@ -63,7 +63,6 @@ class SpanRecord:
     end_time: str
     operation_name: str  # invoke_agent | execute_tool | chat
     agent_name: str = ""
-    agent_version: str = ""
     model: str = ""
     input_messages: list[Message] = field(default_factory=list)
     output_messages: list[Message] = field(default_factory=list)
@@ -73,6 +72,8 @@ class SpanRecord:
     input_tokens: int = 0
     output_tokens: int = 0
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+    # Last, so positional construction of the earlier fields keeps working.
+    agent_version: str = ""
 
 
 @dataclass
