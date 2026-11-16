@@ -21,6 +21,6 @@
 
 ## Documentation
 
-- When changing public API (function signatures, parameters, exports), cross-check README.md examples still work.
-- Verify any code snippets in README.md reflect current API before submitting PR.
-- When adding new APIs or functionality, include a concise usage example in README.md. No boilerplate or filler.
+- When changing public API (function signatures, parameters, exports), cross-check the examples in README.md and docs/api-reference.md still work.
+- Verify any code snippets in README.md and docs/ reflect current API before submitting PR.
+- When adding new APIs or functionality, include a concise usage example in docs/api-reference.md (and in the README quick start only if it is a core path). No boilerplate or filler.
