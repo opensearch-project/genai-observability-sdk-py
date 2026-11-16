@@ -1,0 +1,4 @@
+opensearch-genai-observability-sdk-py>=0.3.0
+strands-agents>=1.64.0
+mlflow>=3
+boto3
