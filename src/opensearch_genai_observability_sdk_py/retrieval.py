@@ -111,6 +111,8 @@ def _parse_messages(raw: str | list | None) -> list[Message]:
         return []
     messages: list[Message] = []
     for item in items if isinstance(items, list) else [items]:
+        if not isinstance(item, dict):
+            continue  # not a GenAI message, for example a JSON-encoded plain string
         role = item.get("role", "unknown")
         parts = item.get("parts", [])
         text_parts = [

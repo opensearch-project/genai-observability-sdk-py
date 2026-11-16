@@ -97,6 +97,11 @@ class TestParseMessages:
         raw = json.dumps([{"parts": [{"type": "text", "content": "hi"}]}])
         assert _parse_messages(raw)[0].role == "unknown"
 
+    def test_plain_string_is_not_a_message(self):
+        """A JSON-encoded plain string (some instrumentations) is skipped, not a crash."""
+        assert _parse_messages(json.dumps("Simulated response")) == []
+        assert _parse_messages(json.dumps(["text", {"role": "user", "parts": []}])) == []
+
 
 # ---------------------------------------------------------------------------
 # _extract_messages_from_doc
