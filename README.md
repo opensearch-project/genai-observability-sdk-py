@@ -95,6 +95,10 @@ Each case is its own agent trace, and each score is one `gen_ai.evaluation.resul
 
 The docs index is [docs/README.md](docs/README.md).
 
+## TypeScript SDK
+
+Looking for the TypeScript version? See [opensearch-genai-observability-sdk-ts](https://github.com/opensearch-project/genai-observability-sdk-ts).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, tests and the pull request process.
@@ -105,7 +109,7 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## License
 
-Apache-2.0
+This project is licensed under the [Apache License 2.0](LICENSE).
 
 ## Copyright
 
