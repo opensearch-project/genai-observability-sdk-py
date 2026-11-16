@@ -23,7 +23,7 @@ as explanation, and the judge model in `gen_ai.request.model` (set with
 
 Why `evaluate()` and not `Benchmark`: DeepEval metrics score one test case at a time, so
 each can be a scorer. `evaluate()` then links every result to the agent run, stamps
-`test.*` on the agent's root span, records the judge model, and turns a metric that raises
+`test.*` on the agent's root span, and turns a metric that raises
 (for example `MissingTestCaseParamsError`) into an evaluator error result. For libraries
 that score a whole dataset at once, see `../ragas` and `../mlflow` (`Benchmark`).
 

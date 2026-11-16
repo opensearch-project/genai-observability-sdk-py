@@ -71,11 +71,12 @@ if any(errors.values()):
     raise RuntimeError(f"MLflow judges failed: {errors}")
 
 
-# Benchmark has no judge_model argument: the judge is named in the run description.
+# The run metadata records the judge model on every result.
 with Benchmark(
     "travel-assistant-suite-mlflow",
     run_name="mlflow judges",
-    run_description=f"MLflow {', '.join(SCORERS.values())}; judge {JUDGE}",
+    run_description=f"MLflow {', '.join(SCORERS.values())}",
+    metadata={"gen_ai.request.model": JUDGE_MODEL_ID},
 ) as benchmark:
     for _, row in df.iterrows():
         # Match the row to its case by the expectation (each case has its own).

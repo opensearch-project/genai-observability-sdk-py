@@ -61,11 +61,12 @@ df = ragas_evaluate(
     raise_exceptions=True,  # by default a failed judge call becomes NaN
 ).to_pandas()
 
-# 3. Upload. Benchmark has no judge_model argument: the judge is named in the run description.
+# 3. Upload. The run metadata records the judge model on every result.
 with Benchmark(
     "travel-assistant-suite-ragas",
     run_name="ragas judges",
-    run_description=f"RAGAS {', '.join(THRESHOLDS)}; judge {JUDGE_MODEL_ID}",
+    run_description=f"RAGAS {', '.join(THRESHOLDS)}",
+    metadata={"gen_ai.request.model": JUDGE_MODEL_ID},
 ) as benchmark:
     for case, run, (_, row) in zip(cases, runs, df.iterrows(), strict=True):
         scores = []

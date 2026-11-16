@@ -26,10 +26,10 @@ Notes:
 - MLflow records a failed judge call in the results table instead of raising. The script
   stops before uploading if any `<scorer>/error_message` is set, so a failed judge is
   never uploaded as a `fail`.
-- `Benchmark` (and `EvalScore`) have no `judge_model` argument, so these results carry no
-  `gen_ai.request.model`; the judge is named in the run description. To record it on each
-  result, score per case inside `evaluate()` with `@scorer(judge_model=...)` (see
-  `../deepeval`).
+- The judge model is recorded on every result as `gen_ai.request.model`, set in the run
+  metadata: `Benchmark(..., metadata={"gen_ai.request.model": JUDGE_MODEL_ID})`.
+  `Benchmark.log(metadata=...)` and `EvalScore(metadata=...)` take the same keys (also
+  `gen_ai.prompt.name` / `gen_ai.prompt.version`) per case or per score.
 - MLflow calls `predict_fn` once more than there are cases (a validation call first), so
   one agent trace per run has no results.
 - MLflow writes `mlruns/` and `mlflow.db` in the working directory. Set
@@ -52,7 +52,8 @@ With OpenAI as the judge, set `OPENAI_API_KEY` and `JUDGE = "openai:/gpt-4o-mini
 - Spans (service `travel-assistant-evals-mlflow`): one trace per `predict_fn` call, root
   `invoke_agent travel_assistant` with `chat` and `execute_tool` spans.
 - Results: 10 (5 cases x 2 judges) in run `mlflow judges` of suite
-  `travel-assistant-suite-mlflow`, each parented to its agent root span.
+  `travel-assistant-suite-mlflow`, each parented to its agent root span and carrying the
+  judge model in `gen_ai.request.model`.
 
 ```
 GET otel-v1-genai-evaluation/_search

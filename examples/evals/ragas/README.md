@@ -22,10 +22,11 @@ All are `llm_judge` results on a 0 to 1 scale. The judge is Claude on Bedrock
 
 Notes:
 
-- `Benchmark` (and `EvalScore`) have no `judge_model` argument, so these results carry no
-  `gen_ai.request.model`; the judge is named in the run description. To record the judge
-  model on each result, score per case inside `evaluate()` with
-  `@scorer(judge_model=...)` (see `../deepeval`).
+- The judge model is recorded on every result as `gen_ai.request.model`, set in the run
+  metadata: `Benchmark(..., metadata={"gen_ai.request.model": JUDGE_MODEL_ID})`. The
+  same works per case (`Benchmark.log(metadata=...)`) or per score
+  (`EvalScore(metadata=...)`), for example with `gen_ai.prompt.name` /
+  `gen_ai.prompt.version` when your judge prompt has a name and version.
 - `raise_exceptions=True`: by default RAGAS turns a failed judge call into `NaN`. A metric
   that is still `NaN` is skipped, not sent as a score.
 - RAGAS writes no reason text, so the results have no explanation.
@@ -53,7 +54,8 @@ With OpenAI instead of Bedrock, set `OPENAI_API_KEY` and drop the `llm=` and
 - Spans (service `travel-assistant-evals-ragas`): one trace per case, root
   `invoke_agent travel_assistant` with `chat` and `execute_tool` spans.
 - Results: 15 (5 cases x 3 metrics) in run `ragas judges` of suite
-  `travel-assistant-suite-ragas`, each parented to its agent root span.
+  `travel-assistant-suite-ragas`, each parented to its agent root span and carrying the
+  judge model in `gen_ai.request.model`.
 
 ```
 GET otel-v1-genai-evaluation/_search
