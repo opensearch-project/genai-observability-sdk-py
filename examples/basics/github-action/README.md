@@ -41,7 +41,7 @@ Each score is recorded under its evaluation name (`gen_ai.evaluation.name`: the 
 
 ## 2. Endpoints
 
-Traces and evaluation logs share one base URL (`endpoint`) or use one full URL each (`traces-endpoint`, `logs-endpoint`); see [Endpoints: traces and evaluation logs](../../docs/configuration.md#endpoints-traces-and-evaluation-logs) in the SDK docs.
+Traces and evaluation logs share one base URL (`endpoint`) or use one full URL each (`traces-endpoint`, `logs-endpoint`); see [Endpoints: traces and evaluation logs](../../../docs/configuration.md#endpoints-traces-and-evaluation-logs) in the SDK docs.
 
 - **OpenSearch Ingestion (OSIS):** one pipeline per signal. Create a traces pipeline and a logs pipeline (OTLP logs source; Data Prepper routes the evaluation events to `otel-v1-genai-evaluation-*`), then pass both URLs as `traces-endpoint` and `logs-endpoint` (always together; one alone is a configuration error) and set `aws-region` to sign both with SigV4. Give the workflow AWS credentials with `osis:Ingest` on both pipelines, for example with `aws-actions/configure-aws-credentials` and an OIDC role.
 - **OTel Collector / Data Prepper `otlp` source / a single OSIS `otlp` pipeline:** pass the OTLP base URL as `endpoint` (for example `http://collector:4318` or `https://<host>/<pipeline>`; the SDK appends `/v1/traces` and `/v1/logs`, and a value ending in `/v1/traces` is a configuration error) and leave `aws-region` empty. Extra headers (for example auth) can be set with the standard `OTEL_EXPORTER_OTLP_HEADERS` env var on the step.
@@ -105,8 +105,8 @@ So every evaluation run links back to the workflow run that produced it. Nothing
 The script reads the same settings from flags (or `EVAL_*` env vars), so you can try a suite against a local collector before wiring CI:
 
 ```bash
-python examples/github-action/run_suite.py \
-  --suite examples/github-action/sample_suite.py:suite \
+python examples/basics/github-action/run_suite.py \
+  --suite examples/basics/github-action/sample_suite.py:suite \
   --endpoint http://localhost:4318 \
   --service-name my-agent-local \
   --dashboards-url http://localhost:5601 \

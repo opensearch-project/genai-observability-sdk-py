@@ -21,8 +21,8 @@ scorer (error.type, no score). Data Prepper routes the events to the
 otel-v1-genai-evaluation-* index.
 
 Usage:
-    AGENT_VERSION=v1 python examples/07_benchmarks.py
-    AGENT_VERSION=v2 python examples/07_benchmarks.py
+    AGENT_VERSION=v1 python examples/basics/07_benchmarks.py
+    AGENT_VERSION=v2 python examples/basics/07_benchmarks.py
     # Open agent-health UI → Benchmarks → select runs → Compare
 
 Prerequisites:

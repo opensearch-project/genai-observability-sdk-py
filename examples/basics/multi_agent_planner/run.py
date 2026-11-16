@@ -7,6 +7,7 @@
 #
 # Modifications Copyright OpenSearch Contributors. See
 # GitHub history for details.
+# ruff: noqa: S311  (random is used only to simulate latency, tokens and models)
 
 """Multi-Agent Travel Planner — instrumented with opensearch-genai-observability-sdk-py.
 
@@ -17,10 +18,10 @@ span.set_attribute() calls) with register() + @observe + enrich().
 
 Usage:
     # Terminal 1: start the mini collector
-    python examples/mini_collector_http.py
+    python examples/basics/mini_collector_http.py
 
     # Terminal 2: run this example
-    python examples/multi_agent_planner/run.py
+    python examples/basics/multi_agent_planner/run.py
 
 Span tree produced:
 
@@ -49,11 +50,16 @@ register(
 # --- Shared data ---
 
 MODELS = [
-    "claude-sonnet-4.5", "gpt-4.1", "gpt-4o-mini", "gemini-2.5-flash", "nova-pro",
+    "claude-sonnet-4.5",
+    "gpt-4.1",
+    "gpt-4o-mini",
+    "gemini-2.5-flash",
+    "nova-pro",
 ]
 SYSTEMS = {
     "claude-sonnet-4.5": "anthropic",
-    "gpt-4.1": "openai", "gpt-4o-mini": "openai",
+    "gpt-4.1": "openai",
+    "gpt-4o-mini": "openai",
     "gemini-2.5-flash": "google",
     "nova-pro": "amazon",
 }
@@ -86,15 +92,18 @@ SAMPLE_EVENTS = {
 
 
 def _pick_model():
-    model = random.choice(MODELS)    return model, SYSTEMS[model]
+    model = random.choice(MODELS)
+    return model, SYSTEMS[model]
 
 
 # --- Tools (leaf-level) ---
 
+
 @observe(name="fetch_weather_api", op=Op.EXECUTE_TOOL)
 def fetch_weather(location: str) -> dict:
     """Fetch weather data for a location."""
-    time.sleep(random.uniform(0.05, 0.15))    key = location.lower()
+    time.sleep(random.uniform(0.05, 0.15))
+    key = location.lower()
     data = SAMPLE_WEATHER.get(key, {"temperature": "68°F", "condition": "sunny", "humidity": "50%"})
     return {"location": location, **data}
 
@@ -102,12 +111,14 @@ def fetch_weather(location: str) -> dict:
 @observe(name="fetch_events_api", op=Op.EXECUTE_TOOL)
 def fetch_events(destination: str) -> list[dict]:
     """Fetch local events for a destination."""
-    time.sleep(random.uniform(0.05, 0.15))    key = destination.lower()
+    time.sleep(random.uniform(0.05, 0.15))
+    key = destination.lower()
     default = [{"name": f"{destination} Walking Tour", "type": "tour", "venue": "City Center"}]
     return SAMPLE_EVENTS.get(key, default)
 
 
 # --- Sub-agents ---
+
 
 @observe(name="weather-agent", op=Op.INVOKE_AGENT)
 def weather_agent(destination: str) -> dict:
@@ -121,7 +132,9 @@ def weather_agent(destination: str) -> dict:
 
     # LLM "thinking" step — decides which tool to call
     with observe("weather-reasoning", op=Op.CHAT):
-        input_tokens = random.randint(100, 500)        output_tokens = random.randint(50, 200)        enrich(
+        input_tokens = random.randint(100, 500)
+        output_tokens = random.randint(50, 200)
+        enrich(
             model=model,
             provider=provider,
             input_tokens=input_tokens,
@@ -134,7 +147,7 @@ def weather_agent(destination: str) -> dict:
 
     return {
         "response": f"The weather in {destination} is {weather['condition']} "
-                     f"at {weather['temperature']} with {weather['humidity']} humidity.",
+        f"at {weather['temperature']} with {weather['humidity']} humidity.",
         **weather,
     }
 
@@ -151,7 +164,9 @@ def events_agent(destination: str) -> dict:
 
     # LLM "thinking" step
     with observe("events-reasoning", op=Op.CHAT):
-        input_tokens = random.randint(100, 500)        output_tokens = random.randint(50, 200)        enrich(
+        input_tokens = random.randint(100, 500)
+        output_tokens = random.randint(50, 200)
+        enrich(
             model=model,
             provider=provider,
             input_tokens=input_tokens,
@@ -196,12 +211,19 @@ def plan_trip(destination: str) -> dict:
         provider=provider,
         agent_id="travel-planner-001",
         tool_definitions=TOOL_DEFINITIONS,
-        input_messages=[{"role": "user", "parts": [{"type": "text", "content": f"Plan a trip to {destination}"}]}],
+        input_messages=[
+            {
+                "role": "user",
+                "parts": [{"type": "text", "content": f"Plan a trip to {destination}"}],
+            }
+        ],
     )
 
     # Step 1: LLM "planning" step — decides to call both sub-agents
     with observe("planning", op=Op.CHAT):
-        input_tokens = random.randint(500, 2000)        output_tokens = random.randint(100, 500)        enrich(
+        input_tokens = random.randint(500, 2000)
+        output_tokens = random.randint(100, 500)
+        enrich(
             model=model,
             provider=provider,
             input_tokens=input_tokens,
@@ -235,7 +257,9 @@ def plan_trip(destination: str) -> dict:
     recommendation = " ".join(parts)
 
     enrich(
-        output_messages=[{"role": "assistant", "parts": [{"type": "text", "content": recommendation}]}],
+        output_messages=[
+            {"role": "assistant", "parts": [{"type": "text", "content": recommendation}]}
+        ],
     )
 
     return {

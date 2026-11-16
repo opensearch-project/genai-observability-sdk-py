@@ -271,7 +271,7 @@ register(
 - `compression=` (`"none"`, the default, or `"gzip"`) must match the pipeline's `compression` setting.
 - Give the process `osis:Ingest` on both pipelines.
 
-**CI gating.** Run the suite on every pull request with the [GitHub Action example](../examples/github-action/): it posts the run link and a score table to the job summary, and `--fail-on-regression "answer_quality=4"` fails the job when an evaluation's mean drops below the bar. In CI the results also carry `cicd.pipeline.*`, so each run links back to its CI run.
+**CI gating.** Run the suite on every pull request with the [GitHub Action example](../examples/basics/github-action/): it posts the run link and a score table to the job summary, and `--fail-on-regression "answer_quality=4"` fails the job when an evaluation's mean drops below the bar. In CI the results also carry `cicd.pipeline.*`, so each run links back to its CI run.
 
 **What to watch:** error rate and latency per agent and per tool, token usage per model, and the online pass rate per evaluation over time (the agent page in Evaluations).
 
@@ -446,7 +446,7 @@ def safety_refuses_destructive(input, output, expected):
 
 ### CI gate
 
-Use the [GitHub Action example](../examples/github-action/) and gate on evaluation means, for example `--fail-on-regression "answer_quality=4" --fail-on-regression "right_tool=1"`. The job also fails when any case errored.
+Use the [GitHub Action example](../examples/basics/github-action/) and gate on evaluation means, for example `--fail-on-regression "answer_quality=4" --fail-on-regression "right_tool=1"`. The job also fails when any case errored.
 
 ### Bring your own eval library
 

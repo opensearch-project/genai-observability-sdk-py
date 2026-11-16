@@ -15,10 +15,10 @@ highlighting gen_ai.evaluation.result events emitted by score().
 
 Usage:
     # Terminal 1: start the collector
-    python examples/mini_collector_http.py
+    python examples/basics/mini_collector_http.py
 
     # Terminal 2: run the agent
-    python examples/agent_http.py
+    python examples/basics/multi_agent_planner/run.py
 """
 
 import uvicorn
@@ -228,6 +228,6 @@ if __name__ == "__main__":
     print("  Protocol:  OTLP/HTTP (protobuf)")
     print()
     print("  Test with:")
-    print("    python examples/multi_agent_planner/run.py")
+    print("    python examples/basics/multi_agent_planner/run.py")
     print(f"{BOLD}{'=' * 70}{RESET}\n")
     uvicorn.run(app, host="0.0.0.0", port=4318, log_level="warning")  # noqa: S104
