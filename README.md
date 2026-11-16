@@ -732,7 +732,7 @@ Requires the `[opensearch]` extra: `pip install opensearch-genai-observability-s
 
 ## Auto-Instrumented Libraries
 
-`register()` automatically discovers installed instrumentor packages via OTel entry points and activates each one whose library is installed. No code changes needed: install the extras for the providers you use, plus the provider libraries themselves (an extra installs only the instrumentor), and their calls are traced automatically. Instrumentors whose library is missing are skipped (logged at DEBUG), and only the activated ones are counted in the "Auto-instrumented N libraries" log line.
+`register()` automatically discovers installed instrumentor packages via OTel entry points and activates each one whose library is installed. No code changes needed: install the extras for the providers you use, plus the provider libraries themselves (an extra installs only the instrumentor), and their calls are traced automatically. Instrumentors whose library is missing are skipped (logged at DEBUG); a library installed at a version the instrumentor does not support is skipped with a WARNING that names the library and the required version. Only the activated ones are counted in the "Auto-instrumented N libraries" log line.
 
 | Category | Extras / packages |
 |---|---|

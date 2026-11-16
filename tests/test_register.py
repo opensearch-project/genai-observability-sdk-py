@@ -1304,6 +1304,91 @@ class TestAutoInstrument:
         assert any("inert: not activated" in m for m in self._messages(records, "DEBUG"))
         assert self._messages(records, "WARNING")[0].startswith("No instrumented libraries found")
 
+    def test_version_conflict_is_a_warning_naming_library_and_version(self, caplog):
+        """openai 0.28 installed, instrumentor needs openai >= 1.0: WARNING, not DEBUG."""
+        cls = _instrumentor_class(["opentelemetry-api >= 999.0"])
+        records = self._run([_FakeEntryPoint("openai", lambda: cls)], caplog)
+        assert cls.calls == []
+        warnings_ = self._messages(records, "WARNING")
+        conflict = [m for m in warnings_ if m.startswith("Skipped instrumentor openai:")]
+        assert len(conflict) == 1
+        assert "requires opentelemetry-api >= 999.0" in conflict[0]
+        assert "opentelemetry-api 1." in conflict[0]  # the installed version
+        assert not [r for r in records if r.levelname == "ERROR"]
+
+    def test_missing_library_stays_debug(self, caplog):
+        cls = _instrumentor_class(_MISSING)
+        records = self._run([_FakeEntryPoint("absent", lambda: cls)], caplog)
+        assert not [m for m in self._messages(records, "WARNING") if "Skipped" in m]
+        assert any(
+            "absent: it requires no-such-library-for-sdk-tests >= 1.0, which is not installed" in m
+            for m in self._messages(records, "DEBUG")
+        )
+
+    def test_instrumentor_conflict_override_decides(self, caplog):
+        """The instrumentor's own _check_dependency_conflicts() wins over its declared deps."""
+        cls = _instrumentor_class(_MISSING)
+        cls._check_dependency_conflicts = lambda self: None
+        records = self._run([_FakeEntryPoint("custom", lambda: cls)], caplog)
+        assert len(cls.calls) == 1
+        assert "Auto-instrumented 1 libraries: custom" in self._messages(records, "INFO")
+
+    def test_uses_raise_exception_on_conflict(self, caplog):
+        cls = _instrumentor_class(_SATISFIED)
+        seen = {}
+        original = cls.instrument
+
+        def spy(self, **kwargs):
+            seen.update(kwargs)
+            return original(self, **kwargs)
+
+        cls.instrument = spy
+        self._run([_FakeEntryPoint("present", lambda: cls)], caplog)
+        assert seen.get("raise_exception_on_conflict") is True
+        assert len(cls.calls) == 1
+
+    def test_fallback_without_dependency_conflict_error(self, caplog):
+        """Older opentelemetry-instrumentation: the instrumentor's check runs first."""
+        ok = _instrumentor_class(_SATISFIED)
+        bad = _instrumentor_class(["opentelemetry-api >= 999.0"])
+        eps = [_FakeEntryPoint("ok", lambda: ok), _FakeEntryPoint("bad", lambda: bad)]
+        with patch.object(_register_mod, "_dependency_conflict_error", return_value=None):
+            records = self._run(eps, caplog)
+        assert len(ok.calls) == 1
+        assert bad.calls == []
+        assert any(
+            m.startswith("Skipped instrumentor bad: it requires")
+            for m in self._messages(records, "WARNING")
+        )
+        assert not [r for r in records if r.levelname == "ERROR"]
+
+    def test_non_base_instrumentor_without_dependencies_is_activated(self, caplog):
+        """Entry points that only define instrument(tracer_provider=...) still activate."""
+        calls = []
+
+        class Plain:
+            def instrument(self, **kwargs):
+                calls.append(kwargs)
+
+        records = self._run([_FakeEntryPoint("plain", lambda: Plain)], caplog)
+        assert len(calls) == 1 and "tracer_provider" in calls[0]
+        assert "raise_exception_on_conflict" not in calls[0]
+        assert "Auto-instrumented 1 libraries: plain" in self._messages(records, "INFO")
+
+    def test_non_base_instrumentor_whose_dependencies_raise_is_activated(self, caplog):
+        calls = []
+
+        class Odd:
+            def instrumentation_dependencies(self):
+                raise RuntimeError("not implemented")
+
+            def instrument(self, **kwargs):
+                calls.append(kwargs)
+
+        records = self._run([_FakeEntryPoint("odd", lambda: Odd)], caplog)
+        assert len(calls) == 1
+        assert "Auto-instrumented 1 libraries: odd" in self._messages(records, "INFO")
+
     def test_duplicate_names_instrumented_once(self, caplog):
         cls = _instrumentor_class(_SATISFIED)
         eps = [_FakeEntryPoint("dup", lambda: cls), _FakeEntryPoint("dup", lambda: cls)]
