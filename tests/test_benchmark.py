@@ -1654,6 +1654,36 @@ class TestScorerJudgeContext:
         assert by_name["rel"]["gen_ai.request.model"] == "ragas-judge"
         assert desc not in by_name["rel"]
 
+    def test_rule_and_type_only_on_the_scorers_own_evaluator(self, events):
+        @scorer(
+            name="mixed",
+            evaluator="checks_x",
+            evaluator_type="llm_judge",
+            threshold=0.7,
+            score_min=0.0,
+            score_max=1.0,
+        )
+        def mixed(i, o, e):
+            return [
+                EvalScore(name="own", value=0.8),
+                EvalScore(name="faith", value=0.5, evaluator="deepeval.faithfulness"),
+            ]
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[mixed])
+        by_name = {
+            r.log_record.attributes["gen_ai.evaluation.name"]: r.log_record.attributes
+            for r in events(EVALUATION)
+        }
+        thr = "opensearch.gen_ai.evaluation.score.threshold"
+        etype = "opensearch.gen_ai.evaluation.evaluator.type"
+        assert by_name["own"][thr] == 0.7
+        assert by_name["own"][etype] == "llm_judge"
+        assert by_name["own"]["gen_ai.evaluation.score.label"] == "pass"
+        assert thr not in by_name["faith"]
+        assert etype not in by_name["faith"]
+        assert "opensearch.gen_ai.evaluation.score.max" not in by_name["faith"]
+        assert "gen_ai.evaluation.score.label" not in by_name["faith"]
+
     def test_judge_context_default_evaluator_is_function_name(self, events):
         @scorer(judge_model="m1")
         def judge_fn(i, o, e):

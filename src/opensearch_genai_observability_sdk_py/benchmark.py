@@ -311,9 +311,15 @@ def _verdict(s: EvalScore) -> str | None:
     return verdict
 
 
-def _apply_spec(s: EvalScore, spec: ScorerSpec | None) -> EvalScore:
-    """Fill the score's unset rule fields from the scorer declaration."""
-    if spec is None:
+def _apply_spec(s: EvalScore, spec: ScorerSpec | None, evaluator: str | None = None) -> EvalScore:
+    """Fill the score's unset rule fields from the scorer declaration.
+
+    Only for the scorer's own scores: a returned ``EvalScore`` that names a
+    different evaluator (for example ``deepeval.faithfulness``) keeps its own
+    rule, so the declaration's threshold, direction and bounds do not leak
+    onto it.
+    """
+    if spec is None or s.evaluator not in (None, evaluator):
         return s
     return dataclasses.replace(
         s,
@@ -591,7 +597,8 @@ def _emit_scores(
             explanation=s.explanation,
             level="span" if has_span else None,
             evaluator=s.evaluator or evaluator,
-            evaluator_type=s.evaluator_type or evaluator_type,
+            evaluator_type=s.evaluator_type
+            or (evaluator_type if spec is None or s.evaluator in (None, evaluator) else None),
             direction=s.direction,
             score_min=s.score_min,
             score_max=s.score_max,
@@ -1234,7 +1241,7 @@ def evaluate(
                 )
                 continue
 
-            produced = [_apply_spec(s, spec) for s in produced]
+            produced = [_apply_spec(s, spec, evaluator) for s in produced]
             for s in produced:
                 if s.value is not None:
                     case_scores[s.name] = s.value

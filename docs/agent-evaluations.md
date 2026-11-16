@@ -254,7 +254,7 @@ Record what an LLM judge checked and how, so a reader can tell two judge version
 | `judge_prompt_name` | `judge_prompt_name` | `gen_ai.prompt.name` |
 | `judge_prompt_version` | `judge_prompt_version` | `gen_ai.prompt.version` |
 
-`gen_ai.request.model`, `gen_ai.prompt.name` and `gen_ai.prompt.version` are the standard GenAI semantic convention names. There is no argument for the judge's full system prompt: see [Judge prompt](#judge-prompt). `Benchmark` has no judge arguments: set these keys in its run, case or `EvalScore` metadata. With `evaluate()`, the `@scorer(...)` description and judge fields apply to a returned `EvalScore` only when its `evaluator` is unset or equals the scorer's evaluator, so a scorer that returns results of other evaluators (for example `deepeval.faithfulness`) does not stamp its own judge on them.
+`gen_ai.request.model`, `gen_ai.prompt.name` and `gen_ai.prompt.version` are the standard GenAI semantic convention names. There is no argument for the judge's full system prompt: see [Judge prompt](#judge-prompt). `Benchmark` has no judge arguments: set these keys in its run, case or `EvalScore` metadata. With `evaluate()`, everything a `@scorer(...)` declares (description, judge fields, `evaluator_type`, `threshold`, `direction`, `score_min` / `score_max`) applies to a returned `EvalScore` only when its `evaluator` is unset or equals the scorer's evaluator, so a scorer that returns results of other evaluators (for example `deepeval.faithfulness`) does not stamp its own judge or pass rule on them.
 
 ```python
 from opensearch_genai_observability_sdk_py import score
