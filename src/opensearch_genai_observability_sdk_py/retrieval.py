@@ -26,13 +26,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Agent Traces lists a trace by its AI root: a trace root that is a GenAI span
-# (has gen_ai.operation.name), or a span marked with derived.gen_ai.is_root
-# (by Data Prepper, an SDK or the user), for example the agent span below an
-# HTTP server span.
+# list_root_spans() lists a trace by its agent root: a span marked with
+# derived.gen_ai.is_root (by Data Prepper, an SDK or the user), for example the
+# agent span below an HTTP server span, or a trace root (no parent) that is an
+# agent operation. A judge's own parentless chat span is not an agent root.
 _AI_ROOT_FIELD = f"attributes.{AGENT_ROOT_ATTRIBUTE}"
 _OPERATION_FIELD = "attributes.gen_ai.operation.name"
+_AGENT_OPERATIONS = ("invoke_agent", "create_agent")
 _CONVERSATION_FIELD = "attributes.gen_ai.conversation.id"
+_TRACE_ID_FIELD = "traceId"
+
+_ROOT_RULE_HINT = (
+    "list_root_spans() found no agent roots. A root is a span marked "
+    "derived.gen_ai.is_root, or a span without a parent whose gen_ai.operation.name "
+    "is invoke_agent or create_agent. Call mark_agent_root() in the agent's span, "
+    "or trace the agent with @observe(op=Op.INVOKE_AGENT)."
+)
+_root_hint_logged = False
 
 # Upper bound on the traces get_traces() collects for one conversation.
 DEFAULT_MAX_CONVERSATION_TRACES = 1000
@@ -176,15 +186,31 @@ def map_span_doc(doc: dict[str, Any]) -> SpanRecord:
     )
 
 
-def _drop_shadowed_ai_roots(docs: list[dict]) -> list[dict]:
-    """Drop marked spans whose trace is also listed through its GenAI root.
+def _agent_root_query() -> dict[str, Any]:
+    """Marked span, or a parentless span of an agent operation."""
+    return {
+        "bool": {
+            "should": [
+                {"term": {_AI_ROOT_FIELD: True}},
+                {
+                    "bool": {
+                        "filter": [
+                            {"term": {"parentSpanId": ""}},
+                            {"terms": {_OPERATION_FIELD: list(_AGENT_OPERATIONS)}},
+                        ]
+                    }
+                },
+            ],
+            "minimum_should_match": 1,
+        }
+    }
 
-    Only spans without a parent pass the GenAI-root condition, so a trace
-    with such a hit keeps that one; marked spans deeper in the same trace
-    (an SDK marking a nested span) are dropped, as in Agent Traces.
-    """
-    root_trace_ids = {d.get("traceId") for d in docs if not d.get("parentSpanId")}
-    return [d for d in docs if not d.get("parentSpanId") or d.get("traceId") not in root_trace_ids]
+
+def _log_root_hint_once() -> None:
+    global _root_hint_logged
+    if not _root_hint_logged:
+        _root_hint_logged = True
+        logger.info(_ROOT_RULE_HINT)
 
 
 # ---------------------------------------------------------------------------
@@ -285,61 +311,80 @@ class OpenSearchTraceRetriever:
         since: datetime | None = None,
         max_results: int = 50,
     ) -> list[SpanRecord]:
-        """List the AI roots of recent traces, newest first.
+        """List the agent roots of recent traces, newest first, one per trace.
 
-        Uses the Agent Traces rule: a span is an AI root when it is a trace
-        root that is a GenAI span (no parent, has ``gen_ai.operation.name``)
-        or it is marked with ``derived.gen_ai.is_root``. For an agent behind
-        an HTTP handler this returns the marked agent span (with its messages
-        and agent name), not the HTTP server span. A marked span in a trace
-        that also has a GenAI root is left out, so a trace is listed once,
-        unless several agents in it are marked (one record each).
+        A span is an agent root when it is marked with
+        ``derived.gen_ai.is_root`` (by Data Prepper, ``mark_agent_root()`` or
+        the user), or when it has no parent and its ``gen_ai.operation.name``
+        is ``invoke_agent`` or ``create_agent``. Other parentless GenAI spans,
+        such as a traced LLM judge's own ``chat`` span, are not listed. For
+        an agent behind an HTTP handler this returns the marked agent span
+        (with its messages and agent name), not the HTTP server span.
 
+        Each trace is listed once: by its parentless agent root when it has
+        one, else by its earliest marked span (for example when the agents
+        of several services in one trace are marked). Traces are picked by
+        their newest matching span since *since*; the returned root may have
+        started earlier.
+
+        When nothing matches, one INFO line per process names this rule.
         Indices where the marker is not mapped yet (no marked span so far)
         are fine: the marker condition matches nothing there.
 
         Args:
             services: Only return traces from these service names.
-            since: Only return traces started after this time.
-                Defaults to 15 minutes ago.
-            max_results: Maximum number of root spans to return.
+            since: Only return traces with an agent root started after this
+                time. Defaults to 15 minutes ago.
+            max_results: Maximum number of traces (root spans) to return.
         """
+        if max_results <= 0:
+            return []
         if since is None:
             since = datetime.now(timezone.utc) - timedelta(minutes=15)
         since_iso = since.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        service_filter = [{"terms": {"serviceName": services}}] if services else []
 
-        ai_root = {
-            "bool": {
-                "should": [
-                    {
-                        "bool": {
-                            "filter": [
-                                {"term": {"parentSpanId": ""}},
-                                {"exists": {"field": _OPERATION_FIELD}},
-                            ]
-                        }
-                    },
-                    {"term": {_AI_ROOT_FIELD: True}},
-                ],
-                "minimum_should_match": 1,
-            }
-        }
-        must: list[dict] = [
-            ai_root,
-            {"range": {"startTime": {"gte": since_iso}}},
-        ]
-        if services:
-            must.append({"terms": {"serviceName": services}})
-
-        body = {
-            # A shadowed marked span takes a slot in the page; fetch extra so
-            # dropping it still leaves max_results roots when there are more.
-            "size": min(max_results * 2, 10000),
+        # 1. Up to max_results distinct traces with an agent root since `since`.
+        traces_body = {
+            "size": min(max_results, 10000),
+            "_source": [_TRACE_ID_FIELD],
             "sort": [{"startTime": "desc"}],
-            "query": {"bool": {"must": must}},
+            "collapse": {"field": _TRACE_ID_FIELD},
+            "query": {
+                "bool": {
+                    "filter": [
+                        _agent_root_query(),
+                        {"range": {"startTime": {"gte": since_iso}}},
+                        *service_filter,
+                    ]
+                }
+            },
         }
-        docs = _drop_shadowed_ai_roots(self._search(body))
-        return [map_span_doc(doc) for doc in docs[:max_results]]
+        found = (d.get(_TRACE_ID_FIELD) for d in self._search(traces_body))
+        trace_ids = [t for t in dict.fromkeys(found) if t]
+        if not trace_ids:
+            _log_root_hint_once()
+            return []
+
+        # 2. The root of each of those traces, at any time: the parentless
+        # agent root (scores 1) first, else the earliest marked span.
+        roots_body = {
+            "size": len(trace_ids),
+            "sort": [{"_score": "desc"}, {"startTime": "asc"}],
+            "collapse": {"field": _TRACE_ID_FIELD},
+            "query": {
+                "bool": {
+                    "filter": [
+                        _agent_root_query(),
+                        {"terms": {_TRACE_ID_FIELD: trace_ids}},
+                        *service_filter,
+                    ],
+                    "should": [{"constant_score": {"filter": {"term": {"parentSpanId": ""}}}}],
+                }
+            },
+        }
+        by_trace = {d.get(_TRACE_ID_FIELD): d for d in self._search(roots_body)}
+        return [map_span_doc(by_trace[t]) for t in trace_ids if t in by_trace]
 
     def find_evaluated_trace_ids(
         self,

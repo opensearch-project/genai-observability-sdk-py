@@ -8,6 +8,7 @@ import unittest.mock
 
 import pytest
 
+from opensearch_genai_observability_sdk_py import retrieval as retrieval_mod
 from opensearch_genai_observability_sdk_py.retrieval import (
     Message,
     OpenSearchTraceRetriever,
@@ -455,6 +456,8 @@ class TestGetSession:
 
 
 class TestListRootSpans:
+    """list_root_spans(): one agent root per trace, two queries."""
+
     @pytest.fixture
     def retriever(self):
         with unittest.mock.patch("opensearchpy.OpenSearch") as mock_cls:
@@ -463,34 +466,107 @@ class TestListRootSpans:
             return r
 
     @staticmethod
-    def _mock_search(retriever, docs):
-        retriever._mock_client.search.return_value = {
-            "hits": {"hits": [{"_source": d} for d in docs]}
-        }
+    def _mock_search(retriever, trace_ids, roots=()):
+        """Step 1 returns one (collapsed) hit per trace id, step 2 the roots."""
+        retriever._mock_client.search.side_effect = [
+            _hits([{"traceId": t} for t in trace_ids]),
+            _hits(list(roots)),
+        ]
 
-    def test_returns_root_spans(self, retriever):
-        self._mock_search(retriever, [_span_doc(trace_id="t1"), _span_doc(trace_id="t2")])
+    @staticmethod
+    def _bodies(retriever):
+        return [c.kwargs["body"] for c in retriever._mock_client.search.call_args_list]
+
+    def test_returns_root_spans_in_trace_order(self, retriever):
+        roots = [_span_doc(trace_id="t2", span_id="r2"), _span_doc(trace_id="t1", span_id="r1")]
+        self._mock_search(retriever, ["t1", "t2"], roots)
         results = retriever.list_root_spans()
-        assert len(results) == 2
-        assert results[0].trace_id == "t1"
+        assert [(r.trace_id, r.span_id) for r in results] == [("t1", "r1"), ("t2", "r2")]
+
+    def test_agent_root_condition(self, retriever):
+        """Marked span, or a parentless span of an agent operation (not any GenAI op)."""
+        self._mock_search(retriever, [])
+        retriever.list_root_spans()
+        (body,) = self._bodies(retriever)
+        rule = body["query"]["bool"]["filter"][0]["bool"]
+        assert rule["minimum_should_match"] == 1
+        assert rule["should"] == [
+            {"term": {"attributes.derived.gen_ai.is_root": True}},
+            {
+                "bool": {
+                    "filter": [
+                        {"term": {"parentSpanId": ""}},
+                        {
+                            "terms": {
+                                "attributes.gen_ai.operation.name": [
+                                    "invoke_agent",
+                                    "create_agent",
+                                ]
+                            }
+                        },
+                    ]
+                }
+            },
+        ]
+        # No bare parentSpanId filter: an HTTP server root must not be required.
+        assert {"term": {"parentSpanId": ""}} not in body["query"]["bool"]["filter"]
+
+    def test_judge_chat_root_is_not_an_agent_root(self, retriever):
+        """A judge's parentless chat span does not match: only agent operations do."""
+        self._mock_search(retriever, [])
+        retriever.list_root_spans()
+        rule = json.dumps(self._bodies(retriever)[0]["query"])
+        assert '"exists"' not in rule
+        assert '"chat"' not in rule
+
+    def test_traces_are_collapsed_to_max_results(self, retriever):
+        """Step 1 asks for max_results distinct traces, not max_results * 2 spans."""
+        self._mock_search(retriever, ["t1"], [_span_doc(trace_id="t1")])
+        retriever.list_root_spans(max_results=7)
+        first, second = self._bodies(retriever)
+        assert first["size"] == 7
+        assert first["collapse"] == {"field": "traceId"}
+        assert first["sort"] == [{"startTime": "desc"}]
+        assert second["collapse"] == {"field": "traceId"}
+        assert second["size"] == 1
+
+    def test_root_lookup_prefers_parentless_then_earliest(self, retriever):
+        """Step 2: the parentless agent root wins, else the earliest marked span."""
+        self._mock_search(retriever, ["t1"], [_span_doc(trace_id="t1")])
+        retriever.list_root_spans()
+        second = self._bodies(retriever)[1]
+        assert second["sort"] == [{"_score": "desc"}, {"startTime": "asc"}]
+        assert second["query"]["bool"]["should"] == [
+            {"constant_score": {"filter": {"term": {"parentSpanId": ""}}}}
+        ]
+        assert {"terms": {"traceId": ["t1"]}} in second["query"]["bool"]["filter"]
+
+    def test_root_lookup_is_not_bounded_by_since(self, retriever):
+        """A root that started before `since` is still returned for its trace."""
+        self._mock_search(retriever, ["t1"], [_span_doc(trace_id="t1")])
+        retriever.list_root_spans()
+        first, second = self._bodies(retriever)
+        assert any("range" in c for c in first["query"]["bool"]["filter"])
+        assert not any("range" in c for c in second["query"]["bool"]["filter"])
+
+    def test_one_record_per_trace(self, retriever):
+        """Two marked agents of one trace (two services): one record, the one step 2 picked."""
+        a = _span_doc(trace_id="t1", span_id="a", parent_span_id="http", marked=True)
+        self._mock_search(retriever, ["t1"], [a])
+        assert [r.span_id for r in retriever.list_root_spans()] == ["a"]
 
     def test_filters_by_services(self, retriever):
-        self._mock_search(retriever, [_span_doc(trace_id="t1")])
+        self._mock_search(retriever, ["t1"], [_span_doc(trace_id="t1")])
         retriever.list_root_spans(services=["weather-agent"])
-        call_body = retriever._mock_client.search.call_args[1]["body"]
-        terms = [c for c in call_body["query"]["bool"]["must"] if "terms" in c]
-        assert terms[0]["terms"]["serviceName"] == ["weather-agent"]
+        for body in self._bodies(retriever):
+            terms = [c for c in body["query"]["bool"]["filter"] if "terms" in c]
+            assert {"terms": {"serviceName": ["weather-agent"]}} in terms
 
     def test_no_service_filter(self, retriever):
         self._mock_search(retriever, [])
         retriever.list_root_spans()
-        call_body = retriever._mock_client.search.call_args[1]["body"]
-        terms = [c for c in call_body["query"]["bool"]["must"] if "terms" in c]
-        assert terms == []
-
-    def test_empty_results(self, retriever):
-        self._mock_search(retriever, [])
-        assert retriever.list_root_spans() == []
+        (body,) = self._bodies(retriever)
+        assert not [c for c in body["query"]["bool"]["filter"] if "terms" in c]
 
     def test_since_datetime(self, retriever):
         from datetime import datetime, timezone
@@ -498,30 +574,9 @@ class TestListRootSpans:
         self._mock_search(retriever, [])
         ts = datetime(2026, 3, 16, 12, 0, 0, tzinfo=timezone.utc)
         retriever.list_root_spans(since=ts)
-        call_body = retriever._mock_client.search.call_args[1]["body"]
-        range_clause = [c for c in call_body["query"]["bool"]["must"] if "range" in c]
+        (body,) = self._bodies(retriever)
+        range_clause = [c for c in body["query"]["bool"]["filter"] if "range" in c]
         assert range_clause[0]["range"]["startTime"]["gte"] == "2026-03-16T12:00:00.000Z"
-
-    def test_ai_root_condition(self, retriever):
-        """Agent Traces rule: (no parent AND GenAI span) OR marked derived.gen_ai.is_root."""
-        self._mock_search(retriever, [])
-        retriever.list_root_spans()
-        must = retriever._mock_client.search.call_args[1]["body"]["query"]["bool"]["must"]
-        ai_root = next(c["bool"] for c in must if "bool" in c)
-        assert ai_root["minimum_should_match"] == 1
-        assert ai_root["should"] == [
-            {
-                "bool": {
-                    "filter": [
-                        {"term": {"parentSpanId": ""}},
-                        {"exists": {"field": "attributes.gen_ai.operation.name"}},
-                    ]
-                }
-            },
-            {"term": {"attributes.derived.gen_ai.is_root": True}},
-        ]
-        # No bare parentSpanId filter: an HTTP server root must not be required.
-        assert {"term": {"parentSpanId": ""}} not in must
 
     def test_returns_marked_agent_span_behind_http_root(self, retriever):
         """An HTTP-rooted trace is listed by its marked agent span, with agent and messages."""
@@ -533,38 +588,29 @@ class TestListRootSpans:
             agent_name="travel_planner",
             marked=True,
         )
-        self._mock_search(retriever, [agent])
+        self._mock_search(retriever, ["t1"], [agent])
         (root,) = retriever.list_root_spans()
         assert root.span_id == "agent"
         assert root.agent_name == "travel_planner"
         assert root.agent_version == "v1"
         assert root.input_messages[0].content == "hello"
 
-    def test_drops_marked_span_shadowed_by_genai_root(self, retriever):
-        """A trace with a GenAI root is listed once, by that root."""
-        root = _span_doc(trace_id="t1", span_id="root")
-        nested = _span_doc(trace_id="t1", span_id="nested", parent_span_id="root", marked=True)
-        other = _span_doc(trace_id="t2", span_id="agent2", parent_span_id="http2", marked=True)
-        self._mock_search(retriever, [nested, root, other])
-        assert [r.span_id for r in retriever.list_root_spans()] == ["root", "agent2"]
+    def test_empty_results_log_the_rule_once(self, retriever, caplog, monkeypatch):
+        monkeypatch.setattr(retrieval_mod, "_root_hint_logged", False)
+        caplog.set_level("INFO", logger=retrieval_mod.__name__)
+        retriever._mock_client.search.return_value = _hits([])
+        assert retriever.list_root_spans() == []
+        assert retriever.list_root_spans() == []
+        hints = [r for r in caplog.records if "found no agent roots" in r.getMessage()]
+        assert len(hints) == 1
+        assert hints[0].levelname == "INFO"
+        assert "mark_agent_root()" in hints[0].getMessage()
+        assert "invoke_agent" in hints[0].getMessage()
+        assert retriever._mock_client.search.call_count == 2  # no root lookup without traces
 
-    def test_parallel_marked_agents_each_listed(self, retriever):
-        a = _span_doc(trace_id="t1", span_id="a", parent_span_id="http", marked=True)
-        b = _span_doc(trace_id="t1", span_id="b", parent_span_id="http", marked=True)
-        self._mock_search(retriever, [a, b])
-        assert [r.span_id for r in retriever.list_root_spans()] == ["a", "b"]
-
-    def test_max_results_after_dropping_shadowed(self, retriever):
-        docs = [
-            _span_doc(trace_id="t1", span_id="n1", parent_span_id="r1", marked=True),
-            _span_doc(trace_id="t1", span_id="r1"),
-            _span_doc(trace_id="t2", span_id="r2"),
-            _span_doc(trace_id="t3", span_id="r3"),
-        ]
-        self._mock_search(retriever, docs)
-        results = retriever.list_root_spans(max_results=2)
-        assert [r.span_id for r in results] == ["r1", "r2"]
-        assert retriever._mock_client.search.call_args[1]["body"]["size"] == 4
+    def test_zero_max_results_does_not_query(self, retriever):
+        assert retriever.list_root_spans(max_results=0) == []
+        retriever._mock_client.search.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -244,7 +244,7 @@ for root in roots:
     )
 ```
 
-- `list_root_spans()` returns each trace's agent root, the same span Agent Traces lists: the trace root when it is a GenAI span, or the marked agent span below an HTTP handler. Its `agent_name` and `agent_version` come from the span; pass both to `score()`, or the results are grouped under "(no version)" on the agent page.
+- `list_root_spans()` returns one agent root per trace: the trace root when it is an agent span (`invoke_agent` or `create_agent`), else the earliest span marked `derived.gen_ai.is_root`, for example the agent span below an HTTP handler. A judge's own `chat` trace is not listed, so the job never judges its own judge calls. If it returns nothing, mark the agent's span with `mark_agent_root()` or trace it with `@observe(op=Op.INVOKE_AGENT)`. Its `agent_name` and `agent_version` come from the span; pass both to `score()`, or the results are grouped under "(no version)" on the agent page.
 
 - Run it on a schedule: cron, a loop (the example's `online_eval.py --interval 300`), or a scheduled function.
 - Pair the judge with a cheap deterministic check, for example "every service the answer names exists". It costs nothing and catches what the judge misses.
