@@ -714,6 +714,14 @@ PUT _index_template/otel-v1-genai-evaluation-index-template
         "flags": {
           "type": "long"
         },
+        "eventName": {
+          "type": "keyword",
+          "ignore_above": 256
+        },
+        "serviceName": {
+          "type": "keyword",
+          "ignore_above": 256
+        },
         "attributes": {
           "properties": {
             "gen_ai": {
@@ -866,6 +874,7 @@ How the template maps the result attributes:
 - `text`: `gen_ai.evaluation.explanation` (searchable, not aggregatable).
 - `keyword` (`ignore_above` 256), pinned so the first value cannot pick a numeric type: `test.case.id`, `test.suite.run.id`, `gen_ai.agent.version`, `opensearch.gen_ai.evaluation.evaluator.version`, `gen_ai.prompt.version`.
 - Every other string attribute, including `opensearch.test.case.expected`, the evaluator description, the case name and the CI URL, maps to `keyword` with `ignore_above` 256: the full value is stored and shown, never rejected, and only values up to 256 characters are indexed for filters and aggregations.
+- Top-level `traceId`, `spanId`, `eventName` and `serviceName` are `keyword`, so `term` filters, terms aggregations and sorts on them work (for example `eventName` in Dashboards visualizations).
 - `date_detection` is off, so a date-like string stays a string.
 
 The index keeps the default limit of 1000 fields. If your own `attributes` and metadata add many keys, raise it in the template (`"index.mapping.total_fields.limit": 2000` under `template.settings`) and on the current write index (`PUT otel-v1-genai-evaluation-000001/_settings` with the same setting).
