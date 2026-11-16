@@ -1,0 +1,6 @@
+opensearch-genai-observability-sdk-py>=0.3.0
+strands-agents>=1.64.0
+ragas>=0.4.3
+datasets
+langchain-aws
+langchain-community<0.4
