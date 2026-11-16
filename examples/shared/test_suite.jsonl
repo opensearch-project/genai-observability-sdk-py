@@ -1,0 +1,5 @@
+{"id": "tc-paris", "name": "paris_day_trip", "input": "Plan a one-day trip to Paris.", "expected": "Mentions sunny weather around 24C and at least one Paris event such as the Louvre late opening or the Seine jazz cruise."}
+{"id": "tc-tokyo", "name": "tokyo_rain_plan", "input": "I'm in Tokyo this weekend. What should I do?", "expected": "Mentions light rain around 19C and at least one Tokyo event such as teamLab Planets or the Tsukiji outer market tour."}
+{"id": "tc-seattle", "name": "seattle_rain_gear", "input": "Give me a short plan for Seattle and tell me if I need an umbrella.", "expected": "Says it will rain (around 12C) so an umbrella is needed, and mentions Pike Place Market or the Museum of Pop Culture."}
+{"id": "tc-barcelona", "name": "barcelona_evening", "input": "What can I do in Barcelona on Saturday evening?", "expected": "Mentions sunny weather around 27C and the Saturday 21:00 flamenco show."}
+{"id": "tc-unknown", "name": "unknown_city", "input": "Plan a trip to Atlantis.", "expected": "Says it has no data for Atlantis and does not invent weather or events."}
