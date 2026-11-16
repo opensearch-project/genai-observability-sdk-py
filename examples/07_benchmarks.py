@@ -55,9 +55,14 @@ PROMPTS = {
 }
 
 
-@observe(op=Op.CHAT)
+@observe(op=Op.INVOKE_AGENT)
 def my_agent(question: str) -> str:
-    """Your agent, instrumented with @observe for tracing."""
+    """Your agent, instrumented with @observe for tracing.
+
+    op=Op.INVOKE_AGENT names the agent (gen_ai.agent.name = "my_agent") on its
+    root span, so every result is grouped under this agent. With another op,
+    pass agent_name= to evaluate() instead.
+    """
     enrich(model="gpt-4o-mini", system=PROMPTS.get(AGENT_VERSION, PROMPTS["v1"]))
     return _simulate(question, AGENT_VERSION)
 
