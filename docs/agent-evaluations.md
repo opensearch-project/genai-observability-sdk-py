@@ -360,6 +360,21 @@ Offline evaluation runs a dataset through the agent (`evaluate()`) or uploads re
 
 `evaluate()` calls your task once per case. Each call is its own trace, like production; the SDK adds no span around it and stamps the `test.*` ids on the root span the task starts. Each scorer result becomes one `gen_ai.evaluation.result` parented to that root span.
 
+`evaluate()` is synchronous: the task and the scorers are plain functions. Python users can already call an async agent from a sync task with `asyncio.run`, and an async judge the same way inside a sync scorer:
+
+```python
+import asyncio
+
+result = evaluate(
+    "travel-planner-regression",
+    task=lambda question: asyncio.run(travel_planner_async(question)),
+    data=cases,
+    scores=[answer_correctness],
+)
+```
+
+The task's spans stay in one trace per case, because `asyncio.run` runs the coroutine in the task's context.
+
 ```python
 import sys
 

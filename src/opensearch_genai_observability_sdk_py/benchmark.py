@@ -1010,6 +1010,12 @@ def evaluate(
 ) -> BenchmarkResult:
     """Run a task against a dataset, score outputs, and record the results.
 
+    ``evaluate()`` is synchronous: the task and the scorers are plain
+    functions. Python users can already call an async agent from a sync task
+    with ``asyncio.run``, for example ``task=lambda q: asyncio.run(agent(q))``,
+    and an async judge the same way inside a sync scorer. (The TypeScript SDK's
+    ``evaluate()`` accepts async tasks and scorers directly.)
+
     Each case's task call is its own trace, exactly like production: the
     SDK adds no span around it. The root span(s) the task starts get
     ``test.suite.name``, ``test.suite.run.id``, ``test.case.id`` and
