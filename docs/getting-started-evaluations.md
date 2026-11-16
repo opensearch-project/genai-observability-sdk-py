@@ -1,6 +1,6 @@
 # Getting started: observe and evaluate an agent with OpenSearch
 
-This guide takes one agent from its first trace to evaluated production traffic. It threads a single example through every step: the **observability assistant**, a [Strands](https://strandsagents.com) agent that answers questions about your own OpenSearch cluster ("which services had errors in the last hour?", "what are the slowest operations?") with real, read-only tools.
+This guide takes one agent from its first trace to evaluated production traffic. It threads a single example through every step: the **observability assistant**, a [Strands](https://strandsagents.com) agent that answers questions about your own OpenSearch cluster ("which services had errors in the last hour?", "what are the slowest operations?") with real, read-only tools. The runnable code is in [examples/end-to-end/strands-observability-agent](../examples/end-to-end/strands-observability-agent/).
 
 [agent-evaluations.md](agent-evaluations.md) is the reference: every attribute, the ingestion pipelines, index templates and mappings.
 
