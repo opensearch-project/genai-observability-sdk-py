@@ -1535,6 +1535,23 @@ class TestRunLabels:
             assert a[RUN_DESC_KEY] == "Shorter system prompt"
             assert a["test.suite.run.id"]
 
+    def test_run_labels_on_events_not_on_agent_root_spans(self, events, exporter):
+        evaluate(
+            "suite",
+            task=_traced_agent(),
+            data=[{"input": "a"}],
+            scores=[lambda i, o, e: 1.0],
+            run_name="v5",
+            run_description="d" * 1024,
+        )
+        (root,) = _spans_named(exporter, "agent")
+        assert root.attributes["test.suite.name"] == "suite"  # still stamped with test.*
+        assert RUN_NAME_KEY not in root.attributes
+        assert RUN_DESC_KEY not in root.attributes
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a[RUN_NAME_KEY] == "v5"
+        assert len(a[RUN_DESC_KEY]) == 1024
+
     def test_evaluate_without_run_labels(self, events):
         evaluate("suite", task=lambda x: x, data=[{"input": "a"}], scores=[lambda i, o, e: 1.0])
         a = events(EVALUATION)[0].log_record.attributes

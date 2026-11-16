@@ -1121,11 +1121,12 @@ def evaluate(
 
         grouping = {
             **_grouping(name, resolved_run_id, case_id, case_name_val),
-            **run_labels,
             **ci,
         }
         # Root spans get the declared agent (where they name none themselves).
         span_stamp = {**grouping, **declared_agent}
+        # The run name and description go on the events only, not on spans.
+        grouping = {**grouping, **run_labels}
 
         # Run the task as its own trace and capture its root span.
         output_val = None
