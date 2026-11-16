@@ -1684,6 +1684,26 @@ class TestScorerJudgeContext:
         assert "opensearch.gen_ai.evaluation.score.max" not in by_name["faith"]
         assert "gen_ai.evaluation.score.label" not in by_name["faith"]
 
+    def test_rule_applies_when_the_scorer_declares_no_evaluator(self, events):
+        @scorer(name="rel", threshold=0.7)
+        def rel(i, o, e):
+            return EvalScore(name="rel", value=0.1, evaluator="my-judge")
+
+        result = evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[rel])
+        attrs = [r.log_record.attributes for r in events(EVALUATION)][0]
+        assert attrs["opensearch.gen_ai.evaluation.score.threshold"] == 0.7
+        assert attrs["gen_ai.evaluation.score.label"] == "fail"
+        assert result.cases[0].status == "fail"
+
+    def test_evaluator_description_is_capped(self, events):
+        @scorer(name="d", description="x" * 5000)
+        def d(i, o, e):
+            return 1.0
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[d])
+        attrs = [r.log_record.attributes for r in events(EVALUATION)][0]
+        assert len(attrs["opensearch.gen_ai.evaluation.evaluator.description"]) == 1024
+
     def test_judge_context_default_evaluator_is_function_name(self, events):
         @scorer(judge_model="m1")
         def judge_fn(i, o, e):

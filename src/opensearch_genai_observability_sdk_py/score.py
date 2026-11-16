@@ -56,6 +56,7 @@ from opentelemetry.trace import INVALID_SPAN_ID, NonRecordingSpan, SpanContext, 
 from opensearch_genai_observability_sdk_py._internal import (
     AGENT_NAME_KEY,
     AGENT_VERSION_KEY,
+    RUN_DESCRIPTION_MAX_CHARS,
     drop_reserved_keys,
     get_event_logger,
     is_evaluation_field_key,
@@ -470,7 +471,8 @@ def judge_context_attributes(
     """
     attrs: dict[str, Any] = {}
     if evaluator_description:
-        attrs[EVAL_EVALUATOR_DESCRIPTION_KEY] = evaluator_description
+        # Cut like the run description: it repeats on every result event.
+        attrs[EVAL_EVALUATOR_DESCRIPTION_KEY] = evaluator_description[:RUN_DESCRIPTION_MAX_CHARS]
     if judge_model:
         attrs[JUDGE_MODEL_KEY] = judge_model
     if judge_prompt_name:

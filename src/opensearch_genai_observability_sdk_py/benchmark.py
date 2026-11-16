@@ -314,12 +314,14 @@ def _verdict(s: EvalScore) -> str | None:
 def _apply_spec(s: EvalScore, spec: ScorerSpec | None, evaluator: str | None = None) -> EvalScore:
     """Fill the score's unset rule fields from the scorer declaration.
 
-    Only for the scorer's own scores: a returned ``EvalScore`` that names a
-    different evaluator (for example ``deepeval.faithfulness``) keeps its own
-    rule, so the declaration's threshold, direction and bounds do not leak
-    onto it.
+    A returned ``EvalScore`` that names a different evaluator than the one the
+    scorer declares (for example ``deepeval.faithfulness``) keeps its own
+    rule. When the scorer declares no evaluator, its rule applies to every
+    score it returns, so a declared threshold always gates the case.
     """
-    if spec is None or s.evaluator not in (None, evaluator):
+    if spec is None:
+        return s
+    if spec.evaluator is not None and s.evaluator not in (None, evaluator):
         return s
     return dataclasses.replace(
         s,
@@ -598,7 +600,11 @@ def _emit_scores(
             level="span" if has_span else None,
             evaluator=s.evaluator or evaluator,
             evaluator_type=s.evaluator_type
-            or (evaluator_type if spec is None or s.evaluator in (None, evaluator) else None),
+            or (
+                evaluator_type
+                if spec is None or spec.evaluator is None or s.evaluator in (None, evaluator)
+                else None
+            ),
             direction=s.direction,
             score_min=s.score_min,
             score_max=s.score_max,
