@@ -1,0 +1,2 @@
+opensearch-genai-observability-sdk-py[bedrock]>=0.3.0
+boto3
