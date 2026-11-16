@@ -86,7 +86,7 @@ Attributes (each is set only when it has a value):
 | `gen_ai.prompt.version` | OTel | all (`Benchmark`: metadata) | Version of the judge prompt (`name@version` identifies the prompt) |
 | `opensearch.test.suite.run.name` | OpenSearch | offline | Human-readable run name. Optional; readers fall back to the short run id |
 | `opensearch.test.suite.run.description` | OpenSearch | offline | Free-text run description, up to 1024 characters |
-| `opensearch.test.case.expected` | OpenSearch | offline | Expected output of the case, up to 32768 characters |
+| `opensearch.test.case.expected` | OpenSearch | offline | Expected output of the case, up to 8192 characters |
 | `opensearch.test.case.expected_truncated` | OpenSearch | offline | `true` when the expected output was cut |
 
 - Result events never carry the judge's system prompt (`gen_ai.system_instructions`): it goes on the judge's own LLM span. See [Judge prompt](#judge-prompt).
@@ -481,13 +481,14 @@ answer, trace_id, span_id = ask("Capital of France?")
 The `"expected"` value of an `evaluate()` case, or `Benchmark.log(expected=...)`, is set on every `gen_ai.evaluation.result` of that case (error results included) as `opensearch.test.case.expected`:
 
 - Strings are kept as-is. Other values are JSON-encoded, for example `{"city":"Lima"}`.
-- Values longer than 32768 characters are cut to 32768 and `opensearch.test.case.expected_truncated` is set to `true`. The index stores the whole value and shows it on the result; only values up to 256 characters are indexed for filters (see [Evaluation index](#evaluation-index)).
+- Values longer than 8192 characters are cut to 8192 and `opensearch.test.case.expected_truncated` is set to `true`. The index stores the whole value and shows it on the result; only values up to 256 characters are indexed for filters (see [Evaluation index](#evaluation-index)).
 - It is not put on the agent's spans, and online `score()` never sets it.
+- Request size. Every result of a case carries the value, so a case with 5 scorers sends it 5 times, and one export request holds up to `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` events (512 by default). At 8192 characters (up to about 24 KB of UTF-8 for CJK text) a full batch of such events can pass the 1 MB default request cap of OpenSearch Ingestion `otel_logs_source`, which rejects it with HTTP 413 and the results are lost. If your expected values are long, lower the batch size: set `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE=64` (read by the `BatchLogRecordProcessor` that `register()` creates), or configure your own `LoggerProvider` with `BatchLogRecordProcessor(exporter, max_export_batch_size=64)`. Keep `batch size x largest event size` under the pipeline's request cap.
 - It is exported by default. If your test sets hold sensitive data, pass `record_expected=False` to `evaluate()` or `Benchmark(...)`: neither attribute is written. Scorers still receive the value, and it stays on the local result. Inputs and outputs are never exported.
 
 ### Run ids
 
-`run_name` and `run_description` on `evaluate()` and `Benchmark(...)` give a run a human-readable name (`opensearch.test.suite.run.name`, for example `"v5 shorter prompt"`) and a free-text description (`opensearch.test.suite.run.description`, cut to 1024 characters). Both are optional and go on every result of the run; OpenSearch Dashboards shows the name in place of the short run id.
+`run_name` and `run_description` on `evaluate()` and `Benchmark(...)` give a run a human-readable name (`opensearch.test.suite.run.name`, for example `"v5 shorter prompt"`) and a free-text description (`opensearch.test.suite.run.description`, cut to 1024 characters). Both are optional and go on every result of the run, not on the agent spans; OpenSearch Dashboards shows the name in place of the short run id.
 
 `run_id` sets `test.suite.run.id` and is used exactly as given. Without it the SDK generates one (`run_<timestamp>_<random>`). Empty or whitespace-only values raise `ValueError`.
 

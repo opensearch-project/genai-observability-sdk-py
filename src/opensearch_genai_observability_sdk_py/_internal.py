@@ -164,7 +164,9 @@ def get_event_logger() -> _logs.Logger:
 # case, set on every gen_ai.evaluation.result event of that case.
 TEST_CASE_EXPECTED_KEY = "opensearch.test.case.expected"
 TEST_CASE_EXPECTED_TRUNCATED_KEY = "opensearch.test.case.expected_truncated"
-EXPECTED_MAX_CHARS = 32768
+# Every result event of a case carries the value, so a higher cap multiplies
+# the request size of an export batch (see docs/agent-evaluations.md).
+EXPECTED_MAX_CHARS = 8192
 
 # OpenSearch attributes (no OTel name yet) for a human-readable run name and
 # description, set on every gen_ai.evaluation.result event of the run.
@@ -191,7 +193,7 @@ def expected_attributes(expected: Any) -> dict[str, Any]:
 
     Strings are used as-is; other values are JSON-encoded (compact, non-ASCII
     kept, unknown types via ``str``). Values longer than
-    ``EXPECTED_MAX_CHARS`` (32768) characters are cut to that length and
+    ``EXPECTED_MAX_CHARS`` (8192) characters are cut to that length and
     ``opensearch.test.case.expected_truncated`` is set to ``True``. ``None``
     means no expected value: nothing is set.
     """

@@ -1230,18 +1230,18 @@ class TestExpectedOutput:
         assert a[EXPECTED] == '{"city":"Paris","n":1}'
         assert EXPECTED_TRUNCATED not in a
 
-    def test_truncated_at_32768(self, events):
+    def test_truncated_at_8192(self, events):
         with Benchmark(name="exp-long") as b:
             b.log(input="q", expected="x" * 40000, scores={"a": 1.0})
         a = events(EVALUATION)[0].log_record.attributes
-        assert a[EXPECTED] == "x" * 32768
+        assert a[EXPECTED] == "x" * 8192
         assert a[EXPECTED_TRUNCATED] is True
 
-    def test_exactly_32768_not_truncated(self, events):
+    def test_exactly_8192_not_truncated(self, events):
         with Benchmark(name="exp-edge") as b:
-            b.log(input="q", expected="y" * 32768, scores={"a": 1.0})
+            b.log(input="q", expected="y" * 8192, scores={"a": 1.0})
         a = events(EVALUATION)[0].log_record.attributes
-        assert a[EXPECTED] == "y" * 32768
+        assert a[EXPECTED] == "y" * 8192
         assert EXPECTED_TRUNCATED not in a
 
     def test_old_4096_cap_no_longer_truncates(self, events):

@@ -795,7 +795,7 @@ class Benchmark:
             output: Actual output from the agent/system (local result only).
             expected: Expected/ground-truth output. By default set on every
                 evaluation event of the case as ``opensearch.test.case.expected``
-                (non-strings JSON-encoded, cut to 32768 characters with
+                (non-strings JSON-encoded, cut to 8192 characters with
                 ``opensearch.test.case.expected_truncated`` set); not exported
                 when the Benchmark has ``record_expected=False``.
             scores: Pre-computed scores: ``{name: value}``, or a list of
@@ -1043,7 +1043,7 @@ def evaluate(
             ``"expected"`` is passed to the scorers and, by default, set on
             every evaluation event of the case as
             ``opensearch.test.case.expected`` (non-strings JSON-encoded, cut
-            to 32768 characters with ``opensearch.test.case.expected_truncated``
+            to 8192 characters with ``opensearch.test.case.expected_truncated``
             set). See ``record_expected``.
         scores: List of synchronous scorer callables. Each receives
             ``(input, output, expected)`` and returns an ``EvalScore``,
