@@ -56,15 +56,19 @@ _logs.set_logger_provider(_logger_provider)
 
 @pytest.fixture(autouse=True)
 def _reset_label_warnings():
-    """Label warnings are once per evaluation name per process; reset per test."""
+    """Label and reserved-key warnings are once per process; reset per test."""
     import importlib
 
     # The package exports the score() function under the module's name.
     _score_mod = importlib.import_module("opensearch_genai_observability_sdk_py.score")
 
+    _internal = importlib.import_module("opensearch_genai_observability_sdk_py._internal")
+
     _score_mod._label_warned.clear()
+    _internal._warned_reserved_keys.clear()
     yield
     _score_mod._label_warned.clear()
+    _internal._warned_reserved_keys.clear()
 
 
 @pytest.fixture(autouse=True)

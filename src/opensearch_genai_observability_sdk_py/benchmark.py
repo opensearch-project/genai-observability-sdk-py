@@ -99,6 +99,7 @@ from opensearch_genai_observability_sdk_py._internal import (
     drop_reserved_keys,
     expected_attributes,
     resolve_agent,
+    run_label_attributes,
 )
 from opensearch_genai_observability_sdk_py.score import (
     _VALID_DIRECTIONS,
@@ -106,6 +107,7 @@ from opensearch_genai_observability_sdk_py.score import (
     _no_span_context,
     build_evaluation_attributes,
     emit_evaluation_event,
+    judge_context_attributes,
     resolve_verdict,
     span_context_for,
 )
@@ -146,6 +148,12 @@ class EvalScore:
     - ``score_min`` / ``score_max``: scale bounds.
     - ``judge_trace_id``: trace id of the judge's own run, if traced
       (``opensearch.gen_ai.evaluation.judge.trace_id``).
+    - ``evaluator`` / ``evaluator_type``: the evaluator that produced this
+      score (``opensearch.gen_ai.evaluation.evaluator.name`` / ``.type``),
+      for example ``"deepeval.answer_relevancy"`` and ``"llm_judge"``. They
+      win over the ``@scorer(...)`` declaration (``evaluate()``) and over the
+      ``Benchmark.log(evaluator=, evaluator_type=)`` defaults. Unset: the
+      result is recorded as before.
     """
 
     name: str
@@ -159,6 +167,8 @@ class EvalScore:
     score_min: float | None = None
     score_max: float | None = None
     judge_trace_id: str | None = None
+    evaluator: str | None = None
+    evaluator_type: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +190,19 @@ class ScorerSpec:
     score_max: float | None = None
     evaluator: str | None = None
     evaluator_type: str | None = None
+    description: str | None = None
+    judge_model: str | None = None
+    judge_prompt_name: str | None = None
+    judge_prompt_version: str | None = None
+
+    def judge_attributes(self) -> dict[str, Any]:
+        """The evaluator description and judge context attributes it declares."""
+        return judge_context_attributes(
+            evaluator_description=self.description,
+            judge_model=self.judge_model,
+            judge_prompt_name=self.judge_prompt_name,
+            judge_prompt_version=self.judge_prompt_version,
+        )
 
 
 def scorer(
@@ -192,6 +215,10 @@ def scorer(
     score_max: float | None = None,
     evaluator: str | None = None,
     evaluator_type: str | None = None,
+    description: str | None = None,
+    judge_model: str | None = None,
+    judge_prompt_name: str | None = None,
+    judge_prompt_version: str | None = None,
 ) -> Any:
     """Declare a scorer's evaluation name and pass rule for ``evaluate()``.
 
@@ -214,6 +241,23 @@ def scorer(
     - ``evaluator``: evaluator name
       (``opensearch.gen_ai.evaluation.evaluator.name``; default: the function name).
     - ``evaluator_type``: ``llm_judge``, ``code``, ``human`` or ``external``.
+    - ``description``: what the evaluator checks
+      (``opensearch.gen_ai.evaluation.evaluator.description``).
+    - ``judge_model`` / ``judge_prompt_name`` / ``judge_prompt_version``: the
+      LLM judge's model and prompt (``gen_ai.request.model``,
+      ``gen_ai.prompt.name``, ``gen_ai.prompt.version``).
+    - The judge's full system prompt is not a scorer argument: it is never
+      put on result events. Record it on the judge's own LLM span as
+      ``gen_ai.system_instructions`` (the judge's instrumentation, or
+      ``enrich(system_instructions=...)`` inside an ``@observe`` judge call).
+
+    The rule fields are defaults for every result the scorer produces,
+    including its error results. ``description`` and the judge fields are
+    set only on results of this scorer's evaluator: a returned ``EvalScore``
+    whose ``evaluator`` is unset or equals ``evaluator`` (default: the
+    function name). A scorer that returns results of other evaluators (for
+    example ``EvalScore(evaluator="deepeval.faithfulness")``) does not stamp
+    its own description or judge on them.
 
     Raises:
         ValueError: ``direction`` or ``evaluator_type`` is not a known value.
@@ -236,6 +280,10 @@ def scorer(
         score_max=score_max,
         evaluator=evaluator,
         evaluator_type=evaluator_type,
+        description=description,
+        judge_model=judge_model,
+        judge_prompt_name=judge_prompt_name,
+        judge_prompt_version=judge_prompt_version,
     )
 
     def decorate(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -263,9 +311,15 @@ def _verdict(s: EvalScore) -> str | None:
     return verdict
 
 
-def _apply_spec(s: EvalScore, spec: ScorerSpec | None) -> EvalScore:
-    """Fill the score's unset rule fields from the scorer declaration."""
-    if spec is None:
+def _apply_spec(s: EvalScore, spec: ScorerSpec | None, evaluator: str | None = None) -> EvalScore:
+    """Fill the score's unset rule fields from the scorer declaration.
+
+    Only for the scorer's own scores: a returned ``EvalScore`` that names a
+    different evaluator (for example ``deepeval.faithfulness``) keeps its own
+    rule, so the declaration's threshold, direction and bounds do not leak
+    onto it.
+    """
+    if spec is None or s.evaluator not in (None, evaluator):
         return s
     return dataclasses.replace(
         s,
@@ -517,6 +571,7 @@ def _emit_scores(
     evaluator_type: str | None = None,
     error_type: str | None = None,
     metadata: dict[str, Any] | None = None,
+    spec: ScorerSpec | None = None,
 ) -> None:
     """Emit one ``gen_ai.evaluation.result`` event per score.
 
@@ -524,7 +579,9 @@ def _emit_scores(
     Attribute precedence, lowest first: ``metadata`` (run, then case), the
     score's own metadata, the ``test.*`` / agent / CI ``grouping``, then the
     evaluation fields. With ``error_type`` every score is an evaluator error
-    result: ``error.type`` set, no value and no label.
+    result: ``error.type`` set, no value and no label. The ``spec`` judge
+    attributes (description, judge model and prompt) are set only on scores
+    of the spec's evaluator: ``evaluator`` unset, or equal to ``evaluator``.
     """
     has_span = trace.get_current_span(context).get_span_context().is_valid
     for s in scores:
@@ -539,8 +596,9 @@ def _emit_scores(
             passed=None if error_type else s.passed,
             explanation=s.explanation,
             level="span" if has_span else None,
-            evaluator=evaluator,
-            evaluator_type=evaluator_type,
+            evaluator=s.evaluator or evaluator,
+            evaluator_type=s.evaluator_type
+            or (evaluator_type if spec is None or s.evaluator in (None, evaluator) else None),
             direction=s.direction,
             score_min=s.score_min,
             score_max=s.score_max,
@@ -548,6 +606,8 @@ def _emit_scores(
             error_type=error_type,
             judge_trace_id=s.judge_trace_id,
         )
+        if spec is not None and s.evaluator in (None, evaluator):
+            attrs.update(spec.judge_attributes())
         emit_evaluation_event({**extra, **attrs}, context=context)
 
 
@@ -642,7 +702,10 @@ class Benchmark:
         metadata: Run metadata, added to every ``gen_ai.evaluation.result``
             event of the run (case and score metadata and the SDK attributes
             win). Keys reserved by the SDK (``test.suite.name`` etc.) are
-            filtered out with a warning.
+            filtered out, with one warning per key per process. Judge context
+            keys (``gen_ai.request.model``, ``gen_ai.prompt.name``,
+            ``gen_ai.prompt.version``) are allowed: ``Benchmark`` has no
+            judge arguments.
         run_id: ``test.suite.run.id`` of the run, used exactly as given.
             Default: a generated id. Pass the same id from every CI shard so
             they report into one run, or the id of an existing run to re-score
@@ -662,6 +725,12 @@ class Benchmark:
             ``opensearch.test.case.expected_truncated`` is written. The
             expected value is still passed to the scorers and kept on the
             local result. Inputs and outputs are never exported.
+        run_name: Human-readable run name, for example ``"v5 shorter prompt"``
+            (``opensearch.test.suite.run.name``), on every evaluation event of
+            the run. Optional: readers fall back to the short run id.
+        run_description: Free-text run description
+            (``opensearch.test.suite.run.description``), cut to 1024
+            characters. Optional.
 
     Raises:
         ValueError: ``run_id`` is empty or whitespace.
@@ -677,8 +746,11 @@ class Benchmark:
         agent_version: str | None = None,
         ci_pipeline: dict[str, str] | None = None,
         record_expected: bool = True,
+        run_name: str | None = None,
+        run_description: str | None = None,
     ) -> None:
         self._name = name
+        self._run_labels = run_label_attributes(run_name, run_description)
         self._run_id = _resolve_run_id(run_id)
         # OTel cicd.pipeline.* of the CI run this runs in (empty outside CI).
         self._ci = ci_pipeline_attributes(ci_pipeline)
@@ -689,6 +761,7 @@ class Benchmark:
         self._start_time = time.monotonic()
         self._cases: list[TestCaseResult] = []
         self._closed = False
+        self._summary: BenchmarkSummary | None = None
 
         logger.info("Benchmark started: name=%s run_id=%s", name, self._run_id)
 
@@ -715,6 +788,8 @@ class Benchmark:
         span_id: str | None = None,
         status: str | None = None,
         error_type: str | None = None,
+        evaluator: str | None = None,
+        evaluator_type: str | None = None,
     ) -> None:
         """Log a single test case result.
 
@@ -727,7 +802,7 @@ class Benchmark:
             output: Actual output from the agent/system (local result only).
             expected: Expected/ground-truth output. By default set on every
                 evaluation event of the case as ``opensearch.test.case.expected``
-                (non-strings JSON-encoded, cut to 4096 characters with
+                (non-strings JSON-encoded, cut to 8192 characters with
                 ``opensearch.test.case.expected_truncated`` set); not exported
                 when the Benchmark has ``record_expected=False``.
             scores: Pre-computed scores: ``{name: value}``, or a list of
@@ -735,7 +810,7 @@ class Benchmark:
                 or ``threshold`` + ``direction``) and scale bounds.
             metadata: Case metadata, added to the case's evaluation events
                 over the run metadata. Keys reserved by the SDK are filtered
-                out with a warning.
+                out, with one warning per key per process.
             error: Error message, kept on the local result. The local status
                 becomes ``"error"``.
             case_id: Explicit ``test.case.id``. If omitted, derived
@@ -752,6 +827,13 @@ class Benchmark:
                 name or other low-cardinality error identifier). Every score
                 in ``scores`` is then emitted as an evaluator error result:
                 ``error.type`` set, no score value and no label.
+            evaluator: Default evaluator name
+                (``opensearch.gen_ai.evaluation.evaluator.name``) for every score
+                of this call, for example ``"deepeval"``. An ``EvalScore`` that
+                sets its own ``evaluator`` wins.
+            evaluator_type: Default ``opensearch.gen_ai.evaluation.evaluator.type``
+                (``llm_judge``, ``code``, ``human`` or ``external``) for every
+                score of this call. An ``EvalScore`` that sets its own wins.
         """
         if self._closed:
             raise RuntimeError("Benchmark is already closed")
@@ -776,6 +858,7 @@ class Benchmark:
 
         grouping = {
             **_grouping(self._name, self._run_id, resolved_case_id, case_name),
+            **self._run_labels,
             **(expected_attributes(expected) if self._record_expected else {}),
             **self._agent,
             **self._ci,
@@ -804,6 +887,8 @@ class Benchmark:
             grouping,
             eval_scores,
             context=event_ctx,
+            evaluator=evaluator,
+            evaluator_type=evaluator_type,
             error_type=error_type,
             metadata={**self._metadata, **safe_case_meta},
         )
@@ -830,17 +915,20 @@ class Benchmark:
         """Finalize the benchmark and return the local summary.
 
         Computes aggregate statistics and prints a formatted summary. Emits
-        no telemetry.
+        no telemetry. Idempotent: a later call (for example ``close()``
+        inside ``with Benchmark(...)``, then the ``with`` exit) returns the
+        same summary without printing it again.
 
         Returns:
             ``BenchmarkSummary`` with aggregate score statistics.
         """
-        if self._closed:
-            raise RuntimeError("Benchmark is already closed")
+        if self._summary is not None:
+            return self._summary
 
         self._closed = True
 
         summary = _compute_summary(self._name, self._run_id, self._cases, self._start_time)
+        self._summary = summary
 
         print(str(summary))
         logger.info("Benchmark completed: %s", self._run_id)
@@ -851,8 +939,7 @@ class Benchmark:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if not self._closed:
-            self.close()
+        self.close()
 
 
 _SYNC_SCORERS_ONLY = (
@@ -925,8 +1012,16 @@ def evaluate(
     agent_version: str | None = None,
     ci_pipeline: dict[str, str] | None = None,
     record_expected: bool = True,
+    run_name: str | None = None,
+    run_description: str | None = None,
 ) -> BenchmarkResult:
     """Run a task against a dataset, score outputs, and record the results.
+
+    ``evaluate()`` is synchronous: the task and the scorers are plain
+    functions. Python users can already call an async agent from a sync task
+    with ``asyncio.run``, for example ``task=lambda q: asyncio.run(agent(q))``,
+    and an async judge the same way inside a sync scorer. (The TypeScript SDK's
+    ``evaluate()`` accepts async tasks and scorers directly.)
 
     Each case's task call is its own trace, exactly like production: the
     SDK adds no span around it. The root span(s) the task starts get
@@ -961,7 +1056,7 @@ def evaluate(
             ``"expected"`` is passed to the scorers and, by default, set on
             every evaluation event of the case as
             ``opensearch.test.case.expected`` (non-strings JSON-encoded, cut
-            to 4096 characters with ``opensearch.test.case.expected_truncated``
+            to 8192 characters with ``opensearch.test.case.expected_truncated``
             set). See ``record_expected``.
         scores: List of synchronous scorer callables. Each receives
             ``(input, output, expected)`` and returns an ``EvalScore``,
@@ -977,7 +1072,10 @@ def evaluate(
             its own trace.
         metadata: Run metadata, added to every ``gen_ai.evaluation.result``
             event of the run (score metadata and the SDK attributes win).
-            Keys reserved by the SDK are filtered out with a warning.
+            Keys reserved by the SDK are filtered out, with one warning per
+            key per process. Judge context keys (``gen_ai.request.model``,
+            ``gen_ai.prompt.*``) are allowed; ``@scorer`` judge arguments
+            win over them.
         run_id: ``test.suite.run.id`` of the run, used exactly as given.
             Default: a generated id. Pass the same id from every CI shard so
             they report into one run, or the id of an existing run to re-score
@@ -999,6 +1097,12 @@ def evaluate(
             ``opensearch.test.case.expected_truncated`` is written. The
             expected value is still passed to the scorers and kept on the
             local result. Inputs and outputs are never exported.
+        run_name: Human-readable run name, for example ``"v5 shorter prompt"``
+            (``opensearch.test.suite.run.name``), on every evaluation event of
+            the run. Optional: readers fall back to the short run id.
+        run_description: Free-text run description
+            (``opensearch.test.suite.run.description``), cut to 1024
+            characters. Optional.
 
     Returns:
         ``BenchmarkResult`` with summary and per-case results.
@@ -1016,6 +1120,7 @@ def evaluate(
     declared_agent = resolve_agent(agent_name, agent_version)
     # OTel cicd.pipeline.* of the CI run this runs in (empty outside CI).
     ci = ci_pipeline_attributes(ci_pipeline)
+    run_labels = run_label_attributes(run_name, run_description)
 
     # Materialize iterable upfront so generators work
     data_list = list(data)
@@ -1027,9 +1132,14 @@ def evaluate(
         case_id = item.get("case_id") or _make_case_id(input_val)
         case_name_val = item.get("case_name")
 
-        grouping = {**_grouping(name, resolved_run_id, case_id, case_name_val), **ci}
+        grouping = {
+            **_grouping(name, resolved_run_id, case_id, case_name_val),
+            **ci,
+        }
         # Root spans get the declared agent (where they name none themselves).
         span_stamp = {**grouping, **declared_agent}
+        # The run name and description go on the events only, not on spans.
+        grouping = {**grouping, **run_labels}
 
         # Run the task as its own trace and capture its root span.
         output_val = None
@@ -1088,6 +1198,7 @@ def evaluate(
                     evaluator_type=evaluator_type,
                     error_type=error_type,
                     metadata=safe_meta,
+                    spec=spec,
                 )
                 continue
 
@@ -1126,10 +1237,11 @@ def evaluate(
                     evaluator_type=evaluator_type,
                     error_type=err_type,
                     metadata=safe_meta,
+                    spec=spec,
                 )
                 continue
 
-            produced = [_apply_spec(s, spec) for s in produced]
+            produced = [_apply_spec(s, spec, evaluator) for s in produced]
             for s in produced:
                 if s.value is not None:
                     case_scores[s.name] = s.value
@@ -1141,6 +1253,7 @@ def evaluate(
                 evaluator=evaluator,
                 evaluator_type=evaluator_type,
                 metadata=safe_meta,
+                spec=spec,
             )
 
         ev_trace_id, ev_span_id = _span_ids(event_ctx)

@@ -15,7 +15,10 @@ from opentelemetry._logs import SeverityNumber
 
 from opensearch_genai_observability_sdk_py._internal import SDK_SCOPE_NAME, SDK_VERSION
 from opensearch_genai_observability_sdk_py._internal import parse_hex as _parse_hex
-from opensearch_genai_observability_sdk_py.score import EXPLANATION_MAX_CHARS, score
+from opensearch_genai_observability_sdk_py.score import (
+    EXPLANATION_MAX_CHARS,
+    score,
+)
 
 TRACE_ID = "6ebb9835f43af1552f2cebb9f5165e39"
 SPAN_ID = "89829115c2128845"
@@ -514,3 +517,93 @@ class TestResolveVerdict:
         from opensearch_genai_observability_sdk_py.score import resolve_verdict
 
         assert resolve_verdict(**kwargs) == (verdict, conflicts)
+
+
+# ---------------------------------------------------------------------------
+# Evaluator description and judge context
+# ---------------------------------------------------------------------------
+
+
+class TestJudgeContext:
+    def test_judge_context_attributes(self, eval_events):
+        score(
+            "answer_quality",
+            4.0,
+            trace_id=TRACE_ID,
+            evaluator_type="llm_judge",
+            evaluator_description="Correct and grounded in tool output",
+            judge_model="claude-haiku-4-5",
+            judge_prompt_name="answer-quality",
+            judge_prompt_version="v2",
+        )
+        a = _one_event(eval_events).log_record.attributes
+        assert a["opensearch.gen_ai.evaluation.evaluator.description"] == (
+            "Correct and grounded in tool output"
+        )
+        assert a["gen_ai.request.model"] == "claude-haiku-4-5"
+        assert a["gen_ai.prompt.name"] == "answer-quality"
+        assert a["gen_ai.prompt.version"] == "v2"
+        # The judge's system prompt is never on a result event.
+        assert "gen_ai.system_instructions" not in a
+        assert "opensearch.gen_ai.evaluation.system_instructions_truncated" not in a
+
+    def test_absent_by_default(self, eval_events):
+        score("accuracy", 1.0)
+        a = _one_event(eval_events).log_record.attributes
+        for key in (
+            "opensearch.gen_ai.evaluation.evaluator.description",
+            "gen_ai.request.model",
+            "gen_ai.prompt.name",
+            "gen_ai.prompt.version",
+            "gen_ai.system_instructions",
+        ):
+            assert key not in a
+
+    def test_no_system_instructions_argument(self):
+        # The full judge prompt goes on the judge's LLM span, not the event.
+        with pytest.raises(TypeError):
+            score("accuracy", 1.0, judge_system_instructions="You are a strict grader.")  # type: ignore[call-arg]
+
+    def test_system_instructions_on_judge_span_not_event(self, eval_events, exporter):
+        from opensearch_genai_observability_sdk_py import enrich, observe
+
+        @observe(name="judge")
+        def judge():
+            enrich(model="judge-model", system_instructions="You are a strict grader.")
+            return trace.get_current_span().get_span_context()
+
+        ctx = judge()
+        score(
+            "accuracy",
+            1.0,
+            trace_id=TRACE_ID,
+            judge_trace_id=format(ctx.trace_id, "032x"),
+            judge_prompt_name="strict-grader",
+            judge_prompt_version="v3",
+        )
+        a = _one_event(eval_events).log_record.attributes
+        assert a["gen_ai.prompt.name"] == "strict-grader"
+        assert a["gen_ai.prompt.version"] == "v3"
+        assert a["opensearch.gen_ai.evaluation.judge.trace_id"] == format(ctx.trace_id, "032x")
+        assert "gen_ai.system_instructions" not in a
+        (span,) = [s for s in exporter.get_finished_spans() if s.name == "judge"]
+        assert span.attributes["gen_ai.system_instructions"] == "You are a strict grader."
+
+    def test_attributes_set_judge_keys_arguments_win(self, eval_events, caplog):
+        """Judge keys in attributes= pass through; the judge arguments win over them."""
+        score(
+            "accuracy",
+            1.0,
+            judge_model="real-model",
+            attributes={
+                "gen_ai.request.model": "from-attributes",
+                "gen_ai.prompt.name": "from-attributes",
+                "gen_ai.system_instructions": "spoofed",
+            },
+        )
+        a = _one_event(eval_events).log_record.attributes
+        assert a["gen_ai.request.model"] == "real-model"
+        assert a["gen_ai.prompt.name"] == "from-attributes"
+        assert "gen_ai.system_instructions" not in a
+        assert "'gen_ai.system_instructions'" in caplog.text
+        assert "'gen_ai.request.model'" not in caplog.text

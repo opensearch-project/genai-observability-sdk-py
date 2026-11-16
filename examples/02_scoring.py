@@ -26,10 +26,12 @@ provider = register(endpoint="http://localhost:4318")
 
 
 # --- Inline: score the active span while it is running ---
-@observe(op=Op.CHAT)
+# An agent operation names the agent (gen_ai.agent.name = "answer"), and the
+# inline score() reads it from the active span. A chat span names no agent.
+@observe(op=Op.INVOKE_AGENT)
 def answer(question: str) -> str:
     response = "Paris is the capital of France."
-    # The event is parented to this chat span automatically.
+    # The event is parented to this agent span automatically.
     score(
         name="relevance",
         value=0.95,

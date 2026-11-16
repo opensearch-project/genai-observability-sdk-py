@@ -164,7 +164,28 @@ def get_event_logger() -> _logs.Logger:
 # case, set on every gen_ai.evaluation.result event of that case.
 TEST_CASE_EXPECTED_KEY = "opensearch.test.case.expected"
 TEST_CASE_EXPECTED_TRUNCATED_KEY = "opensearch.test.case.expected_truncated"
-EXPECTED_MAX_CHARS = 4096
+# Every result event of a case carries the value, so a higher cap multiplies
+# the request size of an export batch (see docs/agent-evaluations.md).
+EXPECTED_MAX_CHARS = 8192
+
+# OpenSearch attributes (no OTel name yet) for a human-readable run name and
+# description, set on every gen_ai.evaluation.result event of the run.
+TEST_SUITE_RUN_NAME_KEY = "opensearch.test.suite.run.name"
+TEST_SUITE_RUN_DESCRIPTION_KEY = "opensearch.test.suite.run.description"
+RUN_DESCRIPTION_MAX_CHARS = 1024
+
+
+def run_label_attributes(run_name: str | None, run_description: str | None) -> dict[str, Any]:
+    """``opensearch.test.suite.run.name`` / ``.description`` (only set keys).
+
+    The description is cut to ``RUN_DESCRIPTION_MAX_CHARS`` characters.
+    """
+    attrs: dict[str, Any] = {}
+    if run_name:
+        attrs[TEST_SUITE_RUN_NAME_KEY] = run_name
+    if run_description:
+        attrs[TEST_SUITE_RUN_DESCRIPTION_KEY] = run_description[:RUN_DESCRIPTION_MAX_CHARS]
+    return attrs
 
 
 def expected_attributes(expected: Any) -> dict[str, Any]:
@@ -172,7 +193,7 @@ def expected_attributes(expected: Any) -> dict[str, Any]:
 
     Strings are used as-is; other values are JSON-encoded (compact, non-ASCII
     kept, unknown types via ``str``). Values longer than
-    ``EXPECTED_MAX_CHARS`` (4096) characters are cut to that length and
+    ``EXPECTED_MAX_CHARS`` (8192) characters are cut to that length and
     ``opensearch.test.case.expected_truncated`` is set to ``True``. ``None``
     means no expected value: nothing is set.
     """
@@ -197,6 +218,8 @@ _RESERVED_KEYS = frozenset(
         "test.suite.run.id",
         "test.case.id",
         "test.case.name",
+        TEST_SUITE_RUN_NAME_KEY,
+        TEST_SUITE_RUN_DESCRIPTION_KEY,
         TEST_CASE_EXPECTED_KEY,
         TEST_CASE_EXPECTED_TRUNCATED_KEY,
         "cicd.pipeline.name",
@@ -221,11 +244,18 @@ def parse_hex(value: str) -> int | None:
 # attributes and metadata must not set them, even when the SDK leaves one
 # unset (for example the label of an error result).
 _EVALUATION_FIELD_PREFIXES = ("gen_ai.evaluation.", "opensearch.gen_ai.evaluation.")
-_EVALUATION_FIELD_KEYS = frozenset({"error.type"})
+# gen_ai.system_instructions is never set on a result event (the judge's
+# prompt belongs on the judge's own LLM span), so user attributes cannot add
+# it either. The judge context keys (gen_ai.request.model, gen_ai.prompt.name,
+# gen_ai.prompt.version) are not reserved: metadata may set them, for example
+# for a Benchmark upload of DeepEval or Ragas results, and the explicit judge
+# arguments of score() / @scorer win when both are set.
+_EVALUATION_FIELD_KEYS = frozenset({"error.type", "gen_ai.system_instructions"})
 
 
 def is_evaluation_field_key(key: str) -> bool:
-    """True for ``gen_ai.evaluation.*``, ``opensearch.gen_ai.evaluation.*``, ``error.type``."""
+    """True for ``gen_ai.evaluation.*``, ``opensearch.gen_ai.evaluation.*``, ``error.type``
+    and ``gen_ai.system_instructions``."""
     return key in _EVALUATION_FIELD_KEYS or key.startswith(_EVALUATION_FIELD_PREFIXES)
 
 
@@ -234,19 +264,31 @@ def is_reserved_metadata_key(key: str) -> bool:
     return key in _RESERVED_KEYS or is_evaluation_field_key(key)
 
 
+# Reserved keys already warned about: each is logged once per process.
+_warned_reserved_keys: set[str] = set()
+
+
 def drop_reserved_keys(
     attributes: dict[str, Any],
     *,
     reserved: Callable[[str], bool] = is_reserved_metadata_key,
     context: str = "",
 ) -> dict[str, Any]:
-    """``attributes`` without the keys ``reserved`` matches, with one warning per call."""
+    """``attributes`` without the keys ``reserved`` matches.
+
+    The first time a key is dropped in this process one warning names it;
+    later drops of that key are silent, so a run over many cases or scores
+    logs it once.
+    """
     dropped = [key for key in attributes if reserved(key)]
     if not dropped:
         return dict(attributes)
-    logger.warning(
-        "%sKeys %s are reserved by the SDK and will be ignored",
-        f"{context}: " if context else "",
-        ", ".join(repr(k) for k in dropped),
-    )
+    first_time = [key for key in dropped if key not in _warned_reserved_keys]
+    if first_time:
+        _warned_reserved_keys.update(first_time)
+        logger.warning(
+            "%sKeys %s are reserved by the SDK and will be ignored (each key is logged once)",
+            f"{context}: " if context else "",
+            ", ".join(repr(k) for k in first_time),
+        )
     return {k: v for k, v in attributes.items() if k not in dropped}

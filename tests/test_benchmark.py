@@ -292,11 +292,19 @@ class TestBenchmarkLog:
         with pytest.raises(RuntimeError, match="already closed"):
             b.log(input="q1")
 
-    def test_double_close_raises(self):
+    def test_close_is_idempotent(self, capsys):
         b = Benchmark(name="double")
-        b.close()
-        with pytest.raises(RuntimeError, match="already closed"):
-            b.close()
+        first = b.close()
+        second = b.close()
+        assert second is first
+        assert capsys.readouterr().out.count("BENCHMARK: double") == 1
+
+    def test_close_inside_with_prints_summary_once(self, capsys):
+        with Benchmark(name="inside-with") as b:
+            b.log(input="q1", scores={"accuracy": 1.0})
+            summary = b.close()
+        assert summary.total_cases == 1
+        assert capsys.readouterr().out.count("BENCHMARK: inside-with") == 1
 
     def test_trace_id_without_span_id_raises(self):
         with Benchmark(name="link-no-span") as b:
@@ -1222,18 +1230,25 @@ class TestExpectedOutput:
         assert a[EXPECTED] == '{"city":"Paris","n":1}'
         assert EXPECTED_TRUNCATED not in a
 
-    def test_truncated_at_4096(self, events):
+    def test_truncated_at_8192(self, events):
         with Benchmark(name="exp-long") as b:
-            b.log(input="q", expected="x" * 5000, scores={"a": 1.0})
+            b.log(input="q", expected="x" * 40000, scores={"a": 1.0})
         a = events(EVALUATION)[0].log_record.attributes
-        assert a[EXPECTED] == "x" * 4096
+        assert a[EXPECTED] == "x" * 8192
         assert a[EXPECTED_TRUNCATED] is True
 
-    def test_exactly_4096_not_truncated(self, events):
+    def test_exactly_8192_not_truncated(self, events):
         with Benchmark(name="exp-edge") as b:
-            b.log(input="q", expected="y" * 4096, scores={"a": 1.0})
+            b.log(input="q", expected="y" * 8192, scores={"a": 1.0})
         a = events(EVALUATION)[0].log_record.attributes
-        assert a[EXPECTED] == "y" * 4096
+        assert a[EXPECTED] == "y" * 8192
+        assert EXPECTED_TRUNCATED not in a
+
+    def test_old_4096_cap_no_longer_truncates(self, events):
+        with Benchmark(name="exp-mid") as b:
+            b.log(input="q", expected="z" * 5000, scores={"a": 1.0})
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a[EXPECTED] == "z" * 5000
         assert EXPECTED_TRUNCATED not in a
 
     def test_absent_when_no_expected(self, events):
@@ -1296,7 +1311,7 @@ class TestRecordExpected:
 
     def test_default_on(self, events):
         with Benchmark(name="rec-default") as b:
-            b.log(input="q", expected="x" * 5000, scores={"a": 1.0})
+            b.log(input="q", expected="x" * 40000, scores={"a": 1.0})
         evaluate(
             name="rec-default-eval",
             task=lambda x: x,
@@ -1309,14 +1324,14 @@ class TestRecordExpected:
 
     def test_benchmark_off_writes_neither(self, events):
         with Benchmark(name="rec-off", record_expected=False) as b:
-            b.log(input="q", expected="x" * 5000, scores={"a": 1.0, "b": 0.5})
+            b.log(input="q", expected="x" * 40000, scores={"a": 1.0, "b": 0.5})
             b.log(input="q2", expected="short", scores={"a": 1.0}, error_type="ValueError")
         records = events(EVALUATION)
         assert len(records) == 3
         for r in records:
             assert EXPECTED not in r.log_record.attributes
             assert EXPECTED_TRUNCATED not in r.log_record.attributes
-        assert b._cases[0].expected == "x" * 5000
+        assert b._cases[0].expected == "x" * 40000
 
     def test_evaluate_off_writes_neither(self, events):
         calls: list = []
@@ -1492,3 +1507,338 @@ class TestScorerReturnTypes:
         assert grades["f32"].log_record.attributes["gen_ai.evaluation.score.value"] == 0.5
         assert grades["nb"].log_record.attributes["error.type"] == "TypeError"
         assert result.cases[0].status == "error"
+
+
+# ---------------------------------------------------------------------------
+# Run name / description and scorer judge context
+# ---------------------------------------------------------------------------
+
+RUN_NAME_KEY = "opensearch.test.suite.run.name"
+RUN_DESC_KEY = "opensearch.test.suite.run.description"
+
+
+class TestRunLabels:
+    def test_evaluate_run_name_and_description(self, events):
+        evaluate(
+            "suite",
+            task=lambda x: x,
+            data=[{"input": "a"}, {"input": "b"}],
+            scores=[lambda i, o, e: 1.0],
+            run_name="v5 shorter prompt",
+            run_description="Shorter system prompt",
+        )
+        recs = events(EVALUATION)
+        assert len(recs) == 2
+        for r in recs:
+            a = r.log_record.attributes
+            assert a[RUN_NAME_KEY] == "v5 shorter prompt"
+            assert a[RUN_DESC_KEY] == "Shorter system prompt"
+            assert a["test.suite.run.id"]
+
+    def test_run_labels_on_events_not_on_agent_root_spans(self, events, exporter):
+        evaluate(
+            "suite",
+            task=_traced_agent(),
+            data=[{"input": "a"}],
+            scores=[lambda i, o, e: 1.0],
+            run_name="v5",
+            run_description="d" * 1024,
+        )
+        (root,) = _spans_named(exporter, "agent")
+        assert root.attributes["test.suite.name"] == "suite"  # still stamped with test.*
+        assert RUN_NAME_KEY not in root.attributes
+        assert RUN_DESC_KEY not in root.attributes
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a[RUN_NAME_KEY] == "v5"
+        assert len(a[RUN_DESC_KEY]) == 1024
+
+    def test_evaluate_without_run_labels(self, events):
+        evaluate("suite", task=lambda x: x, data=[{"input": "a"}], scores=[lambda i, o, e: 1.0])
+        a = events(EVALUATION)[0].log_record.attributes
+        assert RUN_NAME_KEY not in a
+        assert RUN_DESC_KEY not in a
+
+    def test_description_truncated_to_1024(self, events):
+        evaluate(
+            "suite",
+            task=lambda x: x,
+            data=[{"input": "a"}],
+            scores=[lambda i, o, e: 1.0],
+            run_description="d" * 2000,
+        )
+        a = events(EVALUATION)[0].log_record.attributes
+        assert len(a[RUN_DESC_KEY]) == 1024
+
+    def test_benchmark_run_name_and_description(self, events):
+        with Benchmark(name="b", run_name="nightly", run_description="desc") as b:
+            b.log(input="q", scores={"acc": 1.0})
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a[RUN_NAME_KEY] == "nightly"
+        assert a[RUN_DESC_KEY] == "desc"
+
+    def test_metadata_cannot_set_run_labels(self, events):
+        with Benchmark(name="b", run_name="real", metadata={RUN_NAME_KEY: "spoofed"}) as b:
+            b.log(input="q", scores={"acc": 1.0}, metadata={RUN_DESC_KEY: "spoofed"})
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a[RUN_NAME_KEY] == "real"
+        assert RUN_DESC_KEY not in a
+
+
+class TestScorerJudgeContext:
+    def _judge(self, **extra):
+        @scorer(
+            name="answer_quality",
+            evaluator_type="llm_judge",
+            description="Correct and grounded",
+            judge_model="claude-haiku-4-5",
+            judge_prompt_name="answer-quality",
+            judge_prompt_version="v2",
+            **extra,
+        )
+        def quality(i, o, e):
+            return 4.0
+
+        return quality
+
+    def test_judge_context_on_events(self, events):
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[self._judge()])
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["opensearch.gen_ai.evaluation.evaluator.description"] == "Correct and grounded"
+        assert a["gen_ai.request.model"] == "claude-haiku-4-5"
+        assert a["gen_ai.prompt.name"] == "answer-quality"
+        assert a["gen_ai.prompt.version"] == "v2"
+        assert "gen_ai.system_instructions" not in a
+
+    def test_no_system_instructions_argument(self):
+        # The full judge prompt goes on the judge's LLM span, not the events.
+        with pytest.raises(TypeError):
+            self._judge(judge_system_instructions="s")
+
+    def test_judge_context_on_error_results(self, events):
+        @scorer(name="q", judge_model="m1", description="d")
+        def broken(i, o, e):
+            raise RuntimeError("boom")
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[broken])
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["error.type"] == "RuntimeError"
+        assert a["gen_ai.request.model"] == "m1"
+        assert a["opensearch.gen_ai.evaluation.evaluator.description"] == "d"
+
+    def test_judge_context_only_on_the_scorers_own_evaluator(self, events):
+        @scorer(name="mixed", evaluator="checks_x", description="checks X", judge_model="m1")
+        def mixed(i, o, e):
+            return [
+                EvalScore(name="own", value=1.0),
+                EvalScore(name="same", value=1.0, evaluator="checks_x"),
+                EvalScore(name="faith", value=0.5, evaluator="deepeval.faithfulness"),
+                EvalScore(
+                    name="rel",
+                    value=0.5,
+                    evaluator="ragas.relevancy",
+                    metadata={"gen_ai.request.model": "ragas-judge"},
+                ),
+            ]
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[mixed])
+        by_name = {
+            r.log_record.attributes["gen_ai.evaluation.name"]: r.log_record.attributes
+            for r in events(EVALUATION)
+        }
+        desc = "opensearch.gen_ai.evaluation.evaluator.description"
+        for name in ("own", "same"):
+            assert by_name[name]["gen_ai.request.model"] == "m1"
+            assert by_name[name][desc] == "checks X"
+        assert desc not in by_name["faith"]
+        assert "gen_ai.request.model" not in by_name["faith"]
+        assert by_name["rel"]["gen_ai.request.model"] == "ragas-judge"
+        assert desc not in by_name["rel"]
+
+    def test_rule_and_type_only_on_the_scorers_own_evaluator(self, events):
+        @scorer(
+            name="mixed",
+            evaluator="checks_x",
+            evaluator_type="llm_judge",
+            threshold=0.7,
+            score_min=0.0,
+            score_max=1.0,
+        )
+        def mixed(i, o, e):
+            return [
+                EvalScore(name="own", value=0.8),
+                EvalScore(name="faith", value=0.5, evaluator="deepeval.faithfulness"),
+            ]
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[mixed])
+        by_name = {
+            r.log_record.attributes["gen_ai.evaluation.name"]: r.log_record.attributes
+            for r in events(EVALUATION)
+        }
+        thr = "opensearch.gen_ai.evaluation.score.threshold"
+        etype = "opensearch.gen_ai.evaluation.evaluator.type"
+        assert by_name["own"][thr] == 0.7
+        assert by_name["own"][etype] == "llm_judge"
+        assert by_name["own"]["gen_ai.evaluation.score.label"] == "pass"
+        assert thr not in by_name["faith"]
+        assert etype not in by_name["faith"]
+        assert "opensearch.gen_ai.evaluation.score.max" not in by_name["faith"]
+        assert "gen_ai.evaluation.score.label" not in by_name["faith"]
+
+    def test_judge_context_default_evaluator_is_function_name(self, events):
+        @scorer(judge_model="m1")
+        def judge_fn(i, o, e):
+            return [
+                EvalScore(name="a", value=1.0, evaluator="judge_fn"),
+                EvalScore(name="b", value=1.0, evaluator="other"),
+            ]
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[judge_fn])
+        models = {
+            r.log_record.attributes["gen_ai.evaluation.name"]: r.log_record.attributes.get(
+                "gen_ai.request.model"
+            )
+            for r in events(EVALUATION)
+        }
+        assert models == {"a": "m1", "b": None}
+
+    def test_spec_holds_fields(self):
+        q = self._judge()
+        assert q.scorer_spec.description == "Correct and grounded"
+        assert q.scorer_spec.judge_model == "claude-haiku-4-5"
+
+
+class TestJudgeContextMetadata:
+    """Judge context keys are not reserved on metadata; explicit judge arguments win."""
+
+    JUDGE = {
+        "gen_ai.request.model": "gpt-4o",
+        "gen_ai.prompt.name": "faithfulness",
+        "gen_ai.prompt.version": "v1",
+    }
+
+    def test_benchmark_metadata_sets_judge_context(self, events, caplog):
+        with Benchmark(name="b", metadata=self.JUDGE) as b:
+            b.log(input="q", scores={"faithfulness": 0.8})
+        a = events(EVALUATION)[0].log_record.attributes
+        for key, value in self.JUDGE.items():
+            assert a[key] == value
+        assert "reserved by the SDK" not in caplog.text
+
+    def test_evalscore_metadata_sets_judge_context(self, events, caplog):
+        with Benchmark(name="b") as b:
+            b.log(input="q", scores=[EvalScore(name="f", value=0.8, metadata=self.JUDGE)])
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["gen_ai.request.model"] == "gpt-4o"
+        assert "reserved by the SDK" not in caplog.text
+
+    def test_evaluate_metadata_sets_judge_context(self, events):
+        evaluate(
+            "s",
+            task=lambda x: x,
+            data=[{"input": "a"}],
+            scores=[lambda i, o, e: 1.0],
+            metadata=self.JUDGE,
+        )
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["gen_ai.prompt.name"] == "faithfulness"
+
+    def test_scorer_judge_arguments_win_over_metadata(self, events):
+        @scorer(name="q", judge_model="spec-model", judge_prompt_version="v9")
+        def quality(i, o, e):
+            return EvalScore(name="q", value=1.0, metadata={"gen_ai.request.model": "score-meta"})
+
+        evaluate(
+            "s", task=lambda x: x, data=[{"input": "a"}], scores=[quality], metadata=self.JUDGE
+        )
+        a = events(EVALUATION)[0].log_record.attributes
+        assert a["gen_ai.request.model"] == "spec-model"
+        assert a["gen_ai.prompt.version"] == "v9"
+        assert a["gen_ai.prompt.name"] == "faithfulness"  # not declared: metadata stands
+
+    def test_system_instructions_still_reserved(self, events, caplog):
+        with Benchmark(name="b", metadata={"gen_ai.system_instructions": "prompt"}) as b:
+            b.log(input="q", scores={"a": 1.0})
+        assert "gen_ai.system_instructions" not in events(EVALUATION)[0].log_record.attributes
+        assert "'gen_ai.system_instructions'" in caplog.text
+
+    def test_ignored_key_warning_once_per_key_per_process(self, events, caplog):
+        with Benchmark(name="b", metadata={"error.type": "X"}) as b:
+            for i in range(3):
+                b.log(
+                    input=f"q{i}",
+                    scores=[
+                        EvalScore(name="a", value=1.0, metadata={"error.type": "Y"}),
+                        EvalScore(name="b", value=1.0, metadata={"gen_ai.evaluation.name": "z"}),
+                    ],
+                )
+        assert caplog.text.count("'error.type'") == 1
+        assert caplog.text.count("'gen_ai.evaluation.name'") == 1
+        assert len(events(EVALUATION)) == 6
+
+
+class TestEvalScoreEvaluator:
+    NAME = "opensearch.gen_ai.evaluation.evaluator.name"
+    TYPE = "opensearch.gen_ai.evaluation.evaluator.type"
+
+    def test_benchmark_evalscore_names_its_evaluator(self, events):
+        with Benchmark(name="b") as b:
+            b.log(
+                input="q",
+                scores=[
+                    EvalScore(
+                        name="answer_relevancy",
+                        value=0.9,
+                        evaluator="deepeval.answer_relevancy",
+                        evaluator_type="llm_judge",
+                    ),
+                    EvalScore(name="exact", value=1.0),
+                ],
+            )
+        named, plain = events(EVALUATION)
+        assert named.log_record.attributes[self.NAME] == "deepeval.answer_relevancy"
+        assert named.log_record.attributes[self.TYPE] == "llm_judge"
+        # Unset: recorded as before (no evaluator attributes from Benchmark).
+        assert self.NAME not in plain.log_record.attributes
+        assert self.TYPE not in plain.log_record.attributes
+
+    def test_benchmark_log_defaults_and_evalscore_wins(self, events):
+        with Benchmark(name="b") as b:
+            b.log(
+                input="q",
+                scores=[
+                    EvalScore(name="a", value=1.0),
+                    EvalScore(name="b", value=1.0, evaluator="own", evaluator_type="code"),
+                ],
+                evaluator="ragas",
+                evaluator_type="llm_judge",
+            )
+            b.log(input="q2", scores={"c": 0.5}, evaluator="ragas")
+        a, own, c = (r.log_record.attributes for r in events(EVALUATION))
+        assert (a[self.NAME], a[self.TYPE]) == ("ragas", "llm_judge")
+        assert (own[self.NAME], own[self.TYPE]) == ("own", "code")
+        assert c[self.NAME] == "ragas"
+        assert self.TYPE not in c
+
+    def test_benchmark_error_results_keep_evaluator(self, events):
+        with Benchmark(name="b") as b:
+            b.log(
+                input="q",
+                scores=[EvalScore(name="a", value=None, evaluator="judge_x")],
+                error_type="TimeoutError",
+            )
+        (r,) = events(EVALUATION)
+        assert r.log_record.attributes["error.type"] == "TimeoutError"
+        assert r.log_record.attributes[self.NAME] == "judge_x"
+
+    def test_evaluate_evalscore_wins_over_scorer_declaration(self, events):
+        @scorer(name="q", evaluator="declared", evaluator_type="code")
+        def q(i, o, e):
+            return [
+                EvalScore(name="q", value=1.0),
+                EvalScore(name="q2", value=1.0, evaluator="own", evaluator_type="llm_judge"),
+            ]
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[q])
+        declared, own = (r.log_record.attributes for r in events(EVALUATION))
+        assert (declared[self.NAME], declared[self.TYPE]) == ("declared", "code")
+        assert (own[self.NAME], own[self.TYPE]) == ("own", "llm_judge")

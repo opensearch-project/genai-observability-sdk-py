@@ -257,7 +257,9 @@ def register(
         batch: Use batch processors (``True``) or simple processors
             (``False``). Batch is recommended for production.
         auto_instrument: Discover and activate installed instrumentor
-            packages automatically.
+            packages automatically. An instrumentor is activated only when
+            the library it instruments is installed; the others are skipped
+            (logged at DEBUG).
         exporter: Custom traces ``SpanExporter``, used as-is. The traces
             endpoint, protocol, headers and ``sigv4`` do not apply to it.
         set_global: Set as the global ``TracerProvider`` (default: ``True``).
@@ -803,13 +805,97 @@ def _create_grpc_exporter(
     return exporter
 
 
+def _base_instrumentor_class() -> Any:
+    """``BaseInstrumentor``, or ``None`` without opentelemetry-instrumentation."""
+    try:
+        from opentelemetry.instrumentation import instrumentor
+    except ImportError:
+        return None
+    return getattr(instrumentor, "BaseInstrumentor", None)
+
+
+def _dependency_conflict_error() -> Any:
+    """``DependencyConflictError`` when the installed opentelemetry-instrumentation
+    has it (with ``instrument(raise_exception_on_conflict=True)``), else ``None``."""
+    try:
+        from opentelemetry.instrumentation.dependencies import DependencyConflictError
+    except ImportError:
+        return None
+    return DependencyConflictError
+
+
+def _describe_conflict(conflict: Any) -> tuple[bool, str]:
+    """``(is a version conflict, message naming the library and required version)``.
+
+    A library that is not installed at all is not a version conflict.
+    """
+    required = getattr(conflict, "required", None)
+    found = getattr(conflict, "found", None)
+    required_any = getattr(conflict, "required_any", None)
+    found_any = getattr(conflict, "found_any", None)
+    if required:
+        if found:
+            return True, f"it requires {required}, but {found} is installed"
+        return False, f"it requires {required}, which is not installed"
+    if required_any:
+        wanted = " or ".join(str(r) for r in required_any)
+        if found_any:
+            installed = ", ".join(str(f) for f in found_any)
+            return True, f"it requires {wanted}, but {installed} is installed"
+        return False, f"it requires {wanted}, none of which is installed"
+    return bool(found or found_any), str(conflict)
+
+
+def _instrument_one(instrumentor: Any, provider: TracerProvider) -> Any:
+    """Call ``instrument()``; return the dependency conflict that stopped it, or ``None``.
+
+    For a ``BaseInstrumentor`` the instrumentor's own conflict rule decides
+    (its ``_check_dependency_conflicts()``, overrides included): through
+    ``instrument(raise_exception_on_conflict=True)`` when the installed
+    opentelemetry-instrumentation supports it, else by calling that check
+    first. Other entry-point instrumentors (only ``instrument()``) are
+    called as before, without a dependency check.
+    """
+    base = _base_instrumentor_class()
+    if base is None or not isinstance(instrumentor, base):
+        instrumentor.instrument(tracer_provider=provider)
+        return None
+    conflict_error = _dependency_conflict_error()
+    if conflict_error is not None:
+        try:
+            instrumentor.instrument(tracer_provider=provider, raise_exception_on_conflict=True)
+        except conflict_error as exc:
+            return exc.conflict
+        return None
+    check = getattr(instrumentor, "_check_dependency_conflicts", None)
+    conflict = check() if callable(check) else None
+    if conflict:
+        return conflict
+    instrumentor.instrument(tracer_provider=provider, skip_dep_check=True)
+    return None
+
+
 def _auto_instrument(provider: TracerProvider) -> None:
     """Discover and activate installed instrumentor packages.
 
     Searches the OpenTelemetry entry point group so instrumentors
-    from the OTel ecosystem are discovered automatically.
+    from the OTel ecosystem are discovered automatically. An instrumentor is
+    activated only when the library it instruments is installed: it is
+    skipped when it cannot be imported (instrumentors import their library),
+    or when its own dependency check (``BaseInstrumentor``) fails. A library
+    that is not installed is skipped quietly (DEBUG); a library installed at
+    a version the instrumentor does not support is a WARNING naming the
+    library and the required version. Only instrumentors that really
+    activated are counted.
+
+    The instrumentor distribution's ``instruments`` extra is deliberately not
+    used: it can name an umbrella package the instrumentor does not need
+    (``langchain`` for an instrumentor that patches ``langchain-core``,
+    ``llama-index`` for one that patches ``llama-index-core``), which would
+    skip it in normal LangGraph and LlamaIndex installs.
     """
-    discovered = 0
+    activated: list[str] = []
+    skipped: list[str] = []
     seen_names = set()
 
     for group in _INSTRUMENTOR_GROUPS:
@@ -822,18 +908,56 @@ def _auto_instrument(provider: TracerProvider) -> None:
             seen_names.add(ep.name)
 
             try:
-                instrumentor_cls = ep.load()
-                instrumentor = instrumentor_cls()
-                instrumentor.instrument(tracer_provider=provider)
-                discovered += 1
-                logger.debug("Instrumented: %s (from %s)", ep.name, group)
+                instrumentor = ep.load()()
+            except ImportError as exc:
+                # The instrumentor imports its library at load time.
+                skipped.append(ep.name)
+                logger.debug("Skipped instrumentor %s: library not importable (%s)", ep.name, exc)
+                continue
             except Exception as exc:
+                skipped.append(ep.name)
                 logger.debug("Skipped instrumentor %s: %s", ep.name, exc)
+                continue
 
-    if discovered == 0:
+            if getattr(instrumentor, "is_instrumented_by_opentelemetry", False) is True:
+                activated.append(ep.name)  # already active, e.g. register() called twice
+                logger.debug("Already instrumented: %s", ep.name)
+                continue
+            try:
+                conflict = _instrument_one(instrumentor, provider)
+            except Exception as exc:
+                skipped.append(ep.name)
+                logger.debug("Skipped instrumentor %s: %s", ep.name, exc)
+                continue
+            if conflict:
+                skipped.append(ep.name)
+                version_conflict, reason = _describe_conflict(conflict)
+                if version_conflict:
+                    logger.warning("Skipped instrumentor %s: %s", ep.name, reason)
+                else:
+                    logger.debug("Skipped instrumentor %s: %s", ep.name, reason)
+                continue
+            # instrument() can return without activating (its own check said no).
+            if getattr(instrumentor, "is_instrumented_by_opentelemetry", True) is False:
+                skipped.append(ep.name)
+                logger.debug("Skipped instrumentor %s: not activated", ep.name)
+                continue
+            activated.append(ep.name)
+            logger.debug("Instrumented: %s (from %s)", ep.name, group)
+
+    if activated:
+        logger.info("Auto-instrumented %d libraries: %s", len(activated), ", ".join(activated))
+    elif skipped:
+        logger.warning(
+            "No instrumented libraries found: %d instrumentor package(s) are installed (%s), "
+            "but none of the libraries they instrument is installed at a supported version. "
+            "An extra installs only the instrumentor: install the library too. DEBUG logs "
+            "show what each one needs.",
+            len(skipped),
+            ", ".join(skipped),
+        )
+    else:
         logger.warning(
             "No instrumentor packages found. Install instrumentors to auto-trace "
             "LLM calls, e.g.: pip install opentelemetry-instrumentation-openai"
         )
-    else:
-        logger.info("Auto-instrumented %d libraries", discovered)

@@ -32,12 +32,15 @@ def main():
         verify_certs=False,
     )
 
-    # Discover recent traces
+    # Discover recent traces by their agent root (the span Agent Traces lists:
+    # the trace root when it is a GenAI span, or the marked agent span below an
+    # HTTP handler). Each carries agent_name and agent_version.
     since = datetime.now(timezone.utc) - timedelta(hours=1)
     roots = retriever.list_root_spans(since=since, max_results=5)
     print(f"Found {len(roots)} recent traces:\n")
     for r in roots:
-        print(f"  {r.trace_id[:12]}…  {r.name}  ({r.model or 'no model'})")
+        agent = f"{r.agent_name} {r.agent_version}".strip() or "no agent"
+        print(f"  {r.trace_id[:12]}…  {r.name}  ({r.model or 'no model'}, {agent})")
 
     if not roots:
         print("No traces found. Send some first with 01_tracing_basics.py")
@@ -47,8 +50,10 @@ def main():
     # connection, auth or mapping errors raise, so a failed lookup never makes
     # every trace look unevaluated (which would re-run the judges and write
     # duplicate results).
+    # evaluator= counts only this job's results, so traces scored by other
+    # evaluators are still judged here.
     trace_ids = [r.trace_id for r in roots]
-    already_evaluated = retriever.find_evaluated_trace_ids(trace_ids)
+    already_evaluated = retriever.find_evaluated_trace_ids(trace_ids, evaluator="manual_review")
     to_evaluate = [r for r in roots if r.trace_id not in already_evaluated]
     print(f"\n{len(already_evaluated)} already evaluated, {len(to_evaluate)} to evaluate")
 
@@ -66,7 +71,8 @@ def main():
         tokens = f" ({span.input_tokens}→{span.output_tokens} tok)" if span.input_tokens else ""
         print(f"  {indent}{span.operation_name}: {span.name}{tokens}")
 
-    root = next(s for s in trace.spans if not s.parent_span_id)
+    # Score the agent root itself (not the HTTP server span above it, if any).
+    root = target
 
     # --- Uncomment to evaluate with strands-agents ---
     # evaluate_with_strands(trace, root, target.trace_id)
@@ -82,6 +88,8 @@ def main():
         explanation="Agent addressed the user query with relevant info",
         evaluator="manual_review",
         evaluator_type="human",
+        agent_name=root.agent_name or None,
+        agent_version=root.agent_version or None,
     )
     provider.force_flush()
     print(f"\n✅ Evaluation event written for trace {target.trace_id[:12]}…")
@@ -183,6 +191,8 @@ def evaluate_with_strands(trace_record, root_span, trace_id):
         score_min=0.0,
         score_max=1.0,
         direction="maximize",
+        agent_name=root_span.agent_name or None,
+        agent_version=root_span.agent_version or None,
     )
     print(f"✅ Evaluation event written for trace {trace_id[:12]}…")
 
