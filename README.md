@@ -34,7 +34,7 @@ The core package includes the OTel SDK and exporters. Auto-instrumentation of LL
 | `opensearch` | `opensearch-py`, for `OpenSearchTraceRetriever` |
 | `all` | Everything, for development and integration testing |
 
-The full list is in [Auto-instrumentation](docs/configuration.md#auto-instrumentation).
+The full list is in [Auto-instrumentation](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/configuration.md#auto-instrumentation).
 
 ## Quick start
 
@@ -57,7 +57,7 @@ def research(query: str) -> str:
 research("What is OpenSearch?")
 ```
 
-This produces the span `invoke_agent research_agent` with a child `execute_tool web_search`. A longer example and the span tree are in [Architecture](docs/architecture.md#spans).
+This produces the span `invoke_agent research_agent` with a child `execute_tool web_search`. A longer example and the span tree are in [Architecture](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/architecture.md#spans).
 
 ### Evaluations
 
@@ -78,22 +78,22 @@ result = evaluate(
 )
 ```
 
-Each case is its own agent trace, and each score is one `gen_ai.evaluation.result` event. To score live traffic, call `score()`: see [`score()`](docs/api-reference.md#score) and [Getting started with agent evaluations](docs/getting-started-evaluations.md).
+Each case is its own agent trace, and each score is one `gen_ai.evaluation.result` event. To score live traffic, call `score()`: see [`score()`](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/api-reference.md#score) and [Getting started with agent evaluations](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/getting-started-evaluations.md).
 
 ## Documentation
 
 | Document | What it covers |
 |---|---|
-| [docs/api-reference.md](docs/api-reference.md) | Every public API: `register()`, `observe()`, `Op`, `enrich()`, `mark_agent_root()`, `score()`, `evaluate()`, `Benchmark`, `OpenSearchTraceRetriever` |
-| [docs/configuration.md](docs/configuration.md) | Environment variables, endpoints, protocols, AWS SigV4, ingestion pipeline settings, auto-instrumented libraries |
-| [docs/architecture.md](docs/architecture.md) | How spans and evaluation events flow from the SDK into OpenSearch |
-| [docs/agent-evaluations.md](docs/agent-evaluations.md) | Evaluation concepts and reference: data model, what gets stored, index template, ingestion, verify, troubleshooting |
-| [docs/getting-started-evaluations.md](docs/getting-started-evaluations.md) | Guided walkthrough from an instrumented agent to online and offline results in OpenSearch Dashboards |
-| [examples/README.md](examples/README.md) | Every runnable example: basics, framework tracing, eval libraries, an end-to-end agent |
-| [examples/runbooks/tracing.md](examples/runbooks/tracing.md) | Step by step: stand up the stack, instrument, check the spans, open Agent Traces |
-| [examples/runbooks/evals.md](examples/runbooks/evals.md) | Step by step: offline evals, online evals, checking the results |
+| [docs/api-reference.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/api-reference.md) | Every public API: `register()`, `observe()`, `Op`, `enrich()`, `mark_agent_root()`, `score()`, `evaluate()`, `Benchmark`, `OpenSearchTraceRetriever` |
+| [docs/configuration.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/configuration.md) | Environment variables, endpoints, protocols, AWS SigV4, ingestion pipeline settings, auto-instrumented libraries |
+| [docs/architecture.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/architecture.md) | How spans and evaluation events flow from the SDK into OpenSearch |
+| [docs/agent-evaluations.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/agent-evaluations.md) | Evaluation concepts and reference: data model, what gets stored, index template, ingestion, verify, troubleshooting |
+| [docs/getting-started-evaluations.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/getting-started-evaluations.md) | Guided walkthrough from an instrumented agent to online and offline results in OpenSearch Dashboards |
+| [examples/README.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/examples/README.md) | Every runnable example: basics, framework tracing, eval libraries, an end-to-end agent |
+| [examples/runbooks/tracing.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/examples/runbooks/tracing.md) | Step by step: stand up the stack, instrument, check the spans, open Agent Traces |
+| [examples/runbooks/evals.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/examples/runbooks/evals.md) | Step by step: offline evals, online evals, checking the results |
 
-The docs index is [docs/README.md](docs/README.md).
+The docs index is [docs/README.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/README.md).
 
 ## TypeScript SDK
 
@@ -101,16 +101,16 @@ Looking for the TypeScript version? See [opensearch-genai-observability-sdk-ts](
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, tests and the pull request process.
+See [CONTRIBUTING.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/CONTRIBUTING.md) for the development setup, tests and the pull request process.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) to report a vulnerability.
+See [SECURITY.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/SECURITY.md) to report a vulnerability.
 
 ## License
 
-This project is licensed under the [Apache License 2.0](LICENSE).
+This project is licensed under the [Apache License 2.0](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/LICENSE).
 
 ## Copyright
 
-Copyright OpenSearch Contributors. See [NOTICE](NOTICE) for details.
+Copyright OpenSearch Contributors. See [NOTICE](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/NOTICE) for details.
