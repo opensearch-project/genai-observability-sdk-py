@@ -112,7 +112,10 @@ Shown in: [evals/native](../evals/native/) (`online_eval.py`),
 
 Keep your library and send its numbers: return them from an `evaluate()` scorer (results
 get the suite, case and run ids), log them with `Benchmark(...).log(...)` when the run
-already happened, or `score()` them onto a trace.
+already happened, or `score()` them onto a trace. With `Benchmark`, record the judge in
+the metadata (`Benchmark(metadata={"gen_ai.request.model": ...})`, also
+`gen_ai.prompt.name` / `gen_ai.prompt.version`); with `evaluate()`, use
+`@scorer(judge_model=...)`.
 
 | Library | Example |
 |---|---|
