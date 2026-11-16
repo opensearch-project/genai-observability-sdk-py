@@ -108,6 +108,7 @@ dev = [
     "safety>=2.3.0",
     "pre-commit>=3.0.0",
     "opensearch-py>=2.4.0",
+    "opentelemetry-instrumentation>=0.59b0",
 ]
 # Everything — for development and integration testing.
 all = [
