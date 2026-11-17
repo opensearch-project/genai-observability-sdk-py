@@ -65,7 +65,7 @@ Copy [`example-workflow.yml`](example-workflow.yml) to `.github/workflows/agent-
 | `service-name` | | `agent-evals-ci` | `service.name` resource attribute |
 | `dashboards-url` | | | OpenSearch Dashboards base URL for the run link |
 | `fail-on-regression` | | | Gates on evaluation means, by evaluation name (`gen_ai.evaluation.name`): `name=0.8` or `name>=0.8` (at least), `name<=12` (at most, for `direction="minimize"` scorers), comma or newline separated |
-| `pass-threshold` | | `0.5` | Fallback for scores without a verdict: counts as pass in the table when `value >= threshold`. Scores with a verdict use it |
+| `pass-threshold` | | `0.5` | Fallback for scores without a verdict: counts as pass in the table when `value >= threshold`. Scores with a verdict use their verdict |
 | `working-directory` | | `.` | Directory to run the suite from (added to `sys.path`) |
 | `install` | | `opensearch-genai-observability-sdk-py>=0.3.0` | pip requirement(s) installed first. See [SDK version](#sdk-version) |
 
