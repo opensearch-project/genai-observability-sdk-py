@@ -51,7 +51,18 @@ roots = retriever.list_root_spans(services=[SERVICE], since=since, max_results=2
 done = retriever.find_evaluated_trace_ids(
     [r.trace_id for r in roots], evaluator="travel_plan_judge"
 )
-todo = [r for r in roots if r.trace_id not in done and r.input_messages and r.output_messages]
+
+
+def is_test_run(root) -> bool:
+    """Offline evaluate() cases carry test.suite.run.id; they are scored by their run."""
+    return "test.suite.run.id" in root.raw.get("attributes", {})
+
+
+todo = [
+    r
+    for r in roots
+    if r.trace_id not in done and not is_test_run(r) and r.input_messages and r.output_messages
+]
 print(f"{len(roots)} recent traces, {len(done)} already judged, {len(todo)} to judge")
 
 for root in todo:

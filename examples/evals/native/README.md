@@ -49,9 +49,10 @@ export OPENSEARCH_PASSWORD=<admin password>  # OPENSEARCH_URL, OPENSEARCH_USER o
 python online_eval.py       # wait about a minute after traffic.py so the spans are indexed
 ```
 
-`online_eval.py` skips traces that already have a `travel_plan_judge` result
-(`find_evaluated_trace_ids(..., evaluator="travel_plan_judge")`), so the offline traces,
-and traces it judged before, are not judged again. It sets `verify_certs=False` by default
+`online_eval.py` skips the offline cases (roots with `test.suite.run.id`, scored by their
+run) and traces that already have a `travel_plan_judge` result
+(`find_evaluated_trace_ids(..., evaluator="travel_plan_judge")`), so nothing is judged
+twice, even while the offline results are still being indexed. It sets `verify_certs=False` by default
 for the local stack's self-signed certificate; set `OPENSEARCH_VERIFY_CERTS=true` elsewhere.
 
 ## What you get
