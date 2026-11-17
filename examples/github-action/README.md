@@ -41,7 +41,7 @@ Each score is recorded under its evaluation name (`gen_ai.evaluation.name`: the 
 
 ## 2. Endpoints
 
-Traces and evaluation logs share one base URL (`endpoint`) or use one full URL each (`traces-endpoint`, `logs-endpoint`); see "Endpoints: traces and evaluation logs" in the [SDK README](../../README.md#endpoints-traces-and-evaluation-logs).
+Traces and evaluation logs share one base URL (`endpoint`) or use one full URL each (`traces-endpoint`, `logs-endpoint`); see [Endpoints: traces and evaluation logs](../../docs/configuration.md#endpoints-traces-and-evaluation-logs) in the SDK docs.
 
 - **OpenSearch Ingestion (OSIS):** one pipeline per signal. Create a traces pipeline and a logs pipeline (OTLP logs source; Data Prepper routes the evaluation events to `otel-v1-genai-evaluation-*`), then pass both URLs as `traces-endpoint` and `logs-endpoint` (always together; one alone is a configuration error) and set `aws-region` to sign both with SigV4. Give the workflow AWS credentials with `osis:Ingest` on both pipelines, for example with `aws-actions/configure-aws-credentials` and an OIDC role.
 - **OTel Collector / Data Prepper `otlp` source / a single OSIS `otlp` pipeline:** pass the OTLP base URL as `endpoint` (for example `http://collector:4318` or `https://<host>/<pipeline>`; the SDK appends `/v1/traces` and `/v1/logs`, and a value ending in `/v1/traces` is a configuration error) and leave `aws-region` empty. Extra headers (for example auth) can be set with the standard `OTEL_EXPORTER_OTLP_HEADERS` env var on the step.
@@ -65,7 +65,7 @@ Copy [`example-workflow.yml`](example-workflow.yml) to `.github/workflows/agent-
 | `service-name` | | `agent-evals-ci` | `service.name` resource attribute |
 | `dashboards-url` | | | OpenSearch Dashboards base URL for the run link |
 | `fail-on-regression` | | | Gates on evaluation means, by evaluation name (`gen_ai.evaluation.name`): `name=0.8` or `name>=0.8` (at least), `name<=12` (at most, for `direction="minimize"` scorers), comma or newline separated |
-| `pass-threshold` | | `0.5` | Fallback for scores without a verdict: counts as pass in the table when `value >= threshold`. Scores with a verdict use it |
+| `pass-threshold` | | `0.5` | Fallback for scores without a verdict: counts as pass in the table when `value >= threshold`. Scores with a verdict use their verdict |
 | `working-directory` | | `.` | Directory to run the suite from (added to `sys.path`) |
 | `install` | | `opensearch-genai-observability-sdk-py>=0.3.0` | pip requirement(s) installed first. See [SDK version](#sdk-version) |
 

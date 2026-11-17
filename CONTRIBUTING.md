@@ -83,7 +83,7 @@ Feature requests are welcome! Please use the [feature request template](.github/
    mypy src/opensearch_genai_observability_sdk_py --ignore-missing-imports
    ```
 
-5. **Update Documentation**: Update the README, docstrings, or examples as needed
+5. **Update Documentation**: Update the README, `docs/`, docstrings, or examples as needed
 
 6. **Submit PR**: Create a pull request with:
    - A clear title following conventional commit format
@@ -128,7 +128,7 @@ Examples:
 
 ### Documentation
 
-- Update README.md for user-facing changes
+- Update README.md and the matching file in `docs/` (for example `docs/api-reference.md`) for user-facing changes
 - Add docstrings for all public functions and classes
 - Update examples in the `examples/` directory
 - Include type hints for better IDE support

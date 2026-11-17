@@ -118,7 +118,7 @@ all = [
 [project.urls]
 Repository = "https://github.com/opensearch-project/genai-observability-sdk-py"
 Homepage = "https://github.com/opensearch-project/genai-observability-sdk-py"
-Documentation = "https://github.com/opensearch-project/genai-observability-sdk-py#readme"
+Documentation = "https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/README.md"
 "Bug Tracker" = "https://github.com/opensearch-project/genai-observability-sdk-py/issues"
 Changelog = "https://github.com/opensearch-project/genai-observability-sdk-py/releases"
 

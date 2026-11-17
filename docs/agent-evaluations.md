@@ -114,24 +114,9 @@ register(
 )
 ```
 
-Endpoints follow the OTel exporter spec, one rule per signal (traces, logs):
+Endpoints follow the OTel exporter spec, one rule per signal (traces, logs): `endpoint=` is the OTLP base URL for both, and `traces_endpoint=` / `logs_endpoint=` are full URLs for one signal each. The setups (local collector, one OTLP source, separate pipelines), the resolution order, protocols, compression and request size limits are in [configuration.md](configuration.md#endpoints-traces-and-evaluation-logs).
 
-- `endpoint=` is always the OTLP base URL (like `OTEL_EXPORTER_OTLP_ENDPOINT`). Over HTTP the SDK appends `/v1/traces` and `/v1/logs`; over gRPC it uses the base as-is for both. A base ending with `/v1/traces` or `/v1/logs` raises `ValueError`.
-- `traces_endpoint=` / `logs_endpoint=` are full URLs for one signal and win over `endpoint=`. Pass both or neither (`log_exporter=` counts as the logs side).
-- Code arguments always win over env vars. Per signal: `<signal>_endpoint=`, then `endpoint=`, then `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT` (full URL), then `OTEL_EXPORTER_OTLP_ENDPOINT` (base), then the default base `http://localhost:4318`.
-- There are no port options: the port is part of each URL. See the [README](../README.md#endpoints-traces-and-evaluation-logs) for the full order and the protocol rules.
-
-Three setups:
-
-(a) Local OTel Collector or the observability stack: nothing to set.
-
-```python
-register(service_name="travel-agent", agent_name="travel_planner")  # endpoint http://localhost:4318
-```
-
-For gRPC, pass `endpoint="grpc://localhost:4317"`. gRPC is for a local OTel Collector or a self-hosted Data Prepper, whose OTLP sources accept framed gRPC natively; OSI does not support it.
-
-(b) One OTLP source for both signals under a pipeline path: an OpenSearch Ingestion (OSI) or Data Prepper `otlp` source with `traces_path: /<pipeline>/v1/traces` and `logs_path: /<pipeline>/v1/logs`, as in the [Data Prepper pipeline](#a-self-managed-data-prepper) below. Pass the pipeline base. `sigv4=` signs both exporters for OSI:
+For the [Data Prepper pipeline](#a-self-managed-data-prepper) below, pass its pipeline base. `sigv4=` signs both exporters for OSI:
 
 ```python
 register(
@@ -146,30 +131,7 @@ register(
 )
 ```
 
-(c) Separate trace and log pipelines (`otel_trace_source` and `otel_logs_source`): pass both full URLs. On Data Prepper the default ports are 21890 (traces) and 21892 (logs); set `path:` (for example `/v1/traces` and `/v1/logs`) and `unframed_requests: true` on each source. On OSI, one pipeline per signal:
-
-```python
-register(
-    traces_endpoint="http://data-prepper:21890/v1/traces",
-    logs_endpoint="http://data-prepper:21892/v1/logs",
-)
-
-register(
-    traces_endpoint="https://traces-pipe-abc.us-east-1.osis.amazonaws.com/v1/traces",
-    logs_endpoint="https://logs-pipe-def.us-east-1.osis.amazonaws.com/v1/logs",
-    sigv4={"service": "osis", "region": "us-east-1"},
-    agent_name="travel_planner",
-    agent_version="v3",
-)
-```
-
-Pipeline settings the client must match:
-
-- **Compression.** `register(compression="gzip")` (or `OTEL_EXPORTER_OTLP_COMPRESSION=gzip`) must match the pipeline's `compression` setting. OSI accepts only `none` and `gzip`; other values raise `ValueError`. The argument wins over the env vars.
-- **Request size.** OSI `otel_*` sources cap requests at 1 MB to 4 MB (1 MB by default with the persistent buffer). For large GenAI spans, lower `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` (and `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` for evaluation events).
-- **Self-hosted Data Prepper.** Set `unframed_requests: true` and the paths (`traces_path` / `logs_path`, or `path:`), and either `ssl: false` with `http://`, or TLS with a CA the client trusts (`OTEL_EXPORTER_OTLP_CERTIFICATE=/path/to/ca.pem`).
-
-If you configure OpenTelemetry yourself instead of calling `register()`, set a global `LoggerProvider` with an OTLP log exporter, or the events are dropped.
+If you configure OpenTelemetry yourself instead of calling `register()`, see [Custom exporters](configuration.md#custom-exporters): without a global `LoggerProvider` the events are dropped.
 
 ## Online evaluation
 
@@ -279,7 +241,7 @@ score(
 
 Results identify the judge prompt by name and version: `gen_ai.prompt.name` and `gen_ai.prompt.version` (shown as `name@version`). Bump the version whenever the prompt text changes, so two prompt versions are never mixed under one label.
 
-The full prompt text is never put on a result event. It belongs on the judge's own LLM call span as `gen_ai.system_instructions`, its OTel location, so it is stored once per judge call, next to the judge's input and output. The SDK does not create the judge's LLM span: the judge's instrumentation records it there (most GenAI instrumentations do, often behind a content-capture opt-in, because a prompt may hold sensitive data). If you trace the judge yourself, set it with `enrich(system_instructions=...)` inside the judge call, and pass the judge's trace id to the result: The judge span is a `chat` span: it carries no `gen_ai.agent.name`, so Agent Traces does not list the judge as an agent, and `list_root_spans()` does not return it (it lists only marked spans and parentless `invoke_agent` / `create_agent` spans).
+The full prompt text is never put on a result event. It belongs on the judge's own LLM call span as `gen_ai.system_instructions`, its OTel location, so it is stored once per judge call, next to the judge's input and output. The SDK does not create the judge's LLM span: the judge's instrumentation records it there (most GenAI instrumentations do, often behind a content-capture opt-in, because a prompt may hold sensitive data). If you trace the judge yourself, set it with `enrich(system_instructions=...)` inside the judge call, and pass the judge's trace id to the result. The judge span is a `chat` span: it carries no `gen_ai.agent.name`, so Agent Traces does not list the judge as an agent, and `list_root_spans()` does not return it (it lists only marked spans and parentless `invoke_agent` / `create_agent` spans).
 
 ```python
 from opentelemetry import trace
@@ -373,7 +335,7 @@ result = evaluate(
 )
 ```
 
-The task's spans stay in one trace per case, because `asyncio.run` runs the coroutine in the task's context.
+The task's spans stay in one trace per case, because `asyncio.run` runs the coroutine in the task's context. Spans started in a plain `threading.Thread` or `ThreadPoolExecutor` worker do not see the case and are not stamped; `asyncio.to_thread()` copies the context and is fine.
 
 ```python
 import sys
@@ -426,11 +388,7 @@ if result.summary.fail_count or result.summary.error_count:
     sys.exit(1)
 ```
 
-- A scorer receives `(input, output, expected)` and returns a number (any `numbers.Real`, for example `numpy.float32`), a bool (a verdict), an `EvalScore` or a list of `EvalScore`. Scorers are synchronous. Any other return (`numpy.bool_`, `Decimal`, `None`, a dict, a coroutine) logs a warning and emits an error result with `error.type` = `TypeError`, and the case status is `error`. An `async def` scorer is not called; wrap the async judge with `asyncio.run()` in a sync scorer.
-- `@scorer(...)` declares the evaluation name, `threshold`, `direction`, `score_min`, `score_max`, `evaluator` and `evaluator_type`. Fields set on a returned `EvalScore` win. The declaration goes only on the scorer's own results: those whose `evaluator` is unset or equals the scorer's evaluator (see [Judge context](#judge-context)).
-- `EvalScore(judge_trace_id=...)` sets `opensearch.gen_ai.evaluation.judge.trace_id`, in `evaluate()` and in `Benchmark.log()`.
-- `EvalScore(evaluator=..., evaluator_type=...)` names the evaluator of that score and wins over the `@scorer(...)` declaration. A score that names a different evaluator gets nothing from the declaration.
-- Scorers run outside the agent trace, so a traced judge gets its own trace.
+Scorer return types, `@scorer(...)` declarations and the `EvalScore` fields (`judge_trace_id`, `evaluator`, `evaluator_type`) are in [`evaluate()`](api-reference.md#evaluate). Scorers run after the task, outside the agent trace, so a traced judge gets its own trace (a child of the caller's span if `evaluate()` runs inside one).
 
 ### Benchmark
 
@@ -457,9 +415,7 @@ b.log(input="Capital of Peru?", expected={"city": "Lima"}, scores={"exact_match"
 summary = b.close()
 ```
 
-`scores` is `{name: value}` or a list of `EvalScore`. `Benchmark` creates no spans, and it stamps the `test.*` and `cicd.pipeline.*` ids only on the results, not on the agent's spans (only `evaluate()` stamps the spans it starts).
-
-Name the evaluator of each score with `EvalScore(evaluator=..., evaluator_type=...)` (`opensearch.gen_ai.evaluation.evaluator.name` / `.type`, the same keys `evaluate()` and `@scorer` write), or pass `Benchmark.log(evaluator=..., evaluator_type=...)` as the default for the scores of that call whose `evaluator` is unset (`""` counts as unset) or equals `evaluator=`; an `EvalScore` that sets its own wins, and a score that names a different evaluator gets no default type. Without either, the result has no evaluator name, as before.
+`Benchmark` creates no spans and stamps the `test.*` and `cicd.pipeline.*` ids only on the results. The `scores` forms and the evaluator arguments are in [`Benchmark`](api-reference.md#benchmark). Name the evaluator per call with `Benchmark.log(evaluator=..., evaluator_type=...)` or per score with `EvalScore(evaluator=...)`; without either, the result has no evaluator name.
 
 ```python
 b.log(
@@ -498,6 +454,7 @@ The `"expected"` value of an `evaluate()` case, or `Benchmark.log(expected=...)`
 - Strings are kept as-is. Other values are JSON-encoded, for example `{"city":"Lima"}`.
 - Values longer than 8192 characters are cut to 8192 and `opensearch.test.case.expected_truncated` is set to `true`. The index stores the whole value and shows it on the result; only values up to 256 characters are indexed for filters (see [Evaluation index](#evaluation-index)).
 - It is not put on the agent's spans, and online `score()` never sets it.
+- Both keys (`opensearch.test.case.expected` and `opensearch.test.case.expected_truncated`) are reserved: run or case metadata cannot set them.
 - Request size. Every result of a case carries the value, so a case with 5 scorers sends it 5 times, and one export request holds up to `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` events (512 by default). At 8192 characters (up to about 24 KB of UTF-8 for CJK text) a full batch of such events can pass the 1 MB default request cap of OpenSearch Ingestion `otel_logs_source`, which rejects it with HTTP 413 and the results are lost. If your expected values are long, lower the batch size: set `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE=64` (read by the `BatchLogRecordProcessor` that `register()` creates), or configure your own `LoggerProvider` with `BatchLogRecordProcessor(exporter, max_export_batch_size=64)`. Keep `batch size x largest event size` under the pipeline's request cap.
 - It is exported by default. If your test sets hold sensitive data, pass `record_expected=False` to `evaluate()` or `Benchmark(...)`: neither attribute is written. Scorers still receive the value, and it stays on the local result. Inputs and outputs are never exported.
 
@@ -749,11 +706,19 @@ PUT _index_template/otel-v1-genai-evaluation-index-template
                       "properties": {
                         "value": {
                           "type": "double"
+                        },
+                        "label": {
+                          "type": "keyword",
+                          "ignore_above": 256
                         }
                       }
                     },
                     "explanation": {
                       "type": "text"
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 256
                     }
                   }
                 },
@@ -762,12 +727,24 @@ PUT _index_template/otel-v1-genai-evaluation-index-template
                     "version": {
                       "type": "keyword",
                       "ignore_above": 256
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 256
                     }
                   }
                 },
                 "prompt": {
                   "properties": {
                     "version": {
+                      "type": "keyword",
+                      "ignore_above": 256
+                    }
+                  }
+                },
+                "conversation": {
+                  "properties": {
+                    "id": {
                       "type": "keyword",
                       "ignore_above": 256
                     }
@@ -791,6 +768,10 @@ PUT _index_template/otel-v1-genai-evaluation-index-template
                             },
                             "threshold": {
                               "type": "double"
+                            },
+                            "direction": {
+                              "type": "keyword",
+                              "ignore_above": 256
                             }
                           }
                         },
@@ -801,6 +782,10 @@ PUT _index_template/otel-v1-genai-evaluation-index-template
                               "ignore_above": 256
                             }
                           }
+                        },
+                        "level": {
+                          "type": "keyword",
+                          "ignore_above": 256
                         }
                       }
                     }
@@ -827,8 +812,20 @@ PUT _index_template/otel-v1-genai-evaluation-index-template
                           "ignore_above": 256
                         }
                       }
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 256
                     }
                   }
+                }
+              }
+            },
+            "error": {
+              "properties": {
+                "type": {
+                  "type": "keyword",
+                  "ignore_above": 256
                 }
               }
             }
@@ -889,7 +886,7 @@ How the template maps the result attributes:
 
 - `double`: `gen_ai.evaluation.score.value`, `opensearch.gen_ai.evaluation.score.min`, `.max` and `.threshold`. Other numbers map dynamically (`long` or `double`).
 - `text`: `gen_ai.evaluation.explanation` (searchable, not aggregatable).
-- `keyword` (`ignore_above` 256), pinned so the first value cannot pick a numeric type: `test.case.id`, `test.suite.run.id`, `gen_ai.agent.version`, `opensearch.gen_ai.evaluation.evaluator.version`, `gen_ai.prompt.version`.
+- `keyword` (`ignore_above` 256), pinned so the first value cannot pick a numeric type: `test.case.id`, `test.suite.run.id`, `test.suite.name`, `gen_ai.evaluation.name`, `gen_ai.evaluation.score.label`, `gen_ai.agent.name`, `gen_ai.agent.version`, `gen_ai.conversation.id`, `gen_ai.prompt.version`, `opensearch.gen_ai.evaluation.evaluator.version`, `opensearch.gen_ai.evaluation.score.direction`, `opensearch.gen_ai.evaluation.level`, `error.type`.
 - Every other string attribute, including `opensearch.test.case.expected`, the evaluator description (a `@scorer` description is cut to 1024 characters first), the case name and the CI URL, maps to `keyword` with `ignore_above` 256: the full value is stored and shown, never rejected, and only values up to 256 characters are indexed for filters and aggregations.
 - Top-level `traceId` and `spanId` are `keyword`. `eventName` is `text` with a `.keyword` sub-field, the same as Data Prepper's template: PPL filters and `stats ... by eventName` use the sub-field automatically, and a DSL terms aggregation or sort uses `eventName.keyword`. The service name is in `resource.attributes.service.name` (`keyword`); evaluation events have no top-level `serviceName`.
 - `date_detection` is off, so a date-like string stays a string.
