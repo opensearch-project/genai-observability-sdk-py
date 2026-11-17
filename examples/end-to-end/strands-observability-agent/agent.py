@@ -53,7 +53,14 @@ from opensearch_genai_observability_sdk_py import (  # noqa: E402
 )
 
 # Traces and evaluation events: OTEL_EXPORTER_OTLP_ENDPOINT, else http://localhost:4318.
-register(service_name=SERVICE_NAME, agent_name=AGENT_NAME, agent_version=AGENT_VERSION)
+# Strands traces itself; auto_instrument=False keeps an installed Bedrock instrumentor from
+# adding a second chat span per model call (the no_loops and cost scorers count them).
+register(
+    service_name=SERVICE_NAME,
+    agent_name=AGENT_NAME,
+    agent_version=AGENT_VERSION,
+    auto_instrument=False,
+)
 
 SYSTEM_PROMPT = """You are an observability assistant for the user's OpenSearch cluster.
 Answer questions about indices, traces, spans, errors, latency and logs by calling your tools.

@@ -34,7 +34,9 @@ DATA = json.loads((Path(__file__).resolve().parents[2] / "shared" / "travel_data
 CITIES = DATA["cities"]
 
 # Sends traces to the local OTel Collector (http://localhost:4318) by default.
-provider = register(service_name="travel-assistant-strands")
+# Strands traces itself, so auto_instrument=False keeps an installed Bedrock (botocore)
+# instrumentor from adding a second chat span for every model call.
+provider = register(service_name="travel-assistant-strands", auto_instrument=False)
 
 
 @tool

@@ -43,6 +43,9 @@ invoke_agent travel_assistant        gen_ai.agent.name=travel_assistant, tokens,
 - `Agent(name="travel_assistant")` sets `gen_ai.agent.name` on the `invoke_agent` span.
 - `trace_attributes={"gen_ai.conversation.id": ...}` groups the turns of one run into a session.
 - Do not call `StrandsTelemetry().setup_otlp_exporter()`: `register()` already exports.
-- Strands prints `Attempting to instrument while already instrumented` once; it is harmless.
+- `register(auto_instrument=False)`: Strands emits its own `chat` spans. With auto
+  instrumentation on, an installed Bedrock instrumentor (for example from the SDK's
+  `[bedrock]` extra in the same environment) also traces each Converse call, so every model
+  call shows up as two `chat` spans.
 - To use another model provider, replace `BedrockModel` with any Strands model class; the
   tracing stays the same.

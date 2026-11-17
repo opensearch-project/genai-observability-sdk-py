@@ -66,6 +66,11 @@ Rules that make Agent Traces show the run correctly:
   write span events by default: Strands needs
   `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_span_attributes_only`
   (see [end-to-end/strands-observability-agent/agent.py](../end-to-end/strands-observability-agent/agent.py)).
+- One `chat` span per model call. A framework that traces its own model calls (Strands)
+  plus an installed instrumentor for the same client (the Bedrock one from the `[bedrock]`
+  extra) gives two. Keep one example per environment, or pass `register(auto_instrument=False)`
+  when the framework traces itself ([tracing/strands](../tracing/strands/)). The Anthropic
+  SDK also has built-in tracing: [tracing/anthropic](../tracing/anthropic/) turns it off.
 - Async code works the same: [`basics/04_async_tracing.py`](../basics/04_async_tracing.py).
 - Never put secrets in span attributes.
 
