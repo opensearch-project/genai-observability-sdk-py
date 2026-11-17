@@ -706,11 +706,19 @@ PUT _index_template/otel-v1-genai-evaluation-index-template
                       "properties": {
                         "value": {
                           "type": "double"
+                        },
+                        "label": {
+                          "type": "keyword",
+                          "ignore_above": 256
                         }
                       }
                     },
                     "explanation": {
                       "type": "text"
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 256
                     }
                   }
                 },
@@ -719,12 +727,24 @@ PUT _index_template/otel-v1-genai-evaluation-index-template
                     "version": {
                       "type": "keyword",
                       "ignore_above": 256
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 256
                     }
                   }
                 },
                 "prompt": {
                   "properties": {
                     "version": {
+                      "type": "keyword",
+                      "ignore_above": 256
+                    }
+                  }
+                },
+                "conversation": {
+                  "properties": {
+                    "id": {
                       "type": "keyword",
                       "ignore_above": 256
                     }
@@ -748,6 +768,10 @@ PUT _index_template/otel-v1-genai-evaluation-index-template
                             },
                             "threshold": {
                               "type": "double"
+                            },
+                            "direction": {
+                              "type": "keyword",
+                              "ignore_above": 256
                             }
                           }
                         },
@@ -758,6 +782,10 @@ PUT _index_template/otel-v1-genai-evaluation-index-template
                               "ignore_above": 256
                             }
                           }
+                        },
+                        "level": {
+                          "type": "keyword",
+                          "ignore_above": 256
                         }
                       }
                     }
@@ -784,8 +812,20 @@ PUT _index_template/otel-v1-genai-evaluation-index-template
                           "ignore_above": 256
                         }
                       }
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 256
                     }
                   }
+                }
+              }
+            },
+            "error": {
+              "properties": {
+                "type": {
+                  "type": "keyword",
+                  "ignore_above": 256
                 }
               }
             }
@@ -846,7 +886,7 @@ How the template maps the result attributes:
 
 - `double`: `gen_ai.evaluation.score.value`, `opensearch.gen_ai.evaluation.score.min`, `.max` and `.threshold`. Other numbers map dynamically (`long` or `double`).
 - `text`: `gen_ai.evaluation.explanation` (searchable, not aggregatable).
-- `keyword` (`ignore_above` 256), pinned so the first value cannot pick a numeric type: `test.case.id`, `test.suite.run.id`, `gen_ai.agent.version`, `opensearch.gen_ai.evaluation.evaluator.version`, `gen_ai.prompt.version`.
+- `keyword` (`ignore_above` 256), pinned so the first value cannot pick a numeric type: `test.case.id`, `test.suite.run.id`, `test.suite.name`, `gen_ai.evaluation.name`, `gen_ai.evaluation.score.label`, `gen_ai.agent.name`, `gen_ai.agent.version`, `gen_ai.conversation.id`, `gen_ai.prompt.version`, `opensearch.gen_ai.evaluation.evaluator.version`, `opensearch.gen_ai.evaluation.score.direction`, `opensearch.gen_ai.evaluation.level`, `error.type`.
 - Every other string attribute, including `opensearch.test.case.expected`, the evaluator description (a `@scorer` description is cut to 1024 characters first), the case name and the CI URL, maps to `keyword` with `ignore_above` 256: the full value is stored and shown, never rejected, and only values up to 256 characters are indexed for filters and aggregations.
 - Top-level `traceId` and `spanId` are `keyword`. `eventName` is `text` with a `.keyword` sub-field, the same as Data Prepper's template: PPL filters and `stats ... by eventName` use the sub-field automatically, and a DSL terms aggregation or sort uses `eventName.keyword`. The service name is in `resource.attributes.service.name` (`keyword`); evaluation events have no top-level `serviceName`.
 - `date_detection` is off, so a date-like string stays a string.
