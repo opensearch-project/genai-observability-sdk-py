@@ -456,8 +456,13 @@ class TestCaseResult:
     ``error_type`` holds the exception class name when the task or a scorer
     raised. ``trace_id`` / ``span_id`` (hex) identify the span the score
     events are parented to (the agent run's root span), or are ``None`` when
-    the task started no span. ``verdicts`` maps evaluation name to the
-    declared verdict (``pass`` / ``fail``) for scores that have one.
+    the task started no span. ``scores`` maps each result's key to its value
+    and ``verdicts`` maps it to the declared verdict (``pass`` / ``fail``),
+    for results that have one. The key is the evaluation name; when results
+    of different evaluators share a name in a run, the first evaluator to
+    report it keeps the plain name and the others are keyed
+    ``"<name> (<evaluator>)"``, so none overwrites another. The summary
+    aggregates by the same keys.
     """
 
     case_id: str
@@ -686,14 +691,46 @@ def _emit_scores(
         emit_evaluation_event({**extra, **attrs}, context=context)
 
 
-def _verdicts(scores: Iterable[EvalScore]) -> dict[str, str]:
-    """Evaluation name -> verdict, for the scores that declare one."""
-    out: dict[str, str] = {}
-    for s in scores:
-        verdict = _verdict(s)
-        if verdict is not None:
-            out[s.name] = verdict
-    return out
+class _LocalResultKeys:
+    """Keys of the local results of one run (``TestCaseResult.scores`` / ``.verdicts``).
+
+    The first evaluator to report an evaluation name in the run keeps the
+    plain name as its key. A result of another evaluator with the same name is
+    keyed ``"<name> (<evaluator>)"`` (``"<name> (no evaluator)"`` when it names
+    none), so results of different evaluators never overwrite each other in
+    the case result or the summary. Results of one evaluator with the same name
+    share a key: the last value is kept, and a ``fail`` verdict is never
+    replaced, so the case fails when any of them fails.
+    """
+
+    def __init__(self) -> None:
+        self._first: dict[str, str | None] = {}
+
+    def key(self, name: str, evaluator: str | None) -> str:
+        first = self._first.setdefault(name, evaluator)
+        if first == evaluator:
+            return name
+        return f"{name} ({evaluator if evaluator is not None else 'no evaluator'})"
+
+    def record(
+        self,
+        scores: Iterable[EvalScore],
+        evaluator: str | None,
+        values: dict[str, float],
+        verdicts: dict[str, str],
+    ) -> None:
+        """Add ``scores`` (of a scorer, or of a ``log()`` call) to a case's values and verdicts.
+
+        ``evaluator`` is the scorer's (or the ``log()`` default): the evaluator
+        of the scores that name none, as on their events.
+        """
+        for s in scores:
+            key = self.key(s.name, _score_evaluator(s) or evaluator)
+            if s.value is not None:
+                values[key] = s.value
+            verdict = _verdict(s)
+            if verdict is not None and verdicts.get(key) != "fail":
+                verdicts[key] = verdict
 
 
 def _case_status(*, errored: bool, verdicts: dict[str, str]) -> str:
@@ -835,6 +872,7 @@ class Benchmark:
         self._record_expected = record_expected
         self._start_time = time.monotonic()
         self._cases: list[TestCaseResult] = []
+        self._result_keys = _LocalResultKeys()
         self._closed = False
         self._summary: BenchmarkSummary | None = None
 
@@ -924,12 +962,10 @@ class Benchmark:
             eval_scores = [EvalScore(name=n, value=v) for n, v in scores.items()]
         else:
             eval_scores = [s for s in (scores or []) if isinstance(s, EvalScore)]
-        if error_type:
-            score_values: dict[str, float] = {}
-            verdicts: dict[str, str] = {}
-        else:
-            score_values = {s.name: s.value for s in eval_scores if s.value is not None}
-            verdicts = _verdicts(eval_scores)
+        score_values: dict[str, float] = {}
+        verdicts: dict[str, str] = {}
+        if not error_type:
+            self._result_keys.record(eval_scores, evaluator, score_values, verdicts)
         resolved_case_id = case_id or _make_case_id(input)
 
         case_status = status or _case_status(errored=bool(error or error_type), verdicts=verdicts)
@@ -1202,6 +1238,7 @@ def evaluate(
 
     # Materialize iterable upfront so generators work
     data_list = list(data)
+    result_keys = _LocalResultKeys()
 
     for item in data_list:
         case_start = time.monotonic()
@@ -1322,10 +1359,7 @@ def evaluate(
             if produced and _declares_rule(spec) and not any(_owns(s, evaluator) for s in produced):
                 _warn_rule_reaches_no_result(scorer_fn, scorer_name)
             produced = [_apply_spec(s, spec, evaluator) for s in produced]
-            for s in produced:
-                if s.value is not None:
-                    case_scores[s.name] = s.value
-            case_verdicts.update(_verdicts(produced))
+            result_keys.record(produced, evaluator, case_scores, case_verdicts)
             _emit_scores(
                 grouping,
                 produced,

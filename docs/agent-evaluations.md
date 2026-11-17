@@ -544,6 +544,7 @@ The summary is computed in your process and is not sent. `evaluate()` prints it 
 - `BenchmarkSummary`: `benchmark_name`, `run_id`, `total_cases`, `pass_count`, `fail_count`, `error_count`, `duration_ms`, and `scores` (per name: `avg`, `min`, `max`, `count`).
 - `TestCaseResult` (`result.cases`): `case_id`, `case_name`, `input`, `output`, `expected`, `scores`, `verdicts`, `status`, `error`, `error_type`, `scorer_errors`, `duration_ms`, and `trace_id` / `span_id` of the agent root span.
 - Case `status`: `error` if the task or a scorer raised; else `fail` if any score has a `fail` verdict; else `pass`.
+- Keys of `TestCaseResult.scores` / `.verdicts` and `BenchmarkSummary.scores`: the evaluation name. When results of different evaluators share a name in a run (for example a wrapper's own `faithfulness` and DeepEval's), the first evaluator to report it keeps the plain name and the others are keyed `"<name> (<evaluator>)"`, such as `"faithfulness (deepeval.faithfulness)"`, or `"<name> (no evaluator)"` for a result that names none. No result overwrites another, so a failing result always fails the case. Results of one evaluator with the same name share a key: the last value is kept and a `fail` verdict is kept over a `pass`.
 
 ## Ingestion
 

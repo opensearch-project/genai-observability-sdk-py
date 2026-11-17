@@ -2140,3 +2140,114 @@ class TestScorerOwnership:
         assert (by_name["d"][self.NAME], by_name["d"][self.TYPE]) == ("ragas", "llm_judge")
         assert by_name["e"][self.NAME] == "own"
         assert self.TYPE not in by_name["e"]
+
+
+class TestLocalResultsByEvaluator:
+    """Local scores and verdicts never let one evaluator's result hide another's.
+
+    The first evaluator to report an evaluation name in a run keeps the plain
+    name as its key; another evaluator with the same name is keyed
+    ``"<name> (<evaluator>)"``. A case fails when any result fails.
+    """
+
+    def test_foreign_pass_does_not_hide_an_own_fail(self, events):
+        # Review repro: the own 0.2 fail used to be overwritten by DeepEval's pass.
+        @scorer(name="faithfulness", threshold=0.7)
+        def faith(i, o, e):
+            return [
+                EvalScore(name="faithfulness", value=0.2),
+                EvalScore(
+                    name="faithfulness",
+                    value=0.95,
+                    evaluator="deepeval.faithfulness",
+                    passed=True,
+                ),
+            ]
+
+        result = evaluate("s", task=lambda x: x, data=[{"input": "q"}], scores=[faith])
+        case = result.cases[0]
+        assert case.status == "fail"
+        assert case.verdicts == {
+            "faithfulness": "fail",
+            "faithfulness (deepeval.faithfulness)": "pass",
+        }
+        assert case.scores == {
+            "faithfulness": 0.2,
+            "faithfulness (deepeval.faithfulness)": 0.95,
+        }
+        summary = result.summary.scores
+        assert summary["faithfulness"].avg == pytest.approx(0.2)
+        assert summary["faithfulness (deepeval.faithfulness)"].avg == pytest.approx(0.95)
+        assert result.summary.fail_count == 1
+
+    def test_first_evaluator_of_a_name_keeps_the_plain_key_for_the_run(self, events):
+        @scorer(name="faithfulness", threshold=0.7)
+        def faith(i, o, e):
+            return [
+                EvalScore(name="faithfulness", value=0.95, evaluator="deepeval", passed=True),
+                EvalScore(name="faithfulness", value=0.2),
+            ]
+
+        result = evaluate(
+            "s", task=lambda x: x, data=[{"input": "q1"}, {"input": "q2"}], scores=[faith]
+        )
+        for case in result.cases:
+            assert case.status == "fail"
+            assert case.scores == {"faithfulness": 0.95, "faithfulness (faith)": 0.2}
+        assert result.summary.scores["faithfulness (faith)"].count == 2
+
+    def test_two_scorers_with_the_same_evaluation_name(self, events):
+        @scorer(name="quality", threshold=0.5)
+        def strict(i, o, e):
+            return 0.1
+
+        @scorer(name="quality", threshold=0.05)
+        def lenient(i, o, e):
+            return 0.1
+
+        result = evaluate("s", task=lambda x: x, data=[{"input": "q"}], scores=[strict, lenient])
+        case = result.cases[0]
+        assert case.status == "fail"
+        assert case.verdicts == {"quality": "fail", "quality (lenient)": "pass"}
+
+    def test_same_evaluator_same_name_keeps_a_fail(self, events):
+        @scorer(name="judge")
+        def judge(i, o, e):
+            return [
+                EvalScore(name="judge", value=0.1, passed=False),
+                EvalScore(name="judge", value=0.9, passed=True),
+            ]
+
+        result = evaluate("s", task=lambda x: x, data=[{"input": "q"}], scores=[judge])
+        assert result.cases[0].status == "fail"
+        assert result.cases[0].verdicts == {"judge": "fail"}
+
+    def test_benchmark_log_keys_by_evaluator(self, events):
+        with Benchmark(name="b") as b:
+            b.log(
+                input="q",
+                scores=[
+                    EvalScore(name="f", value=0.2, passed=False, evaluator="own"),
+                    EvalScore(name="f", value=0.9, passed=True, evaluator="ragas"),
+                    EvalScore(name="f", value=0.5, passed=True),
+                ],
+            )
+            b.log(input="q2", scores=[EvalScore(name="f", value=0.4, evaluator="ragas")])
+        first, second = b._cases
+        assert first.status == "fail"
+        assert first.verdicts == {"f": "fail", "f (ragas)": "pass", "f (no evaluator)": "pass"}
+        assert first.scores == {"f": 0.2, "f (ragas)": 0.9, "f (no evaluator)": 0.5}
+        assert second.scores == {"f (ragas)": 0.4}
+
+    def test_benchmark_log_default_evaluator_is_the_key_owner(self, events):
+        with Benchmark(name="b") as b:
+            b.log(
+                input="q",
+                evaluator="deepeval",
+                scores=[
+                    EvalScore(name="f", value=0.2, passed=False),
+                    EvalScore(name="f", value=0.9, passed=True, evaluator="deepeval"),
+                ],
+            )
+        assert b._cases[0].status == "fail"
+        assert b._cases[0].verdicts == {"f": "fail"}
