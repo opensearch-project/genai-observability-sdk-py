@@ -461,14 +461,22 @@ with Benchmark(name="judged-eval", run_id="nightly-2026-11-01") as b:
 OTLP/HTTP span and log exporters that sign every request with AWS SigV4, using botocore's credential chain (environment variables, `~/.aws/credentials`, IAM role, IMDS). `register(sigv4=...)` builds both for you; build them yourself and pass them as `register(exporter=..., log_exporter=...)` for full control.
 
 ```python
-from opensearch_genai_observability_sdk_py import AWSSigV4OTLPExporter, AWSSigV4OTLPLogExporter, register
+from opensearch_genai_observability_sdk_py import (
+    AWSSigV4OTLPExporter,
+    AWSSigV4OTLPLogExporter,
+    register,
+)
 
 register(
     exporter=AWSSigV4OTLPExporter(
-        endpoint="https://<traces-pipeline>.us-east-1.osis.amazonaws.com/v1/traces", service="osis", region="us-east-1"
+        endpoint="https://<traces-pipeline>.us-east-1.osis.amazonaws.com/v1/traces",
+        service="osis",
+        region="us-east-1",
     ),
     log_exporter=AWSSigV4OTLPLogExporter(
-        endpoint="https://<logs-pipeline>.us-east-1.osis.amazonaws.com/v1/logs", service="osis", region="us-east-1"
+        endpoint="https://<logs-pipeline>.us-east-1.osis.amazonaws.com/v1/logs",
+        service="osis",
+        region="us-east-1",
     ),
 )
 ```
