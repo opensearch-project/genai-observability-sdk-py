@@ -4,47 +4,48 @@ How spans and evaluation events flow from your application through the SDK and a
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│                   Your Application                    │
-│                                                       │
+│                   Your Application                   │
+│                                                      │
 │  @observe(op=Op.INVOKE_AGENT)   enrich()   score()   │
-│  with observe("step", op=...)                         │
-│                     │                                 │
-│         opensearch-genai-observability-sdk-py         │
+│  with observe("step", op=...)   evaluate() Benchmark │
+│                         │                            │
+│         opensearch-genai-observability-sdk-py        │
 ├──────────────────────────────────────────────────────┤
-│  register()                                           │
-│  ┌──────────────────────────────────────────────┐    │
-│  │  TracerProvider                               │    │
-│  │  ├── Resource (service.name)                  │    │
-│  │  ├── BatchSpanProcessor                       │    │
-│  │  │   └── OTLPSpanExporter (HTTP or gRPC)      │    │
-│  │  │       └── SigV4 signing (AWS endpoints)    │    │
-│  │  └── Auto-instrumentation                     │    │
-│  │      ├── openai, anthropic, bedrock, ...      │    │
-│  │      ├── langchain, llamaindex, haystack      │    │
-│  │      └── chromadb, pinecone, qdrant, ...      │    │
-│  │  LoggerProvider (evaluation events)           │    │
-│  │  └── BatchLogRecordProcessor                  │    │
-│  │      └── OTLPLogExporter (logs endpoint)   │    │
-│  └──────────────────────────────────────────────┘    │
-└───────────────────────┬──────────────────────────────┘
-                        │ OTLP (HTTP/gRPC): /v1/traces + /v1/logs
-                        ▼
-               ┌─────────────────┐
-               │  Data Prepper /  │
-               │  OTel Collector  │
-               └────────┬────────┘
-                        │
-                        ▼
-               ┌──────────────────────────────┐
-               │   OpenSearch                  │
-               │  ├── otel-v1-apm-span-*       │
-               │  └── otel-v1-genai-evaluation │
-               └──────────────────────────────┘
+│  register()                                          │
+│  ┌────────────────────────────────────────────────┐  │
+│  │  TracerProvider                                │  │
+│  │  ├── Resource (service.name)                   │  │
+│  │  ├── BatchSpanProcessor                        │  │
+│  │  │   └── OTLP span exporter (HTTP or gRPC,     │  │
+│  │  │       optional SigV4 over HTTP)             │  │
+│  │  └── Auto-instrumentation                      │  │
+│  │      ├── openai, anthropic, bedrock, ...       │  │
+│  │      ├── langchain, llamaindex, haystack       │  │
+│  │      └── chromadb, pinecone, qdrant, ...       │  │
+│  │  LoggerProvider (evaluation events)            │  │
+│  │  └── BatchLogRecordProcessor                   │  │
+│  │      └── OTLP log exporter (HTTP or gRPC,      │  │
+│  │          optional SigV4 over HTTP)             │  │
+│  └────────────────────────────────────────────────┘  │
+└──────────────────────────┬───────────────────────────┘
+                           │ OTLP (HTTP/gRPC): /v1/traces + /v1/logs
+                           ▼
+                 ┌──────────────────┐
+                 │  Data Prepper /  │
+                 │  OTel Collector  │
+                 └────────┬─────────┘
+                          │
+                          ▼
+            ┌───────────────────────────────┐
+            │  OpenSearch                   │
+            │  ├── otel-v1-apm-span-*       │
+            │  └── otel-v1-genai-evaluation │
+            └───────────────────────────────┘
 ```
 
 ## Spans
 
-`register()` sets up a `TracerProvider` with a `BatchSpanProcessor` and an OTLP span exporter (HTTP or gRPC, optionally SigV4-signed), and turns on auto-instrumentation for the installed instrumentor packages. `observe()` and the instrumentors create standard OTel spans with GenAI semantic convention attributes. They are exported to `/v1/traces` and Data Prepper writes them to `otel-v1-apm-span-*`.
+`register()` sets up a `TracerProvider` with a `BatchSpanProcessor` (`SimpleSpanProcessor` with `batch=False`) and an OTLP span exporter (HTTP or gRPC, optionally SigV4-signed), and turns on auto-instrumentation for the installed instrumentor packages. `observe()` and the instrumentors create standard OTel spans with GenAI semantic convention attributes. They are exported to `/v1/traces` and Data Prepper writes them to `otel-v1-apm-span-*`.
 
 For example, this code:
 

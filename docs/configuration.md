@@ -20,9 +20,12 @@ How `register()` finds its endpoints, how to set it up with environment variable
 | `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL` | Protocol for logs (`http/protobuf`, `grpc`) | `OTEL_EXPORTER_OTLP_PROTOCOL` |
 | `OTEL_EXPORTER_OTLP_COMPRESSION` | Compression for all signals (`none`, `gzip`); must match the pipeline | `none` |
 | `OTEL_EXPORTER_OTLP_TRACES_COMPRESSION` / `OTEL_EXPORTER_OTLP_LOGS_COMPRESSION` | Compression for one signal | `OTEL_EXPORTER_OTLP_COMPRESSION` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Extra headers for both exporters, when `headers=` is not passed | none |
 | `OTEL_EXPORTER_OTLP_CERTIFICATE` | CA file to trust for an `https://` / `grpcs://` endpoint with a private CA | system CAs |
 | `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | Spans per export request; lower it for OSIS request size limits | `512` |
+| `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` | Evaluation events per export request (see [Request size](#request-size)) | `512` |
 | `OTEL_SERVICE_NAME` | Service name for spans | `"default"` |
+| `OTEL_SERVICE_VERSION` | `service.version` resource attribute, when `service_version=` is not passed | none |
 | `OPENSEARCH_PROJECT` | Project/service name (fallback) | `"default"` |
 | `AWS_DEFAULT_REGION` | AWS region for SigV4 signing | auto-detected |
 
@@ -161,7 +164,9 @@ The full Data Prepper and Amazon OpenSearch Ingestion pipelines for evaluation e
 
 ## Auto-instrumentation
 
-`register()` automatically discovers installed instrumentor packages via OTel entry points and activates each one whose library is installed. No code changes needed: install the extras for the providers you use, plus the provider libraries themselves (an extra installs only the instrumentor), and their calls are traced automatically. Instrumentors whose library is missing are skipped (logged at DEBUG); a library installed at a version the instrumentor does not support is skipped with a WARNING that names the library and the required version. Only the activated ones are counted in the "Auto-instrumented N libraries" log line.
+`register()` automatically discovers installed instrumentor packages via OTel entry points and activates each one whose library is installed. No code changes needed: install the extras for the providers you use, plus the provider libraries themselves (an extra installs only the instrumentor), and their calls are traced automatically. Instrumentors whose library is missing are skipped (logged at DEBUG); a library installed at a version the instrumentor does not support is skipped with a WARNING that names the library and the required version. Only the activated ones are counted in the "Auto-instrumented N libraries" log line. If none activates, one WARNING says so.
+
+Every installed package that registers an `opentelemetry_instrumentor` entry point is activated, not only the GenAI ones: an installed `opentelemetry-instrumentation-requests`, for example, traces `requests` too. Pass `register(auto_instrument=False)` to turn discovery off and instrument by hand. The TypeScript SDK works differently: its `autoInstrument` turns on only the OpenAI instrumentation (and, opt-in, the AWS SDK).
 
 ### Supported libraries
 
