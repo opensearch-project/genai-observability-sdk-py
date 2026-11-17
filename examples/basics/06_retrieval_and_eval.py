@@ -11,12 +11,14 @@ to skip traces that are already scored.
 
 Prerequisites:
     pip install opensearch-genai-observability-sdk-py[opensearch]
+    export OPENSEARCH_PASSWORD=<admin password>  # OPENSEARCH_URL, OPENSEARCH_USER optional
 
 To enable strands evaluation:
     pip install strands-agents-evals
     Then uncomment the evaluate_with_strands() call below.
 """
 
+import os
 from datetime import datetime, timedelta, timezone
 
 from opensearch_genai_observability_sdk_py import OpenSearchTraceRetriever, register, score
@@ -27,9 +29,9 @@ def main():
     provider = register(service_name="trace-evaluator", auto_instrument=False)
 
     retriever = OpenSearchTraceRetriever(
-        host="https://localhost:9200",
-        auth=("admin", "My_password_123!@#"),
-        verify_certs=False,
+        host=os.environ.get("OPENSEARCH_URL", "https://localhost:9200"),
+        auth=(os.environ.get("OPENSEARCH_USER", "admin"), os.environ["OPENSEARCH_PASSWORD"]),
+        verify_certs=False,  # local stack with a self-signed certificate
     )
 
     # Discover recent traces by their agent root (the span Agent Traces lists:
