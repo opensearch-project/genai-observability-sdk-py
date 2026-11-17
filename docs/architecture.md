@@ -31,8 +31,8 @@ How spans and evaluation events flow from your application through the SDK and a
                            │ OTLP (HTTP/gRPC): /v1/traces + /v1/logs
                            ▼
                  ┌──────────────────┐
-                 │  Data Prepper /  │
-                 │  OTel Collector  │
+                 │  Data Prepper    │
+                 │  (or OSI)        │
                  └────────┬─────────┘
                           │
                           ▼
@@ -42,6 +42,8 @@ How spans and evaluation events flow from your application through the SDK and a
             │  └── otel-v1-genai-evaluation │
             └───────────────────────────────┘
 ```
+
+The pipeline must be Data Prepper or Amazon OpenSearch Ingestion (OSI): it routes evaluation events by `eventName` to `otel-v1-genai-evaluation` and marks agent roots with `derived.gen_ai.is_root`. A plain OTel Collector exporting straight to OpenSearch does neither, so evaluation events land in the logs index and OpenSearch Agent Traces does not list the traces. An OTel Collector in front of Data Prepper, as in the observability stack, is fine.
 
 ## Spans
 
@@ -75,13 +77,12 @@ def run(question: str) -> str:
     answer = research(question)
     with observe("safety_check", op="guardrail"):
         enrich(safe=True)
+    # 4. Record an evaluation result on the active span (a gen_ai.evaluation.result event, see score())
+    score("relevance", 0.95)
     return answer
 
 
 result = run("What is OpenSearch?")
-
-# 4. Record evaluation results (gen_ai.evaluation.result events, see score())
-score(name="relevance", value=0.95, trace_id="...", span_id="...")
 ```
 
 produces this span tree:
@@ -92,6 +93,8 @@ invoke_agent qa_pipeline
 │   └── execute_tool web_search
 └── safety_check
 ```
+
+The `relevance` result is not a span: it is one `gen_ai.evaluation.result` event parented to `invoke_agent qa_pipeline`. To score a span after it has ended, pass its `trace_id=` and `span_id=` (32 and 16 hex characters) to `score()`.
 
 Data Prepper marks the outermost GenAI span of each trace with `derived.gen_ai.is_root`, which OpenSearch Agent Traces uses to list the trace. `mark_agent_root()` marks a span at the source instead (see [`mark_agent_root()`](api-reference.md#mark_agent_root)).
 

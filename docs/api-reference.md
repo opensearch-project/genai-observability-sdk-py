@@ -10,6 +10,7 @@ One section per public API of `opensearch-genai-observability-sdk-py`, in this o
 - [`score()`](#score)
 - [`evaluate()`](#evaluate)
 - [`Benchmark`](#benchmark)
+- [`AWSSigV4OTLPExporter` and `AWSSigV4OTLPLogExporter`](#awssigv4otlpexporter-and-awssigv4otlplogexporter)
 - [`OpenSearchTraceRetriever`](#opensearchtraceretriever)
 
 Endpoints, protocols, compression, SigV4 and environment variables are in [configuration.md](configuration.md). Concepts and the full evaluation data model are in [agent-evaluations.md](agent-evaluations.md).
@@ -100,6 +101,7 @@ with observe("thinking", op=Op.CHAT) as span:
 | `name` | `str` | Function `__qualname__` (decorator) or `"unnamed"` (context manager) | Span name |
 | `op` | `str` | `None` | `gen_ai.operation.name` value. Use `Op` constants or any custom string |
 | `kind` | `SpanKind` | `INTERNAL` | OTel span kind. Use `SpanKind.CLIENT` for external service calls |
+| `name_from` | `str` | `None` | Decorator only: name of a function parameter whose value, at call time, replaces `name` (for example `@observe(op=Op.EXECUTE_TOOL, name_from="tool_name")`). Falls back to `name` when the argument is `None` or missing |
 
 **Span naming:** When `op` is a well-known value, the span name is `"{op} {name}"` (e.g. `"invoke_agent planner"`). The well-known values are the `Op` constants below. A custom op keeps the plain name: `op="guardrail"` with `name="check"` gives a span named `check`.
 
@@ -110,6 +112,7 @@ with observe("thinking", op=Op.CHAT) as span:
 | `gen_ai.operation.name` | When `op` is provided |
 | `gen_ai.agent.name` | `op` is `invoke_agent` or `create_agent` only (a `chat` span, such as a traced LLM judge call, is not an agent) |
 | `gen_ai.tool.name` | When `op=Op.EXECUTE_TOOL` |
+| `gen_ai.tool.type` = `"function"` | When `op=Op.EXECUTE_TOOL` |
 | `gen_ai.input.messages` / `gen_ai.output.messages` | All ops except `execute_tool` (decorator only) |
 | `gen_ai.tool.call.arguments` / `gen_ai.tool.call.result` | When `op=Op.EXECUTE_TOOL` (decorator only) |
 
@@ -288,7 +291,7 @@ New to evaluations? Start with [Getting started with agent evaluations](getting-
 
 Run a task against a dataset, score outputs, and record each score as an OTel `gen_ai.evaluation.result` log event. The SDK creates no spans of its own: each case's agent run is its own trace, exactly like production.
 
-`evaluate()` is synchronous, and so are the task and the scorers: call an async agent with `task=lambda q: asyncio.run(agent(q))`, and an async judge the same way inside a sync scorer (see [evaluate()](agent-evaluations.md#evaluate) in the guide). The TypeScript SDK's `evaluate()` is async and accepts async tasks and scorers.
+`evaluate()` is synchronous, and so are the task and the scorers: call an async agent with `task=lambda q: asyncio.run(agent(q))`, and an async judge the same way inside a sync scorer (see [evaluate()](agent-evaluations.md#evaluate) in the guide). The TypeScript SDK's `evaluate()` also accepts async tasks and scorers: it returns a `BenchmarkResult` directly when the task and scorers are synchronous, and a `Promise<BenchmarkResult>` only when one of them returns a thenable.
 
 ```python
 from opensearch_genai_observability_sdk_py import evaluate, EvalScore, observe, Op
@@ -453,6 +456,32 @@ with Benchmark(name="judged-eval", run_id="nightly-2026-11-01") as b:
     )
 ```
 
+## `AWSSigV4OTLPExporter` and `AWSSigV4OTLPLogExporter`
+
+OTLP/HTTP span and log exporters that sign every request with AWS SigV4, using botocore's credential chain (environment variables, `~/.aws/credentials`, IAM role, IMDS). `register(sigv4=...)` builds both for you; build them yourself and pass them as `register(exporter=..., log_exporter=...)` for full control.
+
+```python
+from opensearch_genai_observability_sdk_py import AWSSigV4OTLPExporter, AWSSigV4OTLPLogExporter, register
+
+register(
+    exporter=AWSSigV4OTLPExporter(
+        endpoint="https://<traces-pipeline>.us-east-1.osis.amazonaws.com/v1/traces", service="osis", region="us-east-1"
+    ),
+    log_exporter=AWSSigV4OTLPLogExporter(
+        endpoint="https://<logs-pipeline>.us-east-1.osis.amazonaws.com/v1/logs", service="osis", region="us-east-1"
+    ),
+)
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `endpoint` | `str` | | Full URL of the signal (`.../v1/traces` or `.../v1/logs`); `exporter=` and `log_exporter=` are used as-is |
+| `service` | `str` | `"osis"` | SigV4 signing service: `"osis"` for OpenSearch Ingestion, `"es"` for OpenSearch Service direct |
+| `region` | `str` | botocore region | AWS region; when omitted, the botocore region (`AWS_DEFAULT_REGION` or `~/.aws/config`) |
+| other keyword arguments | | | Passed to the OTel `OTLPSpanExporter` / `OTLPLogExporter` (for example `headers=`, `timeout=`) |
+
+The constructor raises `RuntimeError` if botocore finds no credentials, or if no region is given and botocore has none configured. Both exporters are HTTP only; there is no gRPC variant.
+
 ## `OpenSearchTraceRetriever`
 
 Retrieves GenAI trace spans from OpenSearch. Works with any agent library that emits OTel GenAI semantic convention spans indexed by Data Prepper into `otel-v1-apm-span-*`.
@@ -515,9 +544,9 @@ mine = retriever.find_evaluated_trace_ids(["trace-id-1"], evaluator="answer_qual
 | Method | Returns | Description |
 |---|---|---|
 | `get_traces(identifier, max_spans=10000, *, max_traces=1000)` | `SessionRecord` | By conversation ID: every span of each trace in the conversation (traces whose spans carry `gen_ai.conversation.id`, earliest first). Otherwise by trace ID: every span of that trace. `truncated` is `True` when a limit was reached |
-| `list_root_spans(*, services=None, since=None, max_results=50)` | `list[SpanRecord]` | List the agent roots of up to `max_results` recent traces, newest first, one per trace, optionally filtered by service. `since` defaults to 15 minutes ago. A root is a span marked `derived.gen_ai.is_root` (for example the agent span below an HTTP server span), or a span without a parent whose `gen_ai.operation.name` is `invoke_agent` or `create_agent`. A trace is listed by its parentless agent root when it has one, else by its earliest marked span. Other parentless GenAI spans, such as an LLM judge's own `chat` span, are not listed. When nothing matches, one INFO log line names this rule |
+| `list_root_spans(*, services=None, since=None, max_results=50)` | `list[SpanRecord]` | List the agent roots of up to `max_results` recent traces, newest first, one per trace, optionally filtered by service. `since` is read as UTC wall-clock time (its `tzinfo` is ignored), so pass a UTC datetime, for example `datetime.now(timezone.utc) - timedelta(hours=1)` or `local_dt.astimezone(timezone.utc)`; it defaults to 15 minutes ago. A root is a span marked `derived.gen_ai.is_root` (for example the agent span below an HTTP server span), or a span without a parent whose `gen_ai.operation.name` is `invoke_agent` or `create_agent`. A trace is listed by its parentless agent root when it has one, else by its earliest marked span. Other parentless GenAI spans, such as an LLM judge's own `chat` span, are not listed. When nothing matches, one INFO log line names this rule |
 | `find_evaluated_trace_ids(trace_ids, *, evaluator=None, evaluation_name=None)` | `set[str]` | Return subset of trace IDs that already have evaluation results (`gen_ai.evaluation.result` events in the evaluation index). Without a filter, a result from any evaluator counts; `evaluator=` / `evaluation_name=` count only that evaluator's (`opensearch.gen_ai.evaluation.evaluator.name`) or that evaluation's (`gen_ai.evaluation.name`) results. A missing index returns an empty set; other search errors raise |
 
 Each `SpanRecord` carries the span's `agent_name` and `agent_version` (`gen_ai.agent.name`, `gen_ai.agent.version`). Pass both to `score()` when you post a result for a retrieved trace, or the result is grouped under "(no version)" on the agent page.
 
-Requires the `[opensearch]` extra: `pip install opensearch-genai-observability-sdk-py[opensearch]`
+Requires the `[opensearch]` extra: `pip install "opensearch-genai-observability-sdk-py[opensearch]"`
