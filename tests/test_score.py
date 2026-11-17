@@ -607,3 +607,24 @@ class TestJudgeContext:
         assert "gen_ai.system_instructions" not in a
         assert "'gen_ai.system_instructions'" in caplog.text
         assert "'gen_ai.request.model'" not in caplog.text
+
+
+class TestFirstWarnings:
+    """One warn-once registry for every SDK warning (``_internal.first_warnings``)."""
+
+    def test_each_key_once_per_warning(self):
+        from opensearch_genai_observability_sdk_py._internal import first_warnings
+
+        assert first_warnings("w1", ["a", "b"]) == ["a", "b"]
+        assert first_warnings("w1", ["a", "c"]) == ["c"]
+        # Another warning has its own keys.
+        assert first_warnings("w2", ["a"]) == ["a"]
+        assert first_warnings("w1", [("tuple", 1)]) == [("tuple", 1)]
+        assert first_warnings("w1", [("tuple", 1)]) == []
+
+    def test_reset(self):
+        from opensearch_genai_observability_sdk_py._internal import first_warnings, reset_warnings
+
+        first_warnings("w", ["a"])
+        reset_warnings()
+        assert first_warnings("w", ["a"]) == ["a"]

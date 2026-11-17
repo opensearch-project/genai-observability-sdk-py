@@ -99,6 +99,7 @@ from opensearch_genai_observability_sdk_py._internal import (
     ci_pipeline_attributes,
     drop_reserved_keys,
     expected_attributes,
+    first_warnings,
     resolve_agent,
     run_label_attributes,
 )
@@ -399,19 +400,12 @@ def _declares_rule(spec: ScorerSpec | None) -> bool:
     )
 
 
-# Scorers already warned that their declared rule applies to no result: one
-# warning per scorer per process.
-_unowned_rule_warned: set[str] = set()
-_unowned_rule_warned_lock = threading.Lock()
-
-
 def _warn_rule_reaches_no_result(scorer_fn: Callable[..., Any], scorer_name: str) -> None:
+    # One warning per scorer per process.
     module = getattr(scorer_fn, "__module__", "")
     key = f"{module}.{getattr(scorer_fn, '__qualname__', scorer_name)}"
-    with _unowned_rule_warned_lock:
-        if key in _unowned_rule_warned:
-            return
-        _unowned_rule_warned.add(key)
+    if not first_warnings("scorer-rule-unused", [key]):
+        return
     logger.warning(
         "scorer %r declares a rule (threshold, direction or bounds) that applies to no "
         "result, because every result names another evaluator. A score is the scorer's "

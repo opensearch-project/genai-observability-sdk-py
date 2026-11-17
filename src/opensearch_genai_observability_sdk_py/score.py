@@ -44,7 +44,6 @@ verdict always takes ``gen_ai.evaluation.score.label`` (lowercase ``pass`` /
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from typing import Any
 
@@ -57,6 +56,7 @@ from opensearch_genai_observability_sdk_py._internal import (
     AGENT_NAME_KEY,
     AGENT_VERSION_KEY,
     drop_reserved_keys,
+    first_warnings,
     get_event_logger,
     is_evaluation_field_key,
     parse_hex,
@@ -488,22 +488,15 @@ def label_verdict(label: str | None) -> str | None:
     return normalized if normalized in VALID_VERDICTS else None
 
 
-# Evaluation names already warned about a label the verdict replaced or
-# overrode: one warning per name per process, not one per result.
-_label_warned: set[str] = set()
-_label_warned_lock = threading.Lock()
-
-
 def _warn_label_once(
     name: str,
     verdict: str | None,
     judge_label: str | None,
     conflicts: list[tuple[str, str]],
 ) -> None:
-    with _label_warned_lock:
-        if name in _label_warned:
-            return
-        _label_warned.add(name)
+    # One warning per evaluation name per process, not one per result.
+    if not first_warnings("label", [name]):
+        return
     reasons = []
     if judge_label:
         reasons.append(

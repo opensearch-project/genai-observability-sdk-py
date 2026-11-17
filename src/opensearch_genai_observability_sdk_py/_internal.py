@@ -17,7 +17,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Hashable, Iterable
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
@@ -264,8 +265,33 @@ def is_reserved_metadata_key(key: str) -> bool:
     return key in _RESERVED_KEYS or is_evaluation_field_key(key)
 
 
-# Reserved keys already warned about: each is logged once per process.
-_warned_reserved_keys: set[str] = set()
+# (warning, key) pairs already logged: each warning is logged once per key per process.
+_warned_keys: set[tuple[str, Hashable]] = set()
+_warned_keys_lock = threading.Lock()
+
+
+def first_warnings(warning: str, keys: Iterable[Hashable]) -> list[Hashable]:
+    """The ``keys`` not yet warned about with ``warning``, now marked as warned.
+
+    One registry for every warn-once warning of the SDK (reserved metadata
+    keys, replaced labels, unused scorer declarations ...). Each ``warning``
+    (for example ``"reserved"``) has its own keys, so one warning never
+    silences another. Thread-safe. Same helper as the TypeScript SDK's
+    ``firstWarnings``.
+    """
+    fresh: list[Hashable] = []
+    with _warned_keys_lock:
+        for key in keys:
+            if (warning, key) not in _warned_keys:
+                _warned_keys.add((warning, key))
+                fresh.append(key)
+    return fresh
+
+
+def reset_warnings() -> None:
+    """For tests: log every warn-once warning again."""
+    with _warned_keys_lock:
+        _warned_keys.clear()
 
 
 def drop_reserved_keys(
@@ -283,9 +309,8 @@ def drop_reserved_keys(
     dropped = [key for key in attributes if reserved(key)]
     if not dropped:
         return dict(attributes)
-    first_time = [key for key in dropped if key not in _warned_reserved_keys]
+    first_time = first_warnings("reserved", dropped)
     if first_time:
-        _warned_reserved_keys.update(first_time)
         logger.warning(
             "%sKeys %s are reserved by the SDK and will be ignored (each key is logged once)",
             f"{context}: " if context else "",
