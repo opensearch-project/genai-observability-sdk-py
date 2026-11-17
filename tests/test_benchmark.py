@@ -1684,6 +1684,96 @@ class TestScorerJudgeContext:
         assert "opensearch.gen_ai.evaluation.score.max" not in by_name["faith"]
         assert "gen_ai.evaluation.score.label" not in by_name["faith"]
 
+    def test_rule_applies_when_the_scorer_declares_no_evaluator(self, events):
+        @scorer(name="rel", threshold=0.7)
+        def rel(i, o, e):
+            return EvalScore(name="rel", value=0.1, evaluator="my-judge")
+
+        result = evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[rel])
+        attrs = [r.log_record.attributes for r in events(EVALUATION)][0]
+        assert attrs["opensearch.gen_ai.evaluation.score.threshold"] == 0.7
+        assert attrs["gen_ai.evaluation.score.label"] == "fail"
+        assert result.cases[0].status == "fail"
+
+    def test_evaluator_description_is_capped(self, events):
+        @scorer(name="d", description="x" * 5000)
+        def d(i, o, e):
+            return 1.0
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[d])
+        attrs = [r.log_record.attributes for r in events(EVALUATION)][0]
+        assert len(attrs["opensearch.gen_ai.evaluation.evaluator.description"]) == 1024
+
+    def _by_name(self, events):
+        return {
+            r.log_record.attributes["gen_ai.evaluation.name"]: r.log_record.attributes
+            for r in events(EVALUATION)
+        }
+
+    def test_other_evaluators_keep_their_rule_without_declared_evaluator(self, events):
+        @scorer(threshold=4, score_min=1, score_max=5, evaluator_type="llm_judge")
+        def quality(i, o, e):
+            return [
+                EvalScore(name="quality", value=4.5),
+                EvalScore(name="faith", value=0.9, evaluator="deepeval.faithfulness"),
+            ]
+
+        result = evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[quality])
+        faith = self._by_name(events)["faith"]
+        for key in ("threshold", "min", "max", "direction"):
+            assert f"opensearch.gen_ai.evaluation.score.{key}" not in faith
+        assert "opensearch.gen_ai.evaluation.evaluator.type" not in faith
+        assert self._by_name(events)["quality"]["gen_ai.evaluation.score.label"] == "pass"
+        assert result.cases[0].status == "pass"
+
+    def test_other_evaluator_does_not_inherit_direction(self, events):
+        @scorer(direction="minimize", threshold=12)
+        def latency(i, o, e):
+            return [
+                EvalScore(name="latency", value=3.0),
+                EvalScore(
+                    name="faith", value=0.9, threshold=0.7, evaluator="deepeval.faithfulness"
+                ),
+            ]
+
+        result = evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[latency])
+        assert self._by_name(events)["faith"]["gen_ai.evaluation.score.label"] == "pass"
+        assert result.cases[0].status == "pass"
+
+    def test_spelling_out_the_default_evaluator_changes_nothing(self, events):
+        def outputs(i, o, e):
+            return [
+                EvalScore(name="quality", value=4.5),
+                EvalScore(name="faith", value=0.9, evaluator="deepeval.faithfulness"),
+            ]
+
+        implicit = scorer(threshold=4, score_max=5)(outputs)
+        explicit = scorer(threshold=4, score_max=5, evaluator="outputs")(outputs)
+        empty = scorer(threshold=4, score_max=5, evaluator="")(outputs)
+        results = [
+            evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[fn]).cases[0].status
+            for fn in (implicit, explicit, empty)
+        ]
+        assert results == ["pass", "pass", "pass"]
+
+    def test_own_score_by_name_with_a_declared_evaluator(self, events):
+        @scorer(name="rel", evaluator="rel", threshold=0.7)
+        def rel(i, o, e):
+            return EvalScore(name="rel", value=0.1, evaluator="my-judge")
+
+        result = evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[rel])
+        assert self._by_name(events)["rel"]["gen_ai.evaluation.score.label"] == "fail"
+        assert result.cases[0].status == "fail"
+
+    def test_non_string_description_is_text(self, events):
+        @scorer(name="d", description=123)
+        def d(i, o, e):
+            return 1.0
+
+        evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[d])
+        attrs = self._by_name(events)["d"]
+        assert attrs["opensearch.gen_ai.evaluation.evaluator.description"] == "123"
+
     def test_judge_context_default_evaluator_is_function_name(self, events):
         @scorer(judge_model="m1")
         def judge_fn(i, o, e):

@@ -105,6 +105,7 @@ from opensearch_genai_observability_sdk_py.score import (
     _VALID_DIRECTIONS,
     _VALID_EVALUATOR_TYPES,
     _no_span_context,
+    _truncate,
     build_evaluation_attributes,
     emit_evaluation_event,
     judge_context_attributes,
@@ -205,6 +206,22 @@ class ScorerSpec:
         )
 
 
+EVALUATOR_DESCRIPTION_MAX_CHARS = 1024
+"""Longest ``@scorer(description=...)`` kept: it repeats on every result of the scorer."""
+
+
+def _scorer_description(description: Any) -> str | None:
+    """The scorer description as text, cut to ``EVALUATOR_DESCRIPTION_MAX_CHARS``.
+
+    A non-string is converted with ``str()``. A longer description is cut
+    with the ``...[truncated]`` marker that explanations use.
+    """
+    if description is None:
+        return None
+    text = description if isinstance(description, str) else str(description)
+    return _truncate(text, EVALUATOR_DESCRIPTION_MAX_CHARS)
+
+
 def scorer(
     fn: Callable[..., Any] | None = None,
     *,
@@ -251,13 +268,15 @@ def scorer(
       ``gen_ai.system_instructions`` (the judge's instrumentation, or
       ``enrich(system_instructions=...)`` inside an ``@observe`` judge call).
 
-    The rule fields are defaults for every result the scorer produces,
-    including its error results. ``description`` and the judge fields are
-    set only on results of this scorer's evaluator: a returned ``EvalScore``
-    whose ``evaluator`` is unset or equals ``evaluator`` (default: the
-    function name). A scorer that returns results of other evaluators (for
-    example ``EvalScore(evaluator="deepeval.faithfulness")``) does not stamp
-    its own description or judge on them.
+    Everything the scorer declares (the rule fields, ``evaluator_type``,
+    ``description`` and the judge fields) goes only on its own results,
+    error results included: a returned ``EvalScore`` whose ``evaluator`` is
+    unset or equals ``evaluator`` (default: the function name), or whose
+    ``name`` is the scorer's evaluation name. A scorer that returns results
+    of other evaluators (for example
+    ``EvalScore(name="faith", evaluator="deepeval.faithfulness")``) does not
+    stamp its rule, type, description or judge on them. ``description`` is
+    converted to text and cut to 1024 characters.
 
     Raises:
         ValueError: ``direction`` or ``evaluator_type`` is not a known value.
@@ -280,7 +299,7 @@ def scorer(
         score_max=score_max,
         evaluator=evaluator,
         evaluator_type=evaluator_type,
-        description=description,
+        description=_scorer_description(description),
         judge_model=judge_model,
         judge_prompt_name=judge_prompt_name,
         judge_prompt_version=judge_prompt_version,
@@ -311,15 +330,29 @@ def _verdict(s: EvalScore) -> str | None:
     return verdict
 
 
-def _apply_spec(s: EvalScore, spec: ScorerSpec | None, evaluator: str | None = None) -> EvalScore:
-    """Fill the score's unset rule fields from the scorer declaration.
+def _owns(s: EvalScore, evaluator: str | None, eval_name: str | None) -> bool:
+    """Whether a returned score is the scorer's own.
 
-    Only for the scorer's own scores: a returned ``EvalScore`` that names a
-    different evaluator (for example ``deepeval.faithfulness``) keeps its own
-    rule, so the declaration's threshold, direction and bounds do not leak
-    onto it.
+    It is when its ``evaluator`` is unset or equals the scorer's resolved
+    evaluator (``evaluator=`` or the function name), or when its ``name`` is
+    the scorer's evaluation name. Other evaluators' results (for example
+    ``EvalScore(name="faith", evaluator="deepeval.faithfulness")``) are not.
     """
-    if spec is None or s.evaluator not in (None, evaluator):
+    return s.evaluator in (None, evaluator) or (eval_name is not None and s.name == eval_name)
+
+
+def _apply_spec(
+    s: EvalScore,
+    spec: ScorerSpec | None,
+    evaluator: str | None = None,
+    eval_name: str | None = None,
+) -> EvalScore:
+    """Fill a score's unset rule fields and evaluator type from its scorer's declaration.
+
+    Only for the scorer's own scores (see ``_owns``): other evaluators'
+    results keep their own rule and type.
+    """
+    if spec is None or not _owns(s, evaluator, eval_name):
         return s
     return dataclasses.replace(
         s,
@@ -327,6 +360,7 @@ def _apply_spec(s: EvalScore, spec: ScorerSpec | None, evaluator: str | None = N
         direction=s.direction or spec.direction,
         score_min=s.score_min if s.score_min is not None else spec.score_min,
         score_max=s.score_max if s.score_max is not None else spec.score_max,
+        evaluator_type=s.evaluator_type or spec.evaluator_type,
     )
 
 
@@ -572,6 +606,7 @@ def _emit_scores(
     error_type: str | None = None,
     metadata: dict[str, Any] | None = None,
     spec: ScorerSpec | None = None,
+    eval_name: str | None = None,
 ) -> None:
     """Emit one ``gen_ai.evaluation.result`` event per score.
 
@@ -580,8 +615,8 @@ def _emit_scores(
     score's own metadata, the ``test.*`` / agent / CI ``grouping``, then the
     evaluation fields. With ``error_type`` every score is an evaluator error
     result: ``error.type`` set, no value and no label. The ``spec`` judge
-    attributes (description, judge model and prompt) are set only on scores
-    of the spec's evaluator: ``evaluator`` unset, or equal to ``evaluator``.
+    attributes (description, judge model and prompt) are set only on the
+    scorer's own scores (see ``_owns``).
     """
     has_span = trace.get_current_span(context).get_span_context().is_valid
     for s in scores:
@@ -597,8 +632,7 @@ def _emit_scores(
             explanation=s.explanation,
             level="span" if has_span else None,
             evaluator=s.evaluator or evaluator,
-            evaluator_type=s.evaluator_type
-            or (evaluator_type if spec is None or s.evaluator in (None, evaluator) else None),
+            evaluator_type=s.evaluator_type or (evaluator_type if spec is None else None),
             direction=s.direction,
             score_min=s.score_min,
             score_max=s.score_max,
@@ -606,7 +640,7 @@ def _emit_scores(
             error_type=error_type,
             judge_trace_id=s.judge_trace_id,
         )
-        if spec is not None and s.evaluator in (None, evaluator):
+        if spec is not None and _owns(s, evaluator, eval_name):
             attrs.update(spec.judge_attributes())
         emit_evaluation_event({**extra, **attrs}, context=context)
 
@@ -628,9 +662,9 @@ def _case_status(*, errored: bool, verdicts: dict[str, str]) -> str:
     return "fail" if "fail" in verdicts.values() else "pass"
 
 
-def _error_score(name: str, spec: ScorerSpec | None) -> EvalScore:
+def _error_score(name: str, spec: ScorerSpec | None, evaluator: str | None = None) -> EvalScore:
     """An evaluator-error result (no score value, no explanation) under the declared rule."""
-    return _apply_spec(EvalScore(name=name, value=None), spec)
+    return _apply_spec(EvalScore(name=name, value=None), spec, evaluator, name)
 
 
 def _safe_metadata(metadata: dict[str, Any], *, context: str = "") -> dict[str, Any]:
@@ -1192,13 +1226,14 @@ def evaluate(
                 # exception message.
                 _emit_scores(
                     grouping,
-                    [_error_score(eval_name, spec)],
+                    [_error_score(eval_name, spec, evaluator)],
                     context=event_ctx,
                     evaluator=evaluator,
                     evaluator_type=evaluator_type,
                     error_type=error_type,
                     metadata=safe_meta,
                     spec=spec,
+                    eval_name=eval_name,
                 )
                 continue
 
@@ -1231,17 +1266,18 @@ def evaluate(
                 # produced.
                 _emit_scores(
                     grouping,
-                    [_error_score(eval_name, spec)],
+                    [_error_score(eval_name, spec, evaluator)],
                     context=event_ctx,
                     evaluator=evaluator,
                     evaluator_type=evaluator_type,
                     error_type=err_type,
                     metadata=safe_meta,
                     spec=spec,
+                    eval_name=eval_name,
                 )
                 continue
 
-            produced = [_apply_spec(s, spec, evaluator) for s in produced]
+            produced = [_apply_spec(s, spec, evaluator, eval_name) for s in produced]
             for s in produced:
                 if s.value is not None:
                     case_scores[s.name] = s.value
@@ -1254,6 +1290,7 @@ def evaluate(
                 evaluator_type=evaluator_type,
                 metadata=safe_meta,
                 spec=spec,
+                eval_name=eval_name,
             )
 
         ev_trace_id, ev_span_id = _span_ids(event_ctx)
