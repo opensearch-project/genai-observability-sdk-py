@@ -25,6 +25,8 @@ OTel-native tracing and scoring for LLM applications. Instrument your AI workflo
 pip install opensearch-genai-observability-sdk-py
 ```
 
+Upgrading from 0.2.x? `endpoint=` is now the OTLP base URL and the default moved to `http://localhost:4318`: see [Upgrading to 0.3.0](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/configuration.md#upgrading-to-030).
+
 The core package includes the OTel SDK and exporters. Auto-instrumentation of LLM libraries is opt-in: install the extras for the providers you use, for example `pip install "opensearch-genai-observability-sdk-py[openai,anthropic]"`.
 
 | Extra | Installs |
@@ -60,6 +62,8 @@ research("What is OpenSearch?")
 This produces the span `invoke_agent research_agent` with a child `execute_tool web_search`. A longer example and the span tree are in [Architecture](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/architecture.md#spans).
 
 ### Evaluations
+
+This continues the tracing example: it scores `research`, and the evaluation events need the `LoggerProvider` that `register()` installs.
 
 ```python
 from opensearch_genai_observability_sdk_py import evaluate, scorer
