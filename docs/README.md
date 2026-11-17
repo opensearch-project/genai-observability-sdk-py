@@ -6,7 +6,7 @@ Reference and concepts for the OpenSearch GenAI SDK for Python.
 |---|---|
 | [API reference](api-reference.md) | Every public API: `register()`, `observe()`, `Op`, `enrich()`, `mark_agent_root()`, `score()`, `evaluate()`, `Benchmark`, `OpenSearchTraceRetriever` |
 | [Configuration](configuration.md) | Environment variables, endpoints for traces and evaluation logs, protocols, AWS SigV4, ingestion pipeline settings, auto-instrumented libraries |
-| [Architecture](architecture.md) | How spans and evaluation events flow from the SDK through Data Prepper or an OTel Collector into OpenSearch |
+| [Architecture](architecture.md) | How spans and evaluation events flow from the SDK through Data Prepper (or OSI) into OpenSearch |
 | [Agent evaluations](agent-evaluations.md) | Evaluation concepts and reference: data model, attributes, what gets stored, index template, ingestion, verify, troubleshooting |
 | [Getting started with agent evaluations](getting-started-evaluations.md) | Guided walkthrough from an instrumented agent to online and offline results in OpenSearch Dashboards |
 

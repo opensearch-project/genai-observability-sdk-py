@@ -511,7 +511,7 @@ Evaluation events arrive on the OTLP logs path, mixed with your application logs
 
 Results are written to the alias `otel-v1-genai-evaluation`. Create the index template, the ISM policy and the first index once per cluster, for example in Dashboards Dev Tools, before the first result arrives. The automatic option, the experimental Data Prepper [`index_type: genai-evaluation-plain`](#automatic-option-index_type-genai-evaluation-plain), creates all of this itself; the manual steps here are for Data Prepper versions without it and for other pipelines.
 
-1. The index template. A composable template, `"version": 1`, priority 100, for the indices `otel-v1-genai-evaluation-*`. Installs from this guide and from Data Prepper use the same name and version, so they converge: Data Prepper does not overwrite an existing template with the same name and version.
+1. The index template. A composable template, `"version": 1`, priority 100, for the indices `otel-v1-genai-evaluation-*`. Installs from this guide and from Data Prepper use the same name and version, so they converge: Data Prepper does not overwrite an existing template with the same name and version. A cluster that installed an earlier version of this template keeps it: see [Upgrading an existing template](#upgrading-an-existing-template).
 
 <details>
 <summary>otel-v1-genai-evaluation-index-template</summary>
@@ -893,6 +893,22 @@ How the template maps the result attributes:
 
 The index keeps the default limit of 1000 fields. If your own `attributes` and metadata add many keys, raise it in the template (`"index.mapping.total_fields.limit": 2000` under `template.settings`) and on the current write index (`PUT otel-v1-genai-evaluation-000001/_settings` with the same setting).
 
+#### Upgrading an existing template
+
+The keyword pins above (`gen_ai.conversation.id`, `test.suite.name`, `eventName` and the others) were added without changing `"version": 1`. A cluster that installed the template from an earlier version of this guide still has a template without them, and neither Data Prepper nor the sink replaces a template with the same name and version, so the first numeric value of such a field maps it as `long` in each new index. To check, look for the pins in the installed template; an empty response (`{}`) means it predates them:
+
+```json
+GET _index_template/otel-v1-genai-evaluation-index-template?filter_path=index_templates.index_template.template.mappings.properties.attributes.properties.gen_ai.properties.conversation
+```
+
+To upgrade, re-PUT the template from step 1 (a `PUT` replaces the template whatever its version), then roll the alias over so a new write index is created from it:
+
+```json
+POST otel-v1-genai-evaluation/_rollover
+```
+
+The new write index (for example `otel-v1-genai-evaluation-000002`) has the pinned mappings; check with `GET otel-v1-genai-evaluation/_mapping/field/attributes.gen_ai.conversation.id`, which lists every index of the alias. Existing indices keep their mappings: a field already mapped as `long` there stays `long`, so reindex those indices if you need to filter on that field across all of them. On serverless there is no alias to roll over: re-PUT the `["otel-v1-genai-evaluation"]` variant, and only an index created after that gets the pins.
+
 ### a) Self-managed Data Prepper
 
 Route `gen_ai.evaluation.result` log events from the OTLP source to their own sub-pipeline, copy `time` to `@timestamp`, and write to the evaluation index:
@@ -978,7 +994,7 @@ genai-evaluation-otlp-pipeline:
         routes: [logs]
 ```
 
-This is a logs-only pipeline, so send traces to your traces pipeline and the logs here, with one full URL per signal (setup (c)): `register(traces_endpoint="http://<traces-pipeline-host>:21890/v1/traces", logs_endpoint="http://<data-prepper-host>:21892/v1/logs")`.
+This is a logs-only pipeline, so send traces to your traces pipeline and the logs here, with one full URL per signal ([setup (c)](configuration.md#three-setups) in Configuration): `register(traces_endpoint="http://<traces-pipeline-host>:21890/v1/traces", logs_endpoint="http://<data-prepper-host>:21892/v1/logs")`.
 
 ### b) Amazon OpenSearch Ingestion (OSI)
 
@@ -988,7 +1004,7 @@ OSI accepts OTLP/HTTP only (protobuf), signed with SigV4 service `osis`; gRPC is
 
 1. Create the [evaluation index](#evaluation-index) on the domain: steps 1 to 3.
 
-2. Create an OSI pipeline with an OTLP logs source. Pass its `/v1/logs` URL as `register(logs_endpoint=...)`, together with your traces pipeline URL as `traces_endpoint=` (setup (c)). With a single OSI `otlp` source for both signals, use setup (b) instead.
+2. Create an OSI pipeline with an OTLP logs source. Pass its `/v1/logs` URL as `register(logs_endpoint=...)`, together with your traces pipeline URL as `traces_endpoint=` ([setup (c)](configuration.md#three-setups) in Configuration). With a single OSI `otlp` source for both signals, use [setup (b)](configuration.md#three-setups) instead.
 
 ```yaml
 version: "2"
