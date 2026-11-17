@@ -1687,7 +1687,7 @@ class TestScorerJudgeContext:
     def test_rule_applies_when_the_scorer_declares_no_evaluator(self, events):
         @scorer(name="rel", threshold=0.7)
         def rel(i, o, e):
-            return EvalScore(name="rel", value=0.1, evaluator="my-judge")
+            return EvalScore(name="rel", value=0.1)
 
         result = evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[rel])
         attrs = [r.log_record.attributes for r in events(EVALUATION)][0]
@@ -1756,14 +1756,17 @@ class TestScorerJudgeContext:
         ]
         assert results == ["pass", "pass", "pass"]
 
-    def test_own_score_by_name_with_a_declared_evaluator(self, events):
+    def test_score_named_like_the_scorer_with_another_evaluator_is_foreign(self, events):
         @scorer(name="rel", evaluator="rel", threshold=0.7)
         def rel(i, o, e):
             return EvalScore(name="rel", value=0.1, evaluator="my-judge")
 
         result = evaluate("s", task=lambda x: x, data=[{"input": "a"}], scores=[rel])
-        assert self._by_name(events)["rel"]["gen_ai.evaluation.score.label"] == "fail"
-        assert result.cases[0].status == "fail"
+        attrs = self._by_name(events)["rel"]
+        assert "opensearch.gen_ai.evaluation.score.threshold" not in attrs
+        assert "gen_ai.evaluation.score.label" not in attrs
+        assert attrs["opensearch.gen_ai.evaluation.evaluator.name"] == "my-judge"
+        assert result.cases[0].status == "pass"
 
     def test_non_string_description_is_text(self, events):
         @scorer(name="d", description=123)
@@ -1932,3 +1935,208 @@ class TestEvalScoreEvaluator:
         declared, own = (r.log_record.attributes for r in events(EVALUATION))
         assert (declared[self.NAME], declared[self.TYPE]) == ("declared", "code")
         assert (own[self.NAME], own[self.TYPE]) == ("own", "llm_judge")
+
+
+class TestScorerOwnership:
+    """A score is the scorer's own iff its evaluator is unset or the scorer's.
+
+    No name rule: an explicit, different evaluator on a score always wins.
+    """
+
+    NAME = "opensearch.gen_ai.evaluation.evaluator.name"
+    TYPE = "opensearch.gen_ai.evaluation.evaluator.type"
+    DESC = "opensearch.gen_ai.evaluation.evaluator.description"
+    DECLARED = (
+        "opensearch.gen_ai.evaluation.score.threshold",
+        "opensearch.gen_ai.evaluation.score.min",
+        "opensearch.gen_ai.evaluation.score.max",
+        "opensearch.gen_ai.evaluation.score.direction",
+        "opensearch.gen_ai.evaluation.evaluator.type",
+        "opensearch.gen_ai.evaluation.evaluator.description",
+        "gen_ai.request.model",
+        "gen_ai.prompt.name",
+        "gen_ai.prompt.version",
+    )
+
+    def _by_name(self, events):
+        return {
+            r.log_record.attributes["gen_ai.evaluation.name"]: r.log_record.attributes
+            for r in events(EVALUATION)
+        }
+
+    def _run(self, fn, cases=1):
+        data = [{"input": f"q{i}"} for i in range(cases)]
+        return evaluate("s", task=lambda x: x, data=data, scores=[fn])
+
+    def test_name_collision_with_a_declared_evaluator(self, events):
+        # A wrapper named like DeepEval's metric does not claim its result.
+        @scorer(evaluator="wrapper", threshold=4, score_max=5)
+        def faithfulness(i, o, e):
+            return [
+                EvalScore(name="quality", value=4.5, evaluator="wrapper"),
+                EvalScore(name="faithfulness", value=0.9, evaluator="deepeval.faithfulness"),
+            ]
+
+        result = self._run(faithfulness)
+        by_name = self._by_name(events)
+        assert by_name["quality"]["gen_ai.evaluation.score.label"] == "pass"
+        faith = by_name["faithfulness"]
+        assert "opensearch.gen_ai.evaluation.score.threshold" not in faith
+        assert "opensearch.gen_ai.evaluation.score.max" not in faith
+        assert "gen_ai.evaluation.score.label" not in faith
+        assert result.cases[0].status == "pass"
+
+    def test_name_collision_without_a_declared_evaluator(self, events):
+        @scorer(threshold=0.7)
+        def faithfulness(i, o, e):
+            return [
+                EvalScore(name="quality", value=0.9),
+                EvalScore(name="faithfulness", value=0.2, evaluator="deepeval.faithfulness"),
+            ]
+
+        result = self._run(faithfulness)
+        faith = self._by_name(events)["faithfulness"]
+        assert "opensearch.gen_ai.evaluation.score.threshold" not in faith
+        assert faith[self.NAME] == "deepeval.faithfulness"
+        assert result.cases[0].status == "pass"
+
+    def test_unnamed_scorer_does_not_claim_by_name(self, events):
+        # A lambda has no evaluator name: only results without one are its own.
+        unnamed = scorer(name="score", threshold=0.7)(
+            lambda i, o, e: EvalScore(name="score", value=0.2, evaluator="ragas")
+        )
+
+        result = self._run(unnamed)
+        attrs = self._by_name(events)["score"]
+        assert "opensearch.gen_ai.evaluation.score.threshold" not in attrs
+        assert result.cases[0].status == "pass"
+
+    def test_score_named_like_the_scorer_gets_no_declared_identity(self, events):
+        @scorer(
+            name="q",
+            evaluator="declared",
+            evaluator_type="code",
+            judge_model="gpt-x",
+            description="desc",
+        )
+        def q(i, o, e):
+            return EvalScore(name="q", value=1.0, evaluator="actual")
+
+        self._run(q)
+        attrs = self._by_name(events)["q"]
+        assert attrs[self.NAME] == "actual"
+        assert self.TYPE not in attrs
+        assert self.DESC not in attrs
+        assert "gen_ai.request.model" not in attrs
+
+    def test_foreign_result_gets_nothing_from_the_declaration(self, events):
+        @scorer(
+            name="judge",
+            evaluator="judge",
+            threshold=0.5,
+            direction="minimize",
+            score_min=0,
+            score_max=1,
+            evaluator_type="llm_judge",
+            description="checks X",
+            judge_model="m1",
+            judge_prompt_name="p",
+            judge_prompt_version="v1",
+        )
+        def judge(i, o, e):
+            return [
+                EvalScore(name="judge", value=0.1),
+                EvalScore(name="faith", value=0.9, evaluator="deepeval.faithfulness"),
+                EvalScore(name="judge", value=0.9, evaluator="ragas.relevancy"),
+            ]
+
+        self._run(judge)
+        records = [r.log_record.attributes for r in events(EVALUATION)]
+        own, faith, collided = records
+        for key in self.DECLARED:
+            assert key in own, key
+            assert key not in faith, key
+            assert key not in collided, key
+        assert collided[self.NAME] == "ragas.relevancy"
+
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_blank_evaluator_on_a_score_is_unset(self, events, blank):
+        @scorer(name="rel", threshold=0.7, evaluator_type="llm_judge")
+        def rel(i, o, e):
+            return EvalScore(name="relevance", value=0.1, evaluator=blank)
+
+        result = self._run(rel)
+        attrs = self._by_name(events)["relevance"]
+        assert attrs["opensearch.gen_ai.evaluation.score.threshold"] == 0.7
+        assert attrs["gen_ai.evaluation.score.label"] == "fail"
+        assert attrs[self.NAME] == "rel"
+        assert attrs[self.TYPE] == "llm_judge"
+        assert result.cases[0].status == "fail"
+
+    def test_function_name_is_the_default_evaluator(self, events):
+        @scorer(name="quality", threshold=0.7)
+        def judge(i, o, e):
+            return EvalScore(name="q2", value=0.1, evaluator="judge")
+
+        result = self._run(judge)
+        assert self._by_name(events)["q2"]["gen_ai.evaluation.score.label"] == "fail"
+        assert result.cases[0].status == "fail"
+
+    def test_warns_once_when_a_rule_reaches_no_result(self, events, caplog):
+        @scorer(threshold=0.7)
+        def deepeval_wrap(i, o, e):
+            return [EvalScore(name="faithfulness", value=0.2, evaluator="deepeval.faithfulness")]
+
+        result = self._run(deepeval_wrap, cases=2)
+        self._run(deepeval_wrap)
+        assert [c.status for c in result.cases] == ["pass", "pass"]
+        assert caplog.text.count("applies to no result") == 1
+        assert "'deepeval_wrap'" in caplog.text
+        assert "every result names another evaluator" in caplog.text
+
+    def test_no_warning_without_a_rule_or_with_an_own_result(self, events, caplog):
+        @scorer(evaluator_type="llm_judge")
+        def no_rule(i, o, e):
+            return [EvalScore(name="faithfulness", value=0.2, evaluator="deepeval.faithfulness")]
+
+        @scorer(threshold=0.7)
+        def mixed(i, o, e):
+            return [
+                EvalScore(name="own", value=0.9),
+                EvalScore(name="faithfulness", value=0.2, evaluator="deepeval.faithfulness"),
+            ]
+
+        @scorer(threshold=0.7)
+        def nothing(i, o, e):
+            return []
+
+        for fn in (no_rule, mixed, nothing):
+            self._run(fn)
+        assert "applies to no result" not in caplog.text
+
+    def test_benchmark_log_defaults_skip_a_score_with_another_evaluator(self, events):
+        with Benchmark(name="b") as b:
+            b.log(
+                input="q",
+                scores=[
+                    EvalScore(name="a", value=1.0),
+                    EvalScore(name="b", value=1.0, evaluator="own"),
+                    EvalScore(name="c", value=1.0, evaluator="ragas"),
+                    EvalScore(name="d", value=1.0, evaluator=""),
+                ],
+                evaluator="ragas",
+                evaluator_type="llm_judge",
+            )
+            b.log(
+                input="q2",
+                scores=[EvalScore(name="e", value=1.0, evaluator="own")],
+                evaluator_type="llm_judge",
+            )
+        by_name = self._by_name(events)
+        assert (by_name["a"][self.NAME], by_name["a"][self.TYPE]) == ("ragas", "llm_judge")
+        assert by_name["b"][self.NAME] == "own"
+        assert self.TYPE not in by_name["b"]
+        assert (by_name["c"][self.NAME], by_name["c"][self.TYPE]) == ("ragas", "llm_judge")
+        assert (by_name["d"][self.NAME], by_name["d"][self.TYPE]) == ("ragas", "llm_judge")
+        assert by_name["e"][self.NAME] == "own"
+        assert self.TYPE not in by_name["e"]

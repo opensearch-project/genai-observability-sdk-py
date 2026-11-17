@@ -254,7 +254,7 @@ Record what an LLM judge checked and how, so a reader can tell two judge version
 | `judge_prompt_name` | `judge_prompt_name` | `gen_ai.prompt.name` |
 | `judge_prompt_version` | `judge_prompt_version` | `gen_ai.prompt.version` |
 
-`gen_ai.request.model`, `gen_ai.prompt.name` and `gen_ai.prompt.version` are the standard GenAI semantic convention names. There is no argument for the judge's full system prompt: see [Judge prompt](#judge-prompt). `Benchmark` has no judge arguments: set `gen_ai.request.model`, `gen_ai.prompt.name` and `gen_ai.prompt.version` in its run, case or `EvalScore` metadata. The evaluator description is reserved and cannot be set through metadata; set it with `@scorer(description=...)` or `score(evaluator_description=...)`. With `evaluate()`, everything a `@scorer(...)` declares (its pass rule `threshold` / `direction` / `score_min` / `score_max`, `evaluator_type`, the description and the judge fields) goes only on the scorer's own results: a returned `EvalScore` whose `evaluator` is unset or equals the scorer's evaluator (`evaluator=` or the function name), or whose `name` is the scorer's evaluation name. Results of other evaluators (for example `EvalScore(name="faith", evaluator="deepeval.faithfulness")`) keep their own rule, type and judge. A `@scorer` description is converted to text and cut to 1024 characters (with a `...[truncated]` marker), since it repeats on every result of the scorer.
+`gen_ai.request.model`, `gen_ai.prompt.name` and `gen_ai.prompt.version` are the standard GenAI semantic convention names. There is no argument for the judge's full system prompt: see [Judge prompt](#judge-prompt). `Benchmark` has no judge arguments: set `gen_ai.request.model`, `gen_ai.prompt.name` and `gen_ai.prompt.version` in its run, case or `EvalScore` metadata. The evaluator description is reserved and cannot be set through metadata; set it with `@scorer(description=...)` or `score(evaluator_description=...)`. With `evaluate()`, everything a `@scorer(...)` declares (its pass rule `threshold` / `direction` / `score_min` / `score_max`, `evaluator_type`, the description and the judge fields) goes only on the scorer's own results: a returned `EvalScore` whose `evaluator` is unset (`""` counts as unset) or equals the scorer's evaluator (`evaluator=` or the function name). A result that names a different evaluator (for example `EvalScore(name="faith", evaluator="deepeval.faithfulness")`) is never the scorer's own, whatever its `name`: it keeps its own rule, type and judge and gets none of the scorer's, so its evaluator name, type and judge fields describe the same evaluator. If a scorer declares a rule (`threshold`, `direction`, `score_min` or `score_max`) and every result it returns names another evaluator, the rule applies to no result and the SDK logs one warning per scorer. A `@scorer` description is converted to text and cut to 1024 characters (with a `...[truncated]` marker), since it repeats on every result of the scorer.
 
 ```python
 from opensearch_genai_observability_sdk_py import score
@@ -427,9 +427,9 @@ if result.summary.fail_count or result.summary.error_count:
 ```
 
 - A scorer receives `(input, output, expected)` and returns a number (any `numbers.Real`, for example `numpy.float32`), a bool (a verdict), an `EvalScore` or a list of `EvalScore`. Scorers are synchronous. Any other return (`numpy.bool_`, `Decimal`, `None`, a dict, a coroutine) logs a warning and emits an error result with `error.type` = `TypeError`, and the case status is `error`. An `async def` scorer is not called; wrap the async judge with `asyncio.run()` in a sync scorer.
-- `@scorer(...)` declares the evaluation name, `threshold`, `direction`, `score_min`, `score_max`, `evaluator` and `evaluator_type`. Fields set on a returned `EvalScore` win.
+- `@scorer(...)` declares the evaluation name, `threshold`, `direction`, `score_min`, `score_max`, `evaluator` and `evaluator_type`. Fields set on a returned `EvalScore` win. The declaration goes only on the scorer's own results: those whose `evaluator` is unset or equals the scorer's evaluator (see [Judge context](#judge-context)).
 - `EvalScore(judge_trace_id=...)` sets `opensearch.gen_ai.evaluation.judge.trace_id`, in `evaluate()` and in `Benchmark.log()`.
-- `EvalScore(evaluator=..., evaluator_type=...)` names the evaluator of that score and wins over the `@scorer(...)` declaration.
+- `EvalScore(evaluator=..., evaluator_type=...)` names the evaluator of that score and wins over the `@scorer(...)` declaration. A score that names a different evaluator gets nothing from the declaration.
 - Scorers run outside the agent trace, so a traced judge gets its own trace.
 
 ### Benchmark
@@ -459,7 +459,7 @@ summary = b.close()
 
 `scores` is `{name: value}` or a list of `EvalScore`. `Benchmark` creates no spans, and it stamps the `test.*` and `cicd.pipeline.*` ids only on the results, not on the agent's spans (only `evaluate()` stamps the spans it starts).
 
-Name the evaluator of each score with `EvalScore(evaluator=..., evaluator_type=...)` (`opensearch.gen_ai.evaluation.evaluator.name` / `.type`, the same keys `evaluate()` and `@scorer` write), or pass `Benchmark.log(evaluator=..., evaluator_type=...)` as the default for every score of that call; an `EvalScore` that sets its own wins. Without either, the result has no evaluator name, as before.
+Name the evaluator of each score with `EvalScore(evaluator=..., evaluator_type=...)` (`opensearch.gen_ai.evaluation.evaluator.name` / `.type`, the same keys `evaluate()` and `@scorer` write), or pass `Benchmark.log(evaluator=..., evaluator_type=...)` as the default for the scores of that call whose `evaluator` is unset (`""` counts as unset) or equals `evaluator=`; an `EvalScore` that sets its own wins, and a score that names a different evaluator gets no default type. Without either, the result has no evaluator name, as before.
 
 ```python
 b.log(
