@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import enum
 import functools
 import hashlib
 import inspect
@@ -123,6 +124,27 @@ _CASE_STATUSES = ("pass", "fail", "error")
 # ---------------------------------------------------------------------------
 
 
+def _evaluator_name(value: Any) -> str | None:
+    """An evaluator name as set on a score, a scorer or ``Benchmark.log()``, normalized.
+
+    Never raises. A ``str`` enum member gives its value; any other non-string
+    (an ``int``, a plain ``Enum`` member) is converted with ``str()``, as the
+    OTel attribute would be. Surrounding whitespace is stripped, and an empty
+    or whitespace-only name is ``None`` (unset).
+    """
+    if value is None:
+        return None
+    if isinstance(value, enum.Enum) and isinstance(value, str):
+        value = value.value
+    if not isinstance(value, str):
+        try:
+            value = str(value)
+        except Exception:  # a broken __str__ must not abort a run
+            logger.warning("evaluator %s could not be converted to text; unset", type(value))
+            return None
+    return value.strip() or None
+
+
 @dataclasses.dataclass
 class EvalScore:
     """Result from a scorer function.
@@ -157,8 +179,11 @@ class EvalScore:
       ``Benchmark.log(evaluator=, evaluator_type=)`` defaults. An
       ``evaluator`` that differs from the scorer's (or the ``log()``
       default) makes the score another evaluator's: it then gets none of
-      the declared or default type, rule or judge fields. ``""`` counts as
-      unset. Unset: the result is recorded as before.
+      the declared or default type, rule or judge fields. ``evaluator`` is
+      normalized when the score is created: surrounding whitespace is
+      stripped, ``""`` and whitespace-only become ``None`` (unset), a ``str``
+      enum member becomes its value and any other non-string is converted
+      with ``str()``. Unset: the result is recorded as before.
     """
 
     name: str
@@ -174,6 +199,9 @@ class EvalScore:
     judge_trace_id: str | None = None
     evaluator: str | None = None
     evaluator_type: str | None = None
+
+    def __post_init__(self) -> None:
+        self.evaluator = _evaluator_name(self.evaluator)
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +227,10 @@ class ScorerSpec:
     judge_model: str | None = None
     judge_prompt_name: str | None = None
     judge_prompt_version: str | None = None
+
+    def __post_init__(self) -> None:
+        # Normalized like EvalScore.evaluator (see _evaluator_name).
+        object.__setattr__(self, "evaluator", _evaluator_name(self.evaluator))
 
     def judge_attributes(self) -> dict[str, Any]:
         """The evaluator description and judge context attributes it declares."""
@@ -260,7 +292,8 @@ def scorer(
       / ``score_min`` / ``score_max``: defaults for the scorer's own scores
       (see below); fields set on a returned ``EvalScore`` take precedence.
     - ``evaluator``: evaluator name
-      (``opensearch.gen_ai.evaluation.evaluator.name``; default: the function name).
+      (``opensearch.gen_ai.evaluation.evaluator.name``; default: the function
+      name). Normalized like ``EvalScore.evaluator``: stripped, blank is unset.
     - ``evaluator_type``: ``llm_judge``, ``code``, ``human`` or ``external``.
     - ``description``: what the evaluator checks
       (``opensearch.gen_ai.evaluation.evaluator.description``).
@@ -339,9 +372,12 @@ def _verdict(s: EvalScore) -> str | None:
 
 
 def _score_evaluator(s: EvalScore) -> str | None:
-    """A score's ``evaluator``, with ``""`` and whitespace-only treated as unset."""
-    ev = s.evaluator
-    return ev if ev is not None and ev.strip() else None
+    """A score's ``evaluator``, normalized (see ``_evaluator_name``).
+
+    ``EvalScore`` normalizes it when created; this also covers a field set
+    afterwards.
+    """
+    return _evaluator_name(s.evaluator)
 
 
 def _owns(s: EvalScore, evaluator: str | None) -> bool:
@@ -944,7 +980,8 @@ class Benchmark:
                 (``opensearch.gen_ai.evaluation.evaluator.name``) for the scores
                 of this call that set none (``""`` counts as unset), for example
                 ``"deepeval"``. An ``EvalScore`` that sets its own ``evaluator``
-                wins.
+                wins. Normalized like ``EvalScore.evaluator``: stripped, blank
+                is unset, a non-string is converted to text.
             evaluator_type: Default ``opensearch.gen_ai.evaluation.evaluator.type``
                 (``llm_judge``, ``code``, ``human`` or ``external``) for the
                 scores of this call whose ``evaluator`` is unset or equals
@@ -957,6 +994,7 @@ class Benchmark:
             raise ValueError("Both trace_id and span_id must be provided together, or neither.")
         if status is not None and status not in _CASE_STATUSES:
             raise ValueError(f"status must be one of {', '.join(_CASE_STATUSES)}; got {status!r}")
+        evaluator = _evaluator_name(evaluator)
 
         if isinstance(scores, dict):
             eval_scores = [EvalScore(name=n, value=v) for n, v in scores.items()]

@@ -2251,3 +2251,76 @@ class TestLocalResultsByEvaluator:
             )
         assert b._cases[0].status == "fail"
         assert b._cases[0].verdicts == {"f": "fail"}
+
+
+class TestEvaluatorNormalization:
+    """Evaluator names are normalized once, when set: never a crash."""
+
+    NAME = "opensearch.gen_ai.evaluation.evaluator.name"
+    THRESHOLD = "opensearch.gen_ai.evaluation.score.threshold"
+
+    def _attrs(self, events):
+        return [r.log_record.attributes for r in events(EVALUATION)]
+
+    def test_non_string_evaluator_does_not_abort_the_run(self, events):
+        import enum
+
+        class Plain(enum.Enum):
+            JUDGE = "judge"
+
+        class Named(str, enum.Enum):
+            DEEPEVAL = "deepeval.faithfulness"
+
+        values = iter([123, Plain.JUDGE, Named.DEEPEVAL])
+
+        @scorer(name="q", threshold=0.5)
+        def q(i, o, e):
+            return EvalScore(name="q", value=0.9, evaluator=next(values))
+
+        result = evaluate(
+            "s", task=lambda x: x, data=[{"input": f"q{i}"} for i in range(3)], scores=[q]
+        )
+        assert [c.status for c in result.cases] == ["pass", "pass", "pass"]
+        names = [a[self.NAME] for a in self._attrs(events)]
+        assert names == ["123", "Plain.JUDGE", "deepeval.faithfulness"]
+
+    def test_non_string_evaluator_in_benchmark_log(self, events):
+        with Benchmark(name="b") as b:
+            b.log(input="q", scores=[EvalScore(name="a", value=1.0, evaluator=7)], evaluator=8)
+            b.log(input="q2", scores=[EvalScore(name="a", value=1.0)], evaluator=8)
+        assert len(b._cases) == 2
+        assert [a[self.NAME] for a in self._attrs(events)] == ["7", "8"]
+
+    def test_eval_score_evaluator_is_stripped_and_blank_is_none(self):
+        assert EvalScore(name="a", value=1.0, evaluator=" judge ").evaluator == "judge"
+        assert EvalScore(name="a", value=1.0, evaluator="   ").evaluator is None
+        assert EvalScore(name="a", value=1.0, evaluator=3).evaluator == "3"
+
+    def test_trailing_space_on_a_score_still_belongs_to_the_scorer(self, events):
+        @scorer(evaluator="judge", threshold=0.5)
+        def j(i, o, e):
+            return EvalScore(name="j", value=0.1, evaluator="judge ")
+
+        result = evaluate("s", task=lambda x: x, data=[{"input": "q"}], scores=[j])
+        (attrs,) = self._attrs(events)
+        assert attrs[self.NAME] == "judge"
+        assert attrs[self.THRESHOLD] == 0.5
+        assert result.cases[0].status == "fail"
+
+    def test_scorer_and_log_evaluators_are_stripped(self, events):
+        @scorer(evaluator="  ", threshold=0.5)
+        def blank(i, o, e):
+            return 0.9
+
+        @scorer(evaluator=" ragas ")
+        def padded(i, o, e):
+            return 0.9
+
+        assert blank.scorer_spec.evaluator is None
+        assert padded.scorer_spec.evaluator == "ragas"
+        evaluate("s", task=lambda x: x, data=[{"input": "q"}], scores=[blank, padded])
+        with Benchmark(name="b") as b:
+            b.log(input="q", scores={"x": 1.0}, evaluator=" deepeval ")
+            b.log(input="q", scores={"y": 1.0}, evaluator="  ")
+        attrs = self._attrs(events)
+        assert [a.get(self.NAME) for a in attrs] == ["blank", "ragas", "deepeval", None]
