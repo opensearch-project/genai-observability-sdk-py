@@ -1,6 +1,6 @@
 # Documentation
 
-Reference and concepts for the OpenSearch GenAI SDK for Python.
+Reference and concepts for the OpenSearch GenAI SDK for Python. For step-by-step guides that you run against example agents, see [`examples/`](../examples/README.md).
 
 | Document | What it covers |
 |---|---|
@@ -10,9 +10,14 @@ Reference and concepts for the OpenSearch GenAI SDK for Python.
 | [Agent evaluations](agent-evaluations.md) | Evaluation concepts and reference: data model, attributes, what gets stored, index template, ingestion, verify, troubleshooting |
 | [Getting started with agent evaluations](getting-started-evaluations.md) | Guided walkthrough from an instrumented agent to online and offline results in OpenSearch Dashboards |
 
+Runbooks (step by step):
+
+- [Tracing runbook](../examples/runbooks/tracing.md): stand up the stack, `register()`, instrument, check the spans, open Agent Traces.
+- [Evals runbook](../examples/runbooks/evals.md): offline evals, online evals, checking the results.
+
 ## Examples
 
-The examples in [`examples/`](../examples/), one SDK feature each:
+[`examples/README.md`](../examples/README.md) lists every example. The basic examples in [`examples/basics/`](../examples/basics/), one SDK feature each:
 
 | Example | Description |
 |---|---|

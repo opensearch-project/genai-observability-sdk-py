@@ -2,7 +2,7 @@
 
 This guide takes one agent from its first trace to evaluated production traffic. It threads a single example through every step: the **observability assistant**, a [Strands](https://strandsagents.com) agent that answers questions about your own OpenSearch cluster ("which services had errors in the last hour?", "what are the slowest operations?") with real, read-only tools. The runnable code is in [examples/end-to-end/strands-observability-agent](../examples/end-to-end/strands-observability-agent/).
 
-[agent-evaluations.md](agent-evaluations.md) is the reference: every attribute, the ingestion pipelines, index templates and mappings.
+[agent-evaluations.md](agent-evaluations.md) is the reference: every attribute, the ingestion pipelines, index templates and mappings. For short, step-by-step checks against the travel assistant examples, see the [evals runbook](../examples/runbooks/evals.md).
 
 - [0. Where to start](#0-where-to-start)
 - [1. Define goals](#1-define-goals)
@@ -593,5 +593,6 @@ print(f"{app}/compare/{quote(run_a, safe='')}/{quote(run_b, safe='')}")
 ## Further reading
 
 - [From day one to healthy production: instrumenting and evaluating AI agents with OpenSearch](https://github.com/anirudha/os-agent-observability-evals/blob/main/blog.md): the same journey end to end, with a sample support agent in several frameworks.
+- [Evals runbook](../examples/runbooks/evals.md) and [tracing runbook](../examples/runbooks/tracing.md): step by step against the example agents, with the checks to run.
 - [Agent evaluations](agent-evaluations.md): the full attribute reference, ingestion pipelines and index templates.
 - [API reference](api-reference.md): every parameter of `register()`, `score()`, `evaluate()`, `Benchmark` and `OpenSearchTraceRetriever`.

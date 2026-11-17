@@ -93,7 +93,9 @@ Each case is its own agent trace, and each score is one `gen_ai.evaluation.resul
 | [docs/architecture.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/architecture.md) | How spans and evaluation events flow from the SDK into OpenSearch |
 | [docs/agent-evaluations.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/agent-evaluations.md) | Evaluation concepts and reference: data model, what gets stored, index template, ingestion, verify, troubleshooting |
 | [docs/getting-started-evaluations.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/getting-started-evaluations.md) | Guided walkthrough from an instrumented agent to online and offline results in OpenSearch Dashboards |
-| [examples/](https://github.com/opensearch-project/genai-observability-sdk-py/tree/main/examples) | Runnable examples, one SDK feature each |
+| [examples/README.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/examples/README.md) | Every runnable example: basics, framework tracing, eval libraries, an end-to-end agent |
+| [examples/runbooks/tracing.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/examples/runbooks/tracing.md) | Step by step: stand up the stack, instrument, check the spans, open Agent Traces |
+| [examples/runbooks/evals.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/examples/runbooks/evals.md) | Step by step: offline evals, online evals, checking the results |
 
 The docs index is [docs/README.md](https://github.com/opensearch-project/genai-observability-sdk-py/blob/main/docs/README.md).
 
