@@ -44,10 +44,16 @@ An unknown agent is left out, never invented. `evaluate()` also stamps the agent
 
 ### Parameters
 
-Endpoint and exporter parameters. How they resolve against each other and against the environment is in [Endpoints](configuration.md#endpoints-traces-and-evaluation-logs).
+All parameters are keyword-only. How the endpoint parameters resolve against each other and against the environment is in [Endpoints](configuration.md#endpoints-traces-and-evaluation-logs).
 
 | Parameter | Default | Description |
 |---|---|---|
+| `service_name` | `OTEL_SERVICE_NAME`, else `OPENSEARCH_PROJECT`, else `"default"` | `service.name` resource attribute. `project_name` is an alias |
+| `service_version` | `OTEL_SERVICE_VERSION` | `service.version` resource attribute |
+| `batch` | `True` | Batch span and log processors (`True`) or simple ones (`False`) |
+| `auto_instrument` | `True` | Activate the installed instrumentor packages (see [Auto-instrumentation](configuration.md#auto-instrumentation)) |
+| `set_global` | `True` | Set the provider as the global `TracerProvider`. With `False` no logs pipeline is created |
+| `agent_name` / `agent_version` | `None` | Default agent for evaluation results (see [Agent identity](#agent-identity)) |
 | `endpoint` | resolved | OTLP base URL for all signals (no `/v1/<signal>` suffix) |
 | `traces_endpoint` | resolved | Full OTLP traces URL; pass with `logs_endpoint` |
 | `logs_endpoint` | resolved | Full OTLP logs URL, for example the OSIS logs pipeline; pass with `traces_endpoint` |
@@ -55,7 +61,7 @@ Endpoint and exporter parameters. How they resolve against each other and agains
 | `compression` | resolved | `"none"` or `"gzip"` for both signals; must match the pipeline |
 | `headers` | `None` | Extra headers for both exporters (lowercased gRPC metadata over gRPC); default `OTEL_EXPORTER_OTLP_HEADERS` |
 | `sigv4` | `None` | `True` or `{"service": ..., "region": ...}`: sign both exporters with AWS SigV4 |
-| `enable_logs` | `True` | Set up the logs pipeline for evaluation events |
+| `enable_logs` | `True` | Set up the logs pipeline for evaluation events (only with `set_global=True` and no global `LoggerProvider` yet) |
 | `exporter` | `None` | Custom traces `SpanExporter`, used as-is |
 | `log_exporter` | `None` | Custom `LogRecordExporter`, used as-is |
 
@@ -158,7 +164,14 @@ def chat(prompt: str) -> str:
 | `temperature` | `gen_ai.request.temperature` | Temperature setting |
 | `max_tokens` | `gen_ai.request.max_tokens` | Max tokens setting |
 | `session_id` | `gen_ai.conversation.id` | Session/conversation ID |
-| `**extra` | As provided | Any additional key-value attributes |
+| `agent_id` | `gen_ai.agent.id` | Agent instance ID |
+| `agent_description` | `gen_ai.agent.description` | Agent description |
+| `tool_definitions` | `gen_ai.tool.definitions` | Tools available to the agent (list of dicts, JSON-encoded) |
+| `system_instructions` | `gen_ai.system_instructions` | System prompt |
+| `input_messages` / `output_messages` | `gen_ai.input.messages` / `gen_ai.output.messages` | Structured messages (JSON-encoded), for example `[{"role": "user", "parts": [{"type": "text", "content": "..."}]}]` |
+| `**extra` | As provided | Any additional key-value attributes (for example `**{"gen_ai.agent.version": "v3"}`) |
+
+All parameters are keyword-only and `None` values are skipped. `finish_reason` is stored as a one-element list. Without a recording span, `enrich()` does nothing.
 
 ## `mark_agent_root()`
 
@@ -226,7 +239,7 @@ score(
 | Parameter | Type | Attribute | Description |
 |---|---|---|---|
 | `name` | `str` | `gen_ai.evaluation.name` | Metric name (e.g., `"relevance"`) |
-| `value` | `float` | `gen_ai.evaluation.score.value` | Numeric score |
+| `value` | `float \| None` | `gen_ai.evaluation.score.value` | Numeric score. Omit it for an error result (`error_type=`) |
 | `trace_id` | `str` | event `traceId` | Hex trace ID of the evaluated trace |
 | `span_id` | `str` | event `spanId` | Hex span ID of the evaluated span. Without it the result is trace-level |
 | `label` | `str` | `gen_ai.evaluation.score.label` | Low-cardinality label (`"relevant"`). `"pass"` / `"fail"` (any case) is the verdict, stored lowercase. A non-verdict label moves to `opensearch.gen_ai.evaluation.judge_label` when `threshold` gives a verdict |
@@ -235,7 +248,7 @@ score(
 | `level` | `str` | `opensearch.gen_ai.evaluation.level` | `span`, `trace`, `session`, or `tool_call`. Default: `span` with a span context, `trace` with only `trace_id`, `session` with only `conversation_id` |
 | `evaluator` | `str` | `opensearch.gen_ai.evaluation.evaluator.name` | Evaluator name |
 | `evaluator_version` | `str` | `opensearch.gen_ai.evaluation.evaluator.version` | Evaluator version |
-| `evaluator_type` | `str` | `opensearch.gen_ai.evaluation.evaluator.type` | `llm_judge`, `code`, `human`, or `external` |
+| `evaluator_type` | `str` | `opensearch.gen_ai.evaluation.evaluator.type` | `llm_judge`, `code`, `human`, or `external`. Another value (here and for `level` / `direction`) logs a warning and is recorded as-is |
 | `direction` | `str` | `opensearch.gen_ai.evaluation.score.direction` | `maximize` or `minimize` |
 | `score_min` / `score_max` | `float` | `opensearch.gen_ai.evaluation.score.min` / `.max` | Scale bounds |
 | `threshold` | `float` | `opensearch.gen_ai.evaluation.score.threshold` | Pass threshold. `direction` defaults to `maximize` (recorded) |
@@ -244,7 +257,7 @@ score(
 | `agent_version` | `str` | `gen_ai.agent.version` | Its version. Default: the active span's, else `register(agent_version=)` |
 | `error_type` | `str` | `error.type` | Set when the evaluator itself failed |
 | `judge_trace_id` | `str` | `opensearch.gen_ai.evaluation.judge.trace_id` | Trace of the judge's own run |
-| `evaluator_description` | `str` | `opensearch.gen_ai.evaluation.evaluator.description` | What the evaluator checks (criteria or rubric summary) |
+| `evaluator_description` | `str` | `opensearch.gen_ai.evaluation.evaluator.description` | What the evaluator checks (criteria or rubric summary). Sent as given: only a `@scorer(description=...)` is cut to 1024 characters |
 | `judge_model` | `str` | `gen_ai.request.model` | Model the LLM judge used |
 | `judge_prompt_name` | `str` | `gen_ai.prompt.name` | Name of the judge prompt template |
 | `judge_prompt_version` | `str` | `gen_ai.prompt.version` | Version of the judge prompt |
@@ -274,6 +287,8 @@ Trace-level scores never derive a span id from the trace id.
 New to evaluations? Start with [Getting started with agent evaluations](getting-started-evaluations.md): the agent, test suite, test case and eval run hierarchy, the online and offline paths, Dashboards deep links and copyable LLM prompts. The full reference is [agent-evaluations.md](agent-evaluations.md).
 
 Run a task against a dataset, score outputs, and record each score as an OTel `gen_ai.evaluation.result` log event. The SDK creates no spans of its own: each case's agent run is its own trace, exactly like production.
+
+`evaluate()` is synchronous, and so are the task and the scorers: call an async agent with `task=lambda q: asyncio.run(agent(q))`, and an async judge the same way inside a sync scorer (see [evaluate()](agent-evaluations.md#evaluate) in the guide). The TypeScript SDK's `evaluate()` is async and accepts async tasks and scorers.
 
 ```python
 from opensearch_genai_observability_sdk_py import evaluate, EvalScore, observe, Op
@@ -317,15 +332,16 @@ Each `gen_ai.evaluation.result` carries `test.suite.name`, `test.suite.run.id`, 
 **Case identity.** Across runs a case is `test.suite.name` + `test.case.id`; within a run, `test.suite.run.id` + `test.case.id`. The default case id is the first 16 hex characters of the SHA-256 of the JSON-encoded input, so editing the input makes a new case: pass `"case_id"` for a stable identity. The full suite, run, case and evaluator tree is in [Data model](agent-evaluations.md#data-model).
 
 - The `test.*` ids are stamped on every root span the task starts (a span with no local parent) by a span processor that `evaluate()` installs once on the global SDK `TracerProvider`. Spans started outside `evaluate()` are not touched. Instrument the agent with the global provider (for example `@observe(op=Op.INVOKE_AGENT)` after `register()`).
+- The case is carried in a `contextvars` context variable, so asyncio tasks and `asyncio.to_thread()` see it, but a plain `threading.Thread` or a `ThreadPoolExecutor` worker does not: a root span started there is not stamped. Start the agent's root span in the task's own thread.
 - `test.suite.run.id` and `test.case.id` are proposed OTel attributes ([semantic-conventions#1262](https://github.com/open-telemetry/semantic-conventions/issues/1262), [semantic-conventions-genai#79](https://github.com/open-telemetry/semantic-conventions-genai/issues/79)); the other `test.*` names are OTel's.
 - **CI/CD.** Inside CI, every evaluation result (and, with `evaluate()`, the agent root spans it starts) carries the OTel `cicd.pipeline.name`, `cicd.pipeline.run.id` and `cicd.pipeline.run.url.full`, read from GitHub Actions, GitLab CI or Jenkins. Pass `ci_pipeline={"cicd.pipeline.run.id": ...}` to `evaluate()` / `Benchmark()` to set or override them. Outside CI nothing is added. The variables read per CI system are in [CI pipeline attributes](agent-evaluations.md#ci-pipeline-attributes).
 - `agent_name=` / `agent_version=` name the agent under test (see [Agent identity](#agent-identity)). They go on the root spans that don't name an agent, and on every evaluation result.
 - If the task starts no span, the score events carry no trace context (the `test.*` attributes are still set).
 - A case whose task raises is not scored: each declared scorer emits one error result instead, named after the scorer (its `@scorer(name=...)`, else the function name), with `error.type` set to the exception class name, no score value, no label and no explanation (the exception message is not sent), and the scorer's evaluator attributes. The run continues. A scorer that raises emits an error result the same way: `error.type`, no score value, no label and no explanation. The exception message stays local in `TestCaseResult.scorer_errors` (judge errors can carry URLs, keys or request bodies).
-- Scorers run outside the agent trace, so a traced LLM judge gets its own trace.
+- Scorers run after the task, outside the agent trace and in the caller's context: a traced LLM judge gets its own trace, unless `evaluate()` itself is called inside an active span, in which case the judge span is a child of that span.
 - Each `TestCaseResult` has `status` (see below), `error_type`, `duration_ms`, `verdicts` (evaluation name to verdict), and `trace_id` / `span_id` of the agent root span when the task created one.
 
-Each scorer is the evaluator: a named scorer function sets the grade event's `opensearch.gen_ai.evaluation.evaluator.name`. All events use the SDK instrumentation scope. `EvalScore.label`, `.explanation`, `.metadata` and `.judge_trace_id` (`opensearch.gen_ai.evaluation.judge.trace_id`) go on the event, in `evaluate()` and in `Benchmark.log()`. `EvalScore.evaluator` / `.evaluator_type` name that score's evaluator and win over the scorer's.
+Each scorer is the evaluator: a named scorer function sets the grade event's `opensearch.gen_ai.evaluation.evaluator.name` (default the function name; a lambda names no evaluator). The TypeScript SDK has no default evaluator name. All events use the SDK instrumentation scope. `EvalScore.label`, `.explanation`, `.metadata` and `.judge_trace_id` (`opensearch.gen_ai.evaluation.judge.trace_id`) go on the event, in `evaluate()` and in `Benchmark.log()`. `EvalScore.evaluator` / `.evaluator_type` name that score's evaluator and win over the scorer's.
 
 **Expected output.** A case's `"expected"` value is set on every `gen_ai.evaluation.result` of the case as `opensearch.test.case.expected` (JSON-encoded unless a string, cut at 8192 characters with `opensearch.test.case.expected_truncated`). It is exported by default; pass `record_expected=False` if your test sets hold sensitive data. Inputs and outputs are never exported. Encoding, request size and privacy details are in [Expected output](agent-evaluations.md#expected-output).
 
@@ -360,7 +376,7 @@ def tools(input, output, expected):
     return EvalScore(name="tool_selection", value=hit_rate, passed=hit_rate == 1)
 ```
 
-`@scorer` arguments: `name` (evaluation name of float/bool results and of the error grade; default the function name), `threshold`, `direction` (default `maximize` with a threshold), `score_min` / `score_max`, `evaluator` (`evaluator.name`; default the function name), `evaluator_type`, `description` (`opensearch.gen_ai.evaluation.evaluator.description`), `judge_model` (`gen_ai.request.model`), `judge_prompt_name` / `judge_prompt_version` (`gen_ai.prompt.name` / `.version`). The judge's full system prompt is not a scorer argument (it goes on the judge span, not the results). Everything the scorer declares (rule, `evaluator_type`, description and judge context) goes on its own results, error results included: an `EvalScore` whose `evaluator` is unset or equals the scorer's evaluator, or whose `name` is the scorer's evaluation name. Results of other evaluators (for example `deepeval.faithfulness`) keep their own. The description is cut to 1024 characters. A scorer that raises emits its error grade under the declared `name`, so it lands on the same evaluation as its successful results.
+`@scorer` arguments: `name` (evaluation name of float/bool results and of the error grade; default the function name), `threshold`, `direction` (default `maximize` with a threshold), `score_min` / `score_max`, `evaluator` (`evaluator.name`; default the function name), `evaluator_type`, `description` (`opensearch.gen_ai.evaluation.evaluator.description`), `judge_model` (`gen_ai.request.model`), `judge_prompt_name` / `judge_prompt_version` (`gen_ai.prompt.name` / `.version`). The judge's full system prompt is not a scorer argument (it goes on the judge span, not the results). Everything the scorer declares (rule, `evaluator_type`, description and judge context) goes on its own results, error results included: an `EvalScore` whose `evaluator` is unset or equals the scorer's evaluator, or whose `name` is the scorer's evaluation name. Results of other evaluators (for example `deepeval.faithfulness`) keep their own. The description is converted with `str()` and cut to 1024 characters, ending with the `...[truncated]` marker when cut (`score(evaluator_description=...)` is not cut; the TypeScript SDK caps `evaluatorDescription` at 1024 everywhere, without a marker). An unknown `direction` or `evaluator_type` raises `ValueError`, and a non-numeric `threshold` / `score_min` / `score_max` raises `TypeError`. A scorer that raises emits its error grade under the declared `name`, so it lands on the same evaluation as its successful results.
 
 **Case status** (local `TestCaseResult.status`, not sent): `error` if the task or any scorer raised; else `fail` if any score of the case has a `fail` verdict; else `pass`. A score's verdict comes from the first of a `pass` / `fail` `label`, `passed`, then `threshold` + `direction`; the same verdict is stored as the event's label, so the event and the local status always agree. Scores with no declared rule never fail a case. The summary keeps `pass_count`, `fail_count` and `error_count`.
 
@@ -385,6 +401,8 @@ Returns `BenchmarkResult` with `.summary` (aggregate stats) and `.cases` (per-ca
 ## `Benchmark`
 
 Upload pre-computed evaluation results from any framework (RAGAS, DeepEval, pytest, custom). Each `log()` emits one `gen_ai.evaluation.result` event per score, parented to the evaluated agent span when `trace_id` and `span_id` are given; otherwise the events have no trace context. Each result carries the `test.*` ids, `opensearch.test.case.expected` when `expected` is given (unless `Benchmark(record_expected=False)`), the agent, `cicd.pipeline.*` in CI, and the run `metadata` plus the case `metadata` passed to `log()` (reserved keys are dropped; the score's own `metadata` and the SDK attributes win). `scores` is `{name: value}` or a list of `EvalScore` (to declare `label` / `threshold` / bounds, and `evaluator` / `evaluator_type`). `log(evaluator=, evaluator_type=)` sets the default evaluator (`opensearch.gen_ai.evaluation.evaluator.name` / `.type`) for every score of the call; an `EvalScore` that sets its own wins. `Benchmark` stamps `test.*` and `cicd.pipeline.*` on the results only, not on agent spans. Use when you already have results and want to visualize them in agent-health or OpenSearch Dashboards.
+
+`log()` takes keyword arguments only. It raises `ValueError` when only one of `trace_id` / `span_id` is given or `status` is not `pass`, `fail` or `error`, and `RuntimeError` after `close()`. `Benchmark` has no evaluator description: metadata cannot set `opensearch.gen_ai.evaluation.evaluator.description` (see [Judge context](agent-evaluations.md#judge-context)).
 
 `error`, `error_type` and `status` set the local result: `error` or `error_type` marks the case `error`; otherwise a `fail` verdict marks it `fail`; `status` sets `pass`, `fail` or `error` explicitly. With `error_type`, every score in `scores` is emitted as an evaluator error result: `error.type` = `error_type`, no score value and no label. `close()` returns the local summary and sends nothing. No spans are created.
 
@@ -496,9 +514,9 @@ mine = retriever.find_evaluated_trace_ids(["trace-id-1"], evaluator="answer_qual
 
 | Method | Returns | Description |
 |---|---|---|
-| `get_traces(identifier, max_spans=10000, max_traces=1000)` | `SessionRecord` | By conversation ID: every span of each trace in the conversation (traces whose spans carry `gen_ai.conversation.id`, earliest first). Otherwise by trace ID: every span of that trace. `truncated` is `True` when a limit was reached |
-| `list_root_spans(services=None, since=None, max_results=50)` | `list[SpanRecord]` | List the agent roots of up to `max_results` recent traces, newest first, one per trace, optionally filtered by service. A root is a span marked `derived.gen_ai.is_root` (for example the agent span below an HTTP server span), or a span without a parent whose `gen_ai.operation.name` is `invoke_agent` or `create_agent`. A trace is listed by its parentless agent root when it has one, else by its earliest marked span. Other parentless GenAI spans, such as an LLM judge's own `chat` span, are not listed. When nothing matches, one INFO log line names this rule |
-| `find_evaluated_trace_ids(trace_ids, evaluator=None, evaluation_name=None)` | `set[str]` | Return subset of trace IDs that already have evaluation results (`gen_ai.evaluation.result` events in the evaluation index). Without a filter, a result from any evaluator counts; `evaluator=` / `evaluation_name=` count only that evaluator's (`opensearch.gen_ai.evaluation.evaluator.name`) or that evaluation's (`gen_ai.evaluation.name`) results. A missing index returns an empty set; other search errors raise |
+| `get_traces(identifier, max_spans=10000, *, max_traces=1000)` | `SessionRecord` | By conversation ID: every span of each trace in the conversation (traces whose spans carry `gen_ai.conversation.id`, earliest first). Otherwise by trace ID: every span of that trace. `truncated` is `True` when a limit was reached |
+| `list_root_spans(*, services=None, since=None, max_results=50)` | `list[SpanRecord]` | List the agent roots of up to `max_results` recent traces, newest first, one per trace, optionally filtered by service. `since` defaults to 15 minutes ago. A root is a span marked `derived.gen_ai.is_root` (for example the agent span below an HTTP server span), or a span without a parent whose `gen_ai.operation.name` is `invoke_agent` or `create_agent`. A trace is listed by its parentless agent root when it has one, else by its earliest marked span. Other parentless GenAI spans, such as an LLM judge's own `chat` span, are not listed. When nothing matches, one INFO log line names this rule |
+| `find_evaluated_trace_ids(trace_ids, *, evaluator=None, evaluation_name=None)` | `set[str]` | Return subset of trace IDs that already have evaluation results (`gen_ai.evaluation.result` events in the evaluation index). Without a filter, a result from any evaluator counts; `evaluator=` / `evaluation_name=` count only that evaluator's (`opensearch.gen_ai.evaluation.evaluator.name`) or that evaluation's (`gen_ai.evaluation.name`) results. A missing index returns an empty set; other search errors raise |
 
 Each `SpanRecord` carries the span's `agent_name` and `agent_version` (`gen_ai.agent.name`, `gen_ai.agent.version`). Pass both to `score()` when you post a result for a retrieved trace, or the result is grouped under "(no version)" on the agent page.
 

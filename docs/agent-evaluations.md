@@ -241,7 +241,7 @@ score(
 
 Results identify the judge prompt by name and version: `gen_ai.prompt.name` and `gen_ai.prompt.version` (shown as `name@version`). Bump the version whenever the prompt text changes, so two prompt versions are never mixed under one label.
 
-The full prompt text is never put on a result event. It belongs on the judge's own LLM call span as `gen_ai.system_instructions`, its OTel location, so it is stored once per judge call, next to the judge's input and output. The SDK does not create the judge's LLM span: the judge's instrumentation records it there (most GenAI instrumentations do, often behind a content-capture opt-in, because a prompt may hold sensitive data). If you trace the judge yourself, set it with `enrich(system_instructions=...)` inside the judge call, and pass the judge's trace id to the result: The judge span is a `chat` span: it carries no `gen_ai.agent.name`, so Agent Traces does not list the judge as an agent, and `list_root_spans()` does not return it (it lists only marked spans and parentless `invoke_agent` / `create_agent` spans).
+The full prompt text is never put on a result event. It belongs on the judge's own LLM call span as `gen_ai.system_instructions`, its OTel location, so it is stored once per judge call, next to the judge's input and output. The SDK does not create the judge's LLM span: the judge's instrumentation records it there (most GenAI instrumentations do, often behind a content-capture opt-in, because a prompt may hold sensitive data). If you trace the judge yourself, set it with `enrich(system_instructions=...)` inside the judge call, and pass the judge's trace id to the result. The judge span is a `chat` span: it carries no `gen_ai.agent.name`, so Agent Traces does not list the judge as an agent, and `list_root_spans()` does not return it (it lists only marked spans and parentless `invoke_agent` / `create_agent` spans).
 
 ```python
 from opentelemetry import trace
@@ -335,7 +335,7 @@ result = evaluate(
 )
 ```
 
-The task's spans stay in one trace per case, because `asyncio.run` runs the coroutine in the task's context.
+The task's spans stay in one trace per case, because `asyncio.run` runs the coroutine in the task's context. Spans started in a plain `threading.Thread` or `ThreadPoolExecutor` worker do not see the case and are not stamped; `asyncio.to_thread()` copies the context and is fine.
 
 ```python
 import sys
@@ -388,7 +388,7 @@ if result.summary.fail_count or result.summary.error_count:
     sys.exit(1)
 ```
 
-Scorer return types, `@scorer(...)` declarations and the `EvalScore` fields (`judge_trace_id`, `evaluator`, `evaluator_type`) are in [`evaluate()`](api-reference.md#evaluate). Scorers run outside the agent trace, so a traced judge gets its own trace.
+Scorer return types, `@scorer(...)` declarations and the `EvalScore` fields (`judge_trace_id`, `evaluator`, `evaluator_type`) are in [`evaluate()`](api-reference.md#evaluate). Scorers run after the task, outside the agent trace, so a traced judge gets its own trace (a child of the caller's span if `evaluate()` runs inside one).
 
 ### Benchmark
 
