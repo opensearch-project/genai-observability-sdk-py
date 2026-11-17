@@ -2423,3 +2423,30 @@ class TestUnusedDeclarationWarning:
 
         self._run(wrap, cases=2)
         assert len(calls) == 4
+
+
+class TestMetadataJudgeKeysAreRunLevel:
+    """Run metadata (judge keys included) is not part of a scorer's declaration."""
+
+    def test_metadata_judge_keys_go_on_every_result(self, events):
+        @scorer(judge_model="own-model")
+        def judge(i, o, e):
+            return [
+                EvalScore(name="own", value=1.0),
+                EvalScore(name="faith", value=1.0, evaluator="deepeval"),
+            ]
+
+        evaluate(
+            "s",
+            task=lambda x: x,
+            data=[{"input": "q"}],
+            scores=[judge],
+            metadata={"gen_ai.request.model": "run-model"},
+        )
+        models = {
+            r.log_record.attributes["gen_ai.evaluation.name"]: r.log_record.attributes.get(
+                "gen_ai.request.model"
+            )
+            for r in events(EVALUATION)
+        }
+        assert models == {"own": "own-model", "faith": "run-model"}

@@ -318,13 +318,19 @@ def scorer(
     unset (``""`` counts as unset) or equals ``evaluator`` (default: the
     function name). A score that names a different evaluator (for example
     ``EvalScore(name="faith", evaluator="deepeval.faithfulness")``) is never
-    the scorer's own, whatever its ``name``: it gets none of the rule, type,
-    description or judge fields, so its evaluator name, type and judge
-    always describe the same evaluator. When a scorer declares any of these
-    (a rule field, ``evaluator_type``, ``description`` or a judge field) and
-    every result it returns for a case names another evaluator, they apply
-    to no result and the SDK logs one warning per scorer per process, naming
-    the scorer's evaluator and the evaluators its results named.
+    the scorer's own, whatever its ``name``: it gets none of the declared
+    rule, type, description or judge fields, so its evaluator name, type and
+    judge always describe the same evaluator. Run and case ``metadata`` is
+    not part of the declaration and goes on every result, including judge
+    keys set there. An error result names the scorer's own evaluator: a
+    wrapper of another evaluator's metric should declare that evaluator
+    (``evaluator="deepeval.faithfulness"``) so its error results and its
+    results name the same evaluator and its rule applies to both. When a
+    scorer declares any of these (a rule field, ``evaluator_type``,
+    ``description`` or a judge field) and every result it returns for a
+    case names another evaluator, they apply to no result and the SDK logs
+    one warning per scorer per process, naming the scorer's evaluator and
+    the evaluators its results named.
     ``description`` is converted to text and cut to 1024 characters.
 
     Raises:
@@ -1293,8 +1299,10 @@ def evaluate(
             event of the run (score metadata and the SDK attributes win).
             Keys reserved by the SDK are filtered out, with one warning per
             key per process. Judge context keys (``gen_ai.request.model``,
-            ``gen_ai.prompt.*``) are allowed; ``@scorer`` judge arguments
-            win over them.
+            ``gen_ai.prompt.*``) are allowed and, like all run metadata, go
+            on every result of the run, other evaluators' results included;
+            ``@scorer`` judge arguments win over them on the scorer's own
+            results.
         run_id: ``test.suite.run.id`` of the run, used exactly as given.
             Default: a generated id. Pass the same id from every CI shard so
             they report into one run, or the id of an existing run to re-score
