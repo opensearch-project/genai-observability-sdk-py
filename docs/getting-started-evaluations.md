@@ -476,7 +476,7 @@ Paste these into your coding assistant, in your agent's repository.
 ### 1. Instrument my agent
 
 ```text
-Instrument this agent with the OpenSearch GenAI observability SDK
+Instrument this agent with the OpenSearch GenAI Observability SDK
 (pip package opensearch-genai-observability-sdk-py>=0.3.0, docs:
 https://github.com/opensearch-project/genai-observability-sdk-py).
 
@@ -497,7 +497,7 @@ https://github.com/opensearch-project/genai-observability-sdk-py).
 ### 2. Write a test suite for my agent
 
 ```text
-Write an offline evaluation for this agent with the OpenSearch GenAI observability SDK
+Write an offline evaluation for this agent with the OpenSearch GenAI Observability SDK
 (evaluate(), @scorer, EvalScore).
 
 - Create test_suite.jsonl with 8 to 12 realistic cases: {"case_id", "case_name",
@@ -524,7 +524,7 @@ Write an offline evaluation for this agent with the OpenSearch GenAI observabili
 ### 3. Set up online evaluations
 
 ```text
-Add an online evaluator for this agent with the OpenSearch GenAI observability SDK.
+Add an online evaluator for this agent with the OpenSearch GenAI Observability SDK.
 
 - Use OpenSearchTraceRetriever (host, auth, verify_certs from env) to list root spans
   of the agent's service from the last N minutes (list_root_spans), keep the ones

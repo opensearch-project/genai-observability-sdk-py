@@ -1,6 +1,6 @@
 # Documentation
 
-Reference and concepts for the OpenSearch GenAI SDK for Python. For step-by-step guides that you run against example agents, see [`examples/`](../examples/README.md).
+Reference and concepts for the OpenSearch GenAI Observability SDK for Python. For step-by-step guides that you run against example agents, see [`examples/`](../examples/README.md).
 
 | Document | What it covers |
 |---|---|

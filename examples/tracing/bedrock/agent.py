@@ -1,5 +1,5 @@
 """Travel assistant on the Amazon Bedrock Converse API (boto3), traced with the
-OpenSearch GenAI observability SDK.
+OpenSearch GenAI Observability SDK.
 
 There is no agent framework here: the script runs the tool loop itself.
 - register() activates the Bedrock instrumentor (from the SDK's [bedrock] extra), which

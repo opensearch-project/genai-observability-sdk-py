@@ -1,4 +1,4 @@
-"""Travel assistant on LangGraph, traced with the OpenSearch GenAI observability SDK.
+"""Travel assistant on LangGraph, traced with the OpenSearch GenAI Observability SDK.
 
 register() activates the LangChain instrumentor (from the SDK's [langchain] extra),
 which traces the graph, every model call and every tool call.

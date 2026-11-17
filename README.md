@@ -1,4 +1,8 @@
-# OpenSearch GenAI SDK
+# OpenSearch GenAI Observability SDK for Python
+
+[![CI](https://github.com/opensearch-project/genai-observability-sdk-py/actions/workflows/ci.yml/badge.svg)](https://github.com/opensearch-project/genai-observability-sdk-py/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/opensearch-genai-observability-sdk-py.svg)](https://pypi.org/project/opensearch-genai-observability-sdk-py/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 OTel-native tracing and scoring for LLM applications. Instrument your AI workflows with standard OpenTelemetry spans and submit evaluation scores, all routed to OpenSearch through a single OTLP pipeline.
 

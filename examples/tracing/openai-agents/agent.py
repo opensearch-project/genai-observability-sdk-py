@@ -1,4 +1,4 @@
-"""Travel assistant on the OpenAI Agents SDK, traced with the OpenSearch GenAI observability SDK.
+"""Travel assistant on the OpenAI Agents SDK, traced with the OpenSearch GenAI Observability SDK.
 
 register() activates the OpenAI Agents instrumentor (from the SDK's [openai] extra), which
 traces the agent run, every model call and every tool call.

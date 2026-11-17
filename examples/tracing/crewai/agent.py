@@ -1,4 +1,4 @@
-"""Travel assistant on CrewAI, traced with the OpenSearch GenAI observability SDK.
+"""Travel assistant on CrewAI, traced with the OpenSearch GenAI Observability SDK.
 
 register() activates the CrewAI and Bedrock instrumentors. The CrewAI instrumentor
 records the crew, task and agent; the Bedrock instrumentor records each model call.

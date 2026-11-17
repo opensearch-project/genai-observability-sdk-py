@@ -1,4 +1,4 @@
-"""Travel assistant on Strands Agents, traced with the OpenSearch GenAI observability SDK.
+"""Travel assistant on Strands Agents, traced with the OpenSearch GenAI Observability SDK.
 
 Strands has built-in OpenTelemetry tracing. It uses the global tracer provider that
 register() installs, so there is nothing else to wire up.

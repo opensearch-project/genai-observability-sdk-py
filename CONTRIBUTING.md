@@ -1,6 +1,6 @@
-# Contributing to OpenSearch GenAI SDK
+# Contributing to the OpenSearch GenAI Observability SDK for Python
 
-Thank you for your interest in contributing to the OpenSearch GenAI SDK! We welcome contributions from the community.
+Thank you for your interest in contributing to the OpenSearch GenAI Observability SDK for Python! We welcome contributions from the community.
 
 ## Code of Conduct
 

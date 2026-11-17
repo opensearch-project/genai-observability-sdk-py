@@ -1,4 +1,4 @@
-# Agent evaluations with the OpenSearch GenAI SDK
+# Agent evaluations with the OpenSearch GenAI Observability SDK for Python
 
 New here? [Getting started with agent evaluations](getting-started-evaluations.md) is the short path: the hierarchy, online and offline examples, Dashboards deep links and copyable LLM prompts.
 
