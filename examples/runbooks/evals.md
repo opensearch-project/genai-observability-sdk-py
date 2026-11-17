@@ -34,6 +34,13 @@ shows pass / fail; without one a result is only "Scored".
   `EvalScore(judge_trace_id=...)`:
   [end-to-end/.../judge.py](../end-to-end/strands-observability-agent/judge.py),
   [evals/native](../evals/native/).
+- A declaration fills only the scorer's own results: those that name no `evaluator`, or
+  the scorer's own (the declared `evaluator=`, else the function name). A scorer that
+  returns a library's result, such as `EvalScore(name="faithfulness",
+  evaluator="deepeval.faithfulness")`, must declare that evaluator to get the rule:
+  `@scorer(name="faithfulness", evaluator="deepeval.faithfulness", threshold=0.7)`
+  ([evals/deepeval](../evals/deepeval/)). When a declaration reaches none of a scorer's
+  results in a run, `evaluate()` logs a warning at the end of the run.
 
 ## 3. Run an offline eval: `evaluate()`
 
@@ -62,6 +69,12 @@ Each case's agent run is its own trace with `test.suite.*` and `test.case.*` on 
 span; each score is one result parented to it. Change one thing (prompt, model, tool) and
 run again with a new `run_name` to have two runs to compare.
 
+`result.cases[i].scores` / `.verdicts` and the summary are keyed by evaluation name. When
+two evaluators report the same name in a run, the first keeps the plain name and the other
+is keyed `"<name> (<evaluator>)"`, so no result hides another and a failing result always
+fails the case. Run `metadata` is copied to every result of the run; besides your own keys
+it may carry the judge context `gen_ai.request.model` and `gen_ai.prompt.*`.
+
 Shown in: [evals/native](../evals/native/) (two runs over the shared suite),
 [end-to-end/strands-observability-agent](../end-to-end/strands-observability-agent/)
 (`offline_eval.py --run-name ...`), [basics/07_benchmarks.py](../basics/07_benchmarks.py).
@@ -81,7 +94,8 @@ roots = retriever.list_root_spans(
 done = retriever.find_evaluated_trace_ids(
     [r.trace_id for r in roots], evaluator="travel_plan_judge"
 )
-for root in (r for r in roots if r.trace_id not in done):
+offline = {r.trace_id for r in roots if "test.suite.run.id" in r.raw.get("attributes", {})}
+for root in (r for r in roots if r.trace_id not in done | offline):
     verdict = judge(root.input_messages[0].content, root.output_messages[-1].content)
     score(
         "plan_quality",
@@ -99,7 +113,9 @@ for root in (r for r in roots if r.trace_id not in done):
 ```
 
 - `list_root_spans()` returns each trace's agent root, the row Agent Traces lists, with
-  its GenAI messages, `agent_name` and `agent_version`. Pass both to `score()`.
+  its GenAI messages, `agent_name` and `agent_version`. Pass both to `score()`. A root is
+  a span marked `derived.gen_ai.is_root` or a parentless `invoke_agent` / `create_agent`
+  span, so an LLM judge's own `chat` trace is not listed.
 - `find_evaluated_trace_ids(..., evaluator=)` makes the job safe to re-run.
 - Skip the offline runs (root spans with `test.suite.run.id`) and sample the rest.
 
@@ -112,10 +128,13 @@ Shown in: [evals/native](../evals/native/) (`online_eval.py`),
 
 Keep your library and send its numbers: return them from an `evaluate()` scorer (results
 get the suite, case and run ids), log them with `Benchmark(...).log(...)` when the run
-already happened, or `score()` them onto a trace. With `Benchmark`, record the judge in
-the metadata (`Benchmark(metadata={"gen_ai.request.model": ...})`, also
-`gen_ai.prompt.name` / `gen_ai.prompt.version`); with `evaluate()`, use
-`@scorer(judge_model=...)`.
+already happened, or `score()` them onto a trace. In `evaluate()`, declare the library's
+evaluator in `@scorer(evaluator=...)` so its results get the rule and `@scorer(judge_model=...)`.
+With `Benchmark`, record the judge in the metadata (`Benchmark(metadata={"gen_ai.request.model": ...})`,
+also `gen_ai.prompt.name` / `gen_ai.prompt.version`): it describes every result of the run.
+`log(evaluator=..., evaluator_type=...)` sets the default evaluator for the call's scores
+that name no evaluator (or the same one); if that `evaluator_type` reaches no score of the
+run, `close()` logs a warning. `close()` prints and returns the local summary.
 
 | Library | Example |
 |---|---|

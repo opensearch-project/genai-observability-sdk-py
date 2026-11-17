@@ -19,7 +19,11 @@ every metric result to OpenSearch as a `gen_ai.evaluation.result`.
 
 All three are `llm_judge` results with `threshold` 0.7, scale 0 to 1, the metric's reason
 as explanation, and the judge model in `gen_ai.request.model` (set with
-`@scorer(judge_model=...)`).
+`@scorer(judge_model=...)`). Each scorer declares the metric's evaluator
+(`@scorer(evaluator="deepeval.<Metric>")`) and returns an `EvalScore` that names none, so
+every result is the scorer's own and gets the declared threshold, type and judge model. A
+scorer that returned `EvalScore(evaluator="deepeval.X")` under a different declared
+evaluator would get none of them, and `evaluate()` would log a warning at the end of the run.
 
 Why `evaluate()` and not `Benchmark`: DeepEval metrics score one test case at a time, so
 each can be a scorer. `evaluate()` then links every result to the agent run, stamps
