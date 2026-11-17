@@ -75,6 +75,7 @@ import enum
 import functools
 import hashlib
 import inspect
+import itertools
 import json
 import logging
 import numbers
@@ -228,6 +229,11 @@ class ScorerSpec:
     judge_model: str | None = None
     judge_prompt_name: str | None = None
     judge_prompt_version: str | None = None
+    # Identity of this declaration (one per ``@scorer(...)`` call), for the
+    # once-per-scorer warning: equal declarations of different scorers differ.
+    _key: int = dataclasses.field(
+        default_factory=itertools.count().__next__, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         # Normalized like EvalScore.evaluator (see _evaluator_name).
@@ -314,10 +320,11 @@ def scorer(
     ``EvalScore(name="faith", evaluator="deepeval.faithfulness")``) is never
     the scorer's own, whatever its ``name``: it gets none of the rule, type,
     description or judge fields, so its evaluator name, type and judge
-    always describe the same evaluator. When a scorer declares a rule
-    (``threshold``, ``direction``, ``score_min`` or ``score_max``) and every
-    result it returns for a case names another evaluator, the rule applies
-    to no result and the SDK logs one warning per scorer per process.
+    always describe the same evaluator. When a scorer declares any of these
+    (a rule field, ``evaluator_type``, ``description`` or a judge field) and
+    every result it returns for a case names another evaluator, they apply
+    to no result and the SDK logs one warning per scorer per process, naming
+    the scorer's evaluator and the evaluators its results named.
     ``description`` is converted to text and cut to 1024 characters.
 
     Raises:
@@ -393,35 +400,87 @@ def _owns(s: EvalScore, evaluator: str | None) -> bool:
     return ev is None or ev == evaluator
 
 
-def _declares_rule(spec: ScorerSpec | None) -> bool:
-    """Whether a scorer declares a rule field (threshold, direction or bounds)."""
-    return spec is not None and any(
-        v is not None for v in (spec.threshold, spec.direction, spec.score_min, spec.score_max)
-    )
+_DECLARED_FIELDS = (
+    "threshold",
+    "direction",
+    "score_min",
+    "score_max",
+    "evaluator_type",
+    "description",
+    "judge_model",
+    "judge_prompt_name",
+    "judge_prompt_version",
+)
 
 
-def _warn_rule_reaches_no_result(scorer_fn: Callable[..., Any], scorer_name: str) -> None:
-    # One warning per scorer per process.
-    module = getattr(scorer_fn, "__module__", "")
-    key = f"{module}.{getattr(scorer_fn, '__qualname__', scorer_name)}"
-    if not first_warnings("scorer-rule-unused", [key]):
-        return
-    logger.warning(
-        "scorer %r declares a rule (threshold, direction or bounds) that applies to no "
-        "result, because every result names another evaluator. A score is the scorer's "
-        "own when its evaluator is unset or equals the scorer's evaluator. "
-        "Warned once per scorer.",
-        scorer_name,
-    )
+def _declared_fields(spec: ScorerSpec | None) -> list[str]:
+    """The fields a scorer declares for its own results (rule, type, description, judge)."""
+    if spec is None:
+        return []
+    return [f for f in _DECLARED_FIELDS if getattr(spec, f) is not None]
 
 
-def _apply_spec(s: EvalScore, spec: ScorerSpec | None, evaluator: str | None) -> EvalScore:
-    """Fill a score's unset rule fields and evaluator type from its scorer's declaration.
+def _warn_declaration_reaches_no_result(
+    spec: ScorerSpec,
+    scorer_name: str,
+    eval_name: str,
+    evaluator: str | None,
+    produced: list[EvalScore],
+) -> None:
+    """Warn, once per scorer per process, that its declaration applies to no result.
 
-    Only for the scorer's own scores (see ``_owns``): other evaluators'
-    results keep their own rule and type.
+    Keyed by the declaration itself, so scorers built by one factory, lambdas
+    and ``@scorer``-wrapped callables each warn.
     """
-    if spec is None or not _owns(s, evaluator):
+    if not first_warnings("scorer-declaration-unused", [spec._key]):
+        return
+    source = "declared" if spec.evaluator else "the function name"
+    used = sorted({ev for ev in (_score_evaluator(s) for s in produced) if ev is not None})
+    logger.warning(
+        "scorer %r (evaluation %r, evaluator %r (%s)) declares %s, which apply to no "
+        "result, because "
+        "every result names another evaluator: %s. A result is the scorer's own when its "
+        "evaluator is unset or equals %r. Declare evaluator= to match the results, or set "
+        "these fields on the returned EvalScore. Warned once per scorer.",
+        scorer_name,
+        eval_name,
+        evaluator,
+        source,
+        ", ".join(_declared_fields(spec)),
+        used,
+        evaluator,
+    )
+
+
+def _warn_log_type_reaches_no_score(
+    evaluator: str | None, evaluator_type: str, scores: list[EvalScore]
+) -> None:
+    """Warn that a ``log()`` type default reached no score.
+
+    Once per (evaluator, evaluator_type) per process.
+    """
+    if not first_warnings("log-type-unused", [(evaluator, evaluator_type)]):
+        return
+    used = sorted({ev for ev in (_score_evaluator(s) for s in scores) if ev is not None})
+    logger.warning(
+        "Benchmark.log(evaluator=%r, evaluator_type=%r) applies to no score of the call, "
+        "because every score names another evaluator: %s. The defaults go only on scores "
+        "whose evaluator is unset or equals evaluator=. Set evaluator_type on the EvalScore. "
+        "Warned once per evaluator and type.",
+        evaluator,
+        evaluator_type,
+        used,
+    )
+
+
+def _apply_spec(s: EvalScore, spec: ScorerSpec | None, own: bool) -> EvalScore:
+    """Fill an own score's unset rule fields from its scorer's declaration.
+
+    ``own`` is ``_owns(s, <the scorer's evaluator>)``: other evaluators'
+    results keep their own rule. The evaluator type, description and judge
+    fields are set on own scores when the events are built (``_emit_scores``).
+    """
+    if spec is None or not own:
         return s
     return dataclasses.replace(
         s,
@@ -429,7 +488,6 @@ def _apply_spec(s: EvalScore, spec: ScorerSpec | None, evaluator: str | None) ->
         direction=s.direction or spec.direction,
         score_min=s.score_min if s.score_min is not None else spec.score_min,
         score_max=s.score_max if s.score_max is not None else spec.score_max,
-        evaluator_type=s.evaluator_type or spec.evaluator_type,
     )
 
 
@@ -680,6 +738,7 @@ def _emit_scores(
     error_type: str | None = None,
     metadata: dict[str, Any] | None = None,
     spec: ScorerSpec | None = None,
+    owned: list[bool] | None = None,
 ) -> None:
     """Emit one ``gen_ai.evaluation.result`` event per score.
 
@@ -692,10 +751,14 @@ def _emit_scores(
     ``evaluator`` (see ``_owns``): a score naming a different evaluator keeps
     its own and gets no default type. The ``spec`` judge attributes
     (description, judge model and prompt) are set only on those scores too.
+    ``owned`` (one flag per score) is that ownership when the caller already
+    computed it.
     """
     has_span = trace.get_current_span(context).get_span_context().is_valid
-    for s in scores:
-        own = _owns(s, evaluator)
+    scores = list(scores)
+    if owned is None:
+        owned = [_owns(s, evaluator) for s in scores]
+    for s, own in zip(scores, owned, strict=True):
         extra = dict(metadata or {})
         if s.metadata:
             extra.update(_safe_metadata(s.metadata, context=f"EvalScore({s.name!r})"))
@@ -708,7 +771,7 @@ def _emit_scores(
             explanation=s.explanation,
             level="span" if has_span else None,
             evaluator=_score_evaluator(s) or evaluator,
-            evaluator_type=s.evaluator_type or (evaluator_type if spec is None and own else None),
+            evaluator_type=s.evaluator_type or (evaluator_type if own else None),
             direction=s.direction,
             score_min=s.score_min,
             score_max=s.score_max,
@@ -770,9 +833,12 @@ def _case_status(*, errored: bool, verdicts: dict[str, str]) -> str:
     return "fail" if "fail" in verdicts.values() else "pass"
 
 
-def _error_score(name: str, spec: ScorerSpec | None, evaluator: str | None = None) -> EvalScore:
-    """An evaluator-error result (no score value, no explanation) under the declared rule."""
-    return _apply_spec(EvalScore(name=name, value=None), spec, evaluator)
+def _error_score(name: str, spec: ScorerSpec | None) -> EvalScore:
+    """An evaluator-error result (no score value, no explanation) under the declared rule.
+
+    It names no evaluator, so it is always the scorer's own.
+    """
+    return _apply_spec(EvalScore(name=name, value=None), spec, own=True)
 
 
 def _safe_metadata(metadata: dict[str, Any], *, context: str = "") -> dict[str, Any]:
@@ -980,7 +1046,10 @@ class Benchmark:
                 (``llm_judge``, ``code``, ``human`` or ``external``) for the
                 scores of this call whose ``evaluator`` is unset or equals
                 ``evaluator``. A score that names a different evaluator gets no
-                default type. An ``EvalScore`` that sets its own wins.
+                default type. An ``EvalScore`` that sets its own wins. When
+                every score of the call names another evaluator the default
+                applies to none, and one warning per evaluator and type is
+                logged.
         """
         if self._closed:
             raise RuntimeError("Benchmark is already closed")
@@ -994,6 +1063,9 @@ class Benchmark:
             eval_scores = [EvalScore(name=n, value=v) for n, v in scores.items()]
         else:
             eval_scores = [s for s in (scores or []) if isinstance(s, EvalScore)]
+        owned = [_owns(s, evaluator) for s in eval_scores]
+        if evaluator_type and eval_scores and not any(owned):
+            _warn_log_type_reaches_no_score(evaluator, evaluator_type, eval_scores)
         score_values: dict[str, float] = {}
         verdicts: dict[str, str] = {}
         if not error_type:
@@ -1037,6 +1109,7 @@ class Benchmark:
             evaluator_type=evaluator_type,
             error_type=error_type,
             metadata={**self._metadata, **safe_case_meta},
+            owned=owned,
         )
 
         ev_trace_id, ev_span_id = _span_ids(event_ctx)
@@ -1271,6 +1344,8 @@ def evaluate(
     # Materialize iterable upfront so generators work
     data_list = list(data)
     result_keys = _LocalResultKeys()
+    # Scorers already checked for an unused declaration (warned) in this run.
+    warned_specs: set[int] = set()
 
     for item in data_list:
         case_start = time.monotonic()
@@ -1339,7 +1414,7 @@ def evaluate(
                 # exception message.
                 _emit_scores(
                     grouping,
-                    [_error_score(eval_name, spec, evaluator)],
+                    [_error_score(eval_name, spec)],
                     context=event_ctx,
                     evaluator=evaluator,
                     evaluator_type=evaluator_type,
@@ -1378,7 +1453,7 @@ def evaluate(
                 # produced.
                 _emit_scores(
                     grouping,
-                    [_error_score(eval_name, spec, evaluator)],
+                    [_error_score(eval_name, spec)],
                     context=event_ctx,
                     evaluator=evaluator,
                     evaluator_type=evaluator_type,
@@ -1388,9 +1463,21 @@ def evaluate(
                 )
                 continue
 
-            if produced and _declares_rule(spec) and not any(_owns(s, evaluator) for s in produced):
-                _warn_rule_reaches_no_result(scorer_fn, scorer_name)
-            produced = [_apply_spec(s, spec, evaluator) for s in produced]
+            # Ownership once per score: it decides the rule here and the type,
+            # description and judge fields on the events.
+            owned = [_owns(s, evaluator) for s in produced]
+            if (
+                spec is not None
+                and spec._key not in warned_specs
+                and produced
+                and not any(owned)
+                and _declared_fields(spec)
+            ):
+                warned_specs.add(spec._key)
+                _warn_declaration_reaches_no_result(
+                    spec, scorer_name, eval_name, evaluator, produced
+                )
+            produced = [_apply_spec(s, spec, own) for s, own in zip(produced, owned, strict=True)]
             result_keys.record(produced, evaluator, case_scores, case_verdicts)
             _emit_scores(
                 grouping,
@@ -1400,6 +1487,7 @@ def evaluate(
                 evaluator_type=evaluator_type,
                 metadata=safe_meta,
                 spec=spec,
+                owned=owned,
             )
 
         ev_trace_id, ev_span_id = _span_ids(event_ctx)

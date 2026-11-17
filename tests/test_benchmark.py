@@ -2090,12 +2090,12 @@ class TestScorerOwnership:
         result = self._run(deepeval_wrap, cases=2)
         self._run(deepeval_wrap)
         assert [c.status for c in result.cases] == ["pass", "pass"]
-        assert caplog.text.count("applies to no result") == 1
+        assert caplog.text.count("apply to no result") == 1
         assert "'deepeval_wrap'" in caplog.text
         assert "every result names another evaluator" in caplog.text
 
-    def test_no_warning_without_a_rule_or_with_an_own_result(self, events, caplog):
-        @scorer(evaluator_type="llm_judge")
+    def test_no_warning_without_a_declaration_or_with_an_own_result(self, events, caplog):
+        @scorer(name="faithfulness", evaluator="wrapper")
         def no_rule(i, o, e):
             return [EvalScore(name="faithfulness", value=0.2, evaluator="deepeval.faithfulness")]
 
@@ -2112,7 +2112,7 @@ class TestScorerOwnership:
 
         for fn in (no_rule, mixed, nothing):
             self._run(fn)
-        assert "applies to no result" not in caplog.text
+        assert "apply to no result" not in caplog.text
 
     def test_benchmark_log_defaults_skip_a_score_with_another_evaluator(self, events):
         with Benchmark(name="b") as b:
@@ -2324,3 +2324,102 @@ class TestEvaluatorNormalization:
             b.log(input="q", scores={"y": 1.0}, evaluator="  ")
         attrs = self._attrs(events)
         assert [a.get(self.NAME) for a in attrs] == ["blank", "ragas", "deepeval", None]
+
+
+class TestUnusedDeclarationWarning:
+    """One warning per scorer when its declaration reaches no result."""
+
+    def _run(self, *fns, cases=1):
+        data = [{"input": f"q{i}"} for i in range(cases)]
+        return evaluate("s", task=lambda x: x, data=data, scores=list(fns))
+
+    @staticmethod
+    def _foreign(name):
+        return EvalScore(name=name, value=0.2, evaluator=f"deepeval.{name}")
+
+    def test_factory_scorers_each_warn(self, events, caplog):
+        def make(metric):
+            @scorer(name=metric, threshold=0.7)
+            def wrapped(i, o, e):
+                return [TestUnusedDeclarationWarning._foreign(metric)]
+
+            return wrapped
+
+        self._run(make("faith"), make("relevancy"), cases=2)
+        assert caplog.text.count("apply to no result") == 2
+        assert "evaluation 'faith'" in caplog.text
+        assert "evaluation 'relevancy'" in caplog.text
+
+    def test_wrapped_callable_instances_each_warn(self, events, caplog):
+        class Metric:
+            def __init__(self, name):
+                self.name = name
+
+            def __call__(self, i, o, e):
+                return [TestUnusedDeclarationWarning._foreign(self.name)]
+
+        self._run(scorer(threshold=0.5)(Metric("faith")), scorer(threshold=0.5)(Metric("rel")))
+        assert caplog.text.count("apply to no result") == 2
+
+    def test_non_rule_declarations_warn_too(self, events, caplog):
+        @scorer(evaluator_type="llm_judge", judge_model="gpt-4o", description="checks X")
+        def deepeval_wrap(i, o, e):
+            return [TestUnusedDeclarationWarning._foreign("faithfulness")]
+
+        self._run(deepeval_wrap)
+        assert caplog.text.count("apply to no result") == 1
+        for field in ("evaluator_type", "description", "judge_model"):
+            assert field in caplog.text
+
+    def test_warning_names_the_resolved_and_the_result_evaluators(self, events, caplog):
+        @scorer(threshold=0.7)
+        def faithfulness_v2(i, o, e):
+            return [EvalScore(name="faithfulness", value=0.2, evaluator="faithfulness")]
+
+        @scorer(evaluator="judge", threshold=0.7)
+        def other(i, o, e):
+            return [EvalScore(name="q", value=0.2, evaluator="ragas.q")]
+
+        self._run(faithfulness_v2, other)
+        assert "evaluator 'faithfulness_v2' (the function name))" in caplog.text
+        assert "['faithfulness']" in caplog.text
+        assert "evaluator 'judge' (declared))" in caplog.text
+        assert "['ragas.q']" in caplog.text
+
+    def test_benchmark_log_type_default_reaching_no_score_warns_once(self, events, caplog):
+        with Benchmark(name="b") as b:
+            for q in ("q1", "q2"):
+                b.log(
+                    input=q,
+                    scores=[EvalScore(name="f", value=0.9, evaluator="deepeval.faithfulness")],
+                    evaluator="deepeval",
+                    evaluator_type="llm_judge",
+                )
+            # Applied to a score: no warning.
+            b.log(
+                input="q3",
+                scores=[EvalScore(name="g", value=0.9)],
+                evaluator="ragas",
+                evaluator_type="llm_judge",
+            )
+        assert caplog.text.count("evaluator_type='llm_judge') applies to no score") == 1
+        assert "['deepeval.faithfulness']" in caplog.text
+
+    def test_ownership_is_computed_once_per_score(self, events, monkeypatch):
+        from opensearch_genai_observability_sdk_py import benchmark as bm
+
+        calls = []
+        real = bm._owns
+
+        def counting(s, evaluator):
+            calls.append(s.name)
+            return real(s, evaluator)
+
+        monkeypatch.setattr(bm, "_owns", counting)
+
+        @scorer(threshold=0.7, evaluator_type="llm_judge")
+        def wrap(i, o, e):
+            return [self._foreign("faithfulness"), self._foreign("relevancy")]
+
+        self._run(wrap, cases=2)
+        assert len(calls) == 4
