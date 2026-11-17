@@ -72,6 +72,19 @@ together. [evals/native](evals/native/) covers both modes: an offline `evaluate(
 the shared suite with a run name, and online `score()` on traces found with
 `OpenSearchTraceRetriever`.
 
+## Layout
+
+```
+examples/
+  README.md        this file
+  runbooks/        step-by-step guides: tracing.md, evals.md
+  basics/          numbered SDK basics (01_ to 08_), multi_agent_planner, mini collector, github-action
+  shared/          travel_data.json and test_suite.jsonl for the travel assistant
+  tracing/<name>/  one travel assistant per framework: README.md, agent.py, requirements.txt
+  evals/<name>/    the travel assistant scored natively or with an eval library
+  end-to-end/strands-observability-agent/   full lifecycle example
+```
+
 ## Prerequisites
 
 - Python 3.10 or later.
@@ -97,6 +110,9 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt      # opensearch-genai-observability-sdk-py>=0.3.0 and the framework
 python agent.py
 ```
+
+Use one virtual environment per example folder. `register()` activates every installed
+instrumentor, so instrumentors left over from another example can trace the same calls twice.
 
 To run against the SDK in this checkout instead of the PyPI release, add
 `pip install -e "../../..[opensearch]"` (from a folder two levels down, adjust the path).
