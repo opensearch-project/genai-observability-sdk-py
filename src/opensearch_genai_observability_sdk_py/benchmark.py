@@ -234,6 +234,12 @@ class ScorerSpec:
     _key: int = dataclasses.field(
         default_factory=itertools.count().__next__, init=False, repr=False, compare=False
     )
+    # Fields the SDK filled in rather than the user (``direction`` defaults to
+    # ``"maximize"`` with a threshold): the unused-declaration warning lists
+    # only the fields the user declared.
+    _implied: frozenset[str] = dataclasses.field(
+        default=frozenset(), init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         # Normalized like EvalScore.evaluator (see _evaluator_name).
@@ -327,10 +333,13 @@ def scorer(
     (``evaluator="deepeval.faithfulness"``) so its error results and its
     results name the same evaluator and its rule applies to both. When a
     scorer declares any of these (a rule field, ``evaluator_type``,
-    ``description`` or a judge field) and every result it returns for a
-    case names another evaluator, they apply to no result and the SDK logs
-    one warning per scorer per process, naming the scorer's evaluator and
-    the evaluators its results named.
+    ``description`` or a judge field) and returns results in an
+    ``evaluate()`` run but every one of them, in every case, names another
+    evaluator, they apply to no result and the SDK logs one warning per
+    scorer per process at the end of the run, naming the scorer's
+    evaluator, the fields it declared (a ``direction`` defaulted from
+    ``threshold`` is not listed) and the evaluators its results named. A
+    scorer with an own result in any case of the run does not warn.
     ``description`` is converted to text and cut to 1024 characters.
 
     Raises:
@@ -359,6 +368,8 @@ def scorer(
         judge_prompt_name=judge_prompt_name,
         judge_prompt_version=judge_prompt_version,
     )
+    if direction is None and threshold is not None:
+        object.__setattr__(spec, "_implied", frozenset({"direction"}))
 
     def decorate(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
@@ -420,62 +431,80 @@ _DECLARED_FIELDS = (
 
 
 def _declared_fields(spec: ScorerSpec | None) -> list[str]:
-    """The fields a scorer declares for its own results (rule, type, description, judge)."""
+    """The fields a scorer declares for its own results (rule, type, description, judge).
+
+    Only fields the user set: a ``direction`` defaulted from ``threshold`` is
+    not listed.
+    """
     if spec is None:
         return []
-    return [f for f in _DECLARED_FIELDS if getattr(spec, f) is not None]
+    return [f for f in _DECLARED_FIELDS if getattr(spec, f) is not None and f not in spec._implied]
 
 
-def _warn_declaration_reaches_no_result(
-    spec: ScorerSpec,
-    scorer_name: str,
-    eval_name: str,
-    evaluator: str | None,
-    produced: list[EvalScore],
-) -> None:
-    """Warn, once per scorer per process, that its declaration applies to no result.
+@dataclasses.dataclass
+class _DeclarationUse:
+    """Whether a scorer's declaration reached any of its results in one ``evaluate()`` run."""
 
-    Keyed by the declaration itself, so scorers built by one factory, lambdas
-    and ``@scorer``-wrapped callables each warn.
+    spec: ScorerSpec
+    scorer_name: str
+    eval_name: str
+    evaluator: str | None
+    # Some returned result of the run was the scorer's own.
+    reached: bool = False
+    # Evaluators named by the results it returned (none of them its own so far).
+    named: set[str] = dataclasses.field(default_factory=set)
+
+
+def _warn_declaration_reaches_no_result(use: _DeclarationUse) -> None:
+    """Warn, once per scorer per process, that its declaration applied to no result of a run.
+
+    Called at the end of an ``evaluate()`` run for a scorer that returned
+    results in the run, none of them its own. Keyed by the declaration
+    itself, so scorers built by one factory, lambdas and ``@scorer``-wrapped
+    callables each warn.
     """
+    spec = use.spec
     if not first_warnings("scorer-declaration-unused", [spec._key]):
         return
     source = "declared" if spec.evaluator else "the function name"
-    used = sorted({ev for ev in (_score_evaluator(s) for s in produced) if ev is not None})
     logger.warning(
-        "scorer %r (evaluation %r, evaluator %r (%s)) declares %s, which apply to no "
-        "result, because "
-        "every result names another evaluator: %s. A result is the scorer's own when its "
-        "evaluator is unset or equals %r. Declare evaluator= to match the results, or set "
-        "these fields on the returned EvalScore. Warned once per scorer.",
-        scorer_name,
-        eval_name,
-        evaluator,
+        "scorer %r (evaluation %r, evaluator %r (%s)) declares %s, which applied to no "
+        "result of the run, because every result it returned names another evaluator: %s. "
+        "A result is the scorer's own when its evaluator is unset or equals %r. Declare "
+        "evaluator= to match the results, or set these fields on the returned EvalScore. "
+        "Warned once per scorer.",
+        use.scorer_name,
+        use.eval_name,
+        use.evaluator,
         source,
         ", ".join(_declared_fields(spec)),
-        used,
-        evaluator,
+        sorted(use.named),
+        use.evaluator,
     )
 
 
-def _warn_log_type_reaches_no_score(
-    evaluator: str | None, evaluator_type: str, scores: list[EvalScore]
-) -> None:
-    """Warn that a ``log()`` type default reached no score.
+def _evaluators_named(scores: list[EvalScore]) -> set[str]:
+    """The evaluator names a set of scores names (unset ones left out)."""
+    return {ev for ev in (_score_evaluator(s) for s in scores) if ev is not None}
 
-    Once per (evaluator, evaluator_type) per process.
+
+def _warn_log_type_reaches_no_score(
+    evaluator: str | None, evaluator_type: str, named: set[str]
+) -> None:
+    """Warn that a ``log()`` type default reached no score of a ``Benchmark`` run.
+
+    Called from ``close()``. Once per (evaluator, evaluator_type) per process.
     """
     if not first_warnings("log-type-unused", [(evaluator, evaluator_type)]):
         return
-    used = sorted({ev for ev in (_score_evaluator(s) for s in scores) if ev is not None})
     logger.warning(
-        "Benchmark.log(evaluator=%r, evaluator_type=%r) applies to no score of the call, "
-        "because every score names another evaluator: %s. The defaults go only on scores "
-        "whose evaluator is unset or equals evaluator=. Set evaluator_type on the EvalScore. "
-        "Warned once per evaluator and type.",
+        "Benchmark.log(evaluator=%r, evaluator_type=%r) applied to no score of the run, "
+        "because every score logged with it names another evaluator: %s. The defaults go "
+        "only on scores whose evaluator is unset or equals evaluator=. Set evaluator_type on "
+        "the EvalScore. Warned once per evaluator and type.",
         evaluator,
         evaluator_type,
-        used,
+        sorted(named),
     )
 
 
@@ -975,6 +1004,10 @@ class Benchmark:
         self._start_time = time.monotonic()
         self._cases: list[TestCaseResult] = []
         self._result_keys = _LocalResultKeys()
+        # Per (evaluator, evaluator_type) log() default: did it reach any
+        # score of the run, and the evaluators named while it reached none.
+        # Decided, and warned about, in close().
+        self._type_defaults: dict[tuple[str | None, str], tuple[bool, set[str]]] = {}
         self._closed = False
         self._summary: BenchmarkSummary | None = None
 
@@ -1053,9 +1086,10 @@ class Benchmark:
                 scores of this call whose ``evaluator`` is unset or equals
                 ``evaluator``. A score that names a different evaluator gets no
                 default type. An ``EvalScore`` that sets its own wins. When
-                every score of the call names another evaluator the default
-                applies to none, and one warning per evaluator and type is
-                logged.
+                every score logged with this ``evaluator`` and
+                ``evaluator_type`` during the run names another evaluator,
+                the default applies to none, and ``close()`` logs one warning
+                per evaluator and type per process.
         """
         if self._closed:
             raise RuntimeError("Benchmark is already closed")
@@ -1070,8 +1104,13 @@ class Benchmark:
         else:
             eval_scores = [s for s in (scores or []) if isinstance(s, EvalScore)]
         owned = [_owns(s, evaluator) for s in eval_scores]
-        if evaluator_type and eval_scores and not any(owned):
-            _warn_log_type_reaches_no_score(evaluator, evaluator_type, eval_scores)
+        if evaluator_type and eval_scores:
+            reached, named = self._type_defaults.get((evaluator, evaluator_type), (False, set()))
+            if any(owned):
+                reached = True
+            elif not reached:
+                named |= _evaluators_named(eval_scores)
+            self._type_defaults[(evaluator, evaluator_type)] = (reached, named)
         score_values: dict[str, float] = {}
         verdicts: dict[str, str] = {}
         if not error_type:
@@ -1151,6 +1190,12 @@ class Benchmark:
             return self._summary
 
         self._closed = True
+
+        # A log() type default that reached no score of the run warns, once
+        # per evaluator and type.
+        for (evaluator, evaluator_type), (reached, named) in self._type_defaults.items():
+            if not reached:
+                _warn_log_type_reaches_no_score(evaluator, evaluator_type, named)
 
         summary = _compute_summary(self._name, self._run_id, self._cases, self._start_time)
         self._summary = summary
@@ -1352,8 +1397,9 @@ def evaluate(
     # Materialize iterable upfront so generators work
     data_list = list(data)
     result_keys = _LocalResultKeys()
-    # Scorers already checked for an unused declaration (warned) in this run.
-    warned_specs: set[int] = set()
+    # Per declaration (ScorerSpec._key): did it reach any result it returned
+    # in this run? Decided, and warned about, at the end of the run.
+    declaration_uses: dict[int, _DeclarationUse] = {}
 
     for item in data_list:
         case_start = time.monotonic()
@@ -1474,17 +1520,16 @@ def evaluate(
             # Ownership once per score: it decides the rule here and the type,
             # description and judge fields on the events.
             owned = [_owns(s, evaluator) for s in produced]
-            if (
-                spec is not None
-                and spec._key not in warned_specs
-                and produced
-                and not any(owned)
-                and _declared_fields(spec)
-            ):
-                warned_specs.add(spec._key)
-                _warn_declaration_reaches_no_result(
-                    spec, scorer_name, eval_name, evaluator, produced
-                )
+            if spec is not None and produced:
+                use = declaration_uses.get(spec._key)
+                if use is None:
+                    use = declaration_uses[spec._key] = _DeclarationUse(
+                        spec, scorer_name, eval_name, evaluator
+                    )
+                if any(owned):
+                    use.reached = True
+                elif not use.reached:
+                    use.named |= _evaluators_named(produced)
             produced = [_apply_spec(s, spec, own) for s, own in zip(produced, owned, strict=True)]
             result_keys.record(produced, evaluator, case_scores, case_verdicts)
             _emit_scores(
@@ -1520,6 +1565,12 @@ def evaluate(
                 verdicts=case_verdicts or None,
             )
         )
+
+    # A declaration that reached none of the results its scorer returned in
+    # the run (each named another evaluator) warns, once per scorer.
+    for use in declaration_uses.values():
+        if not use.reached and _declared_fields(use.spec):
+            _warn_declaration_reaches_no_result(use)
 
     summary = _compute_summary(name, resolved_run_id, case_results, start_time)
 

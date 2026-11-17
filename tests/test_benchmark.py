@@ -2090,9 +2090,9 @@ class TestScorerOwnership:
         result = self._run(deepeval_wrap, cases=2)
         self._run(deepeval_wrap)
         assert [c.status for c in result.cases] == ["pass", "pass"]
-        assert caplog.text.count("apply to no result") == 1
+        assert caplog.text.count("applied to no result") == 1
         assert "'deepeval_wrap'" in caplog.text
-        assert "every result names another evaluator" in caplog.text
+        assert "every result it returned names another evaluator" in caplog.text
 
     def test_no_warning_without_a_declaration_or_with_an_own_result(self, events, caplog):
         @scorer(name="faithfulness", evaluator="wrapper")
@@ -2346,7 +2346,7 @@ class TestUnusedDeclarationWarning:
             return wrapped
 
         self._run(make("faith"), make("relevancy"), cases=2)
-        assert caplog.text.count("apply to no result") == 2
+        assert caplog.text.count("applied to no result") == 2
         assert "evaluation 'faith'" in caplog.text
         assert "evaluation 'relevancy'" in caplog.text
 
@@ -2359,7 +2359,7 @@ class TestUnusedDeclarationWarning:
                 return [TestUnusedDeclarationWarning._foreign(self.name)]
 
         self._run(scorer(threshold=0.5)(Metric("faith")), scorer(threshold=0.5)(Metric("rel")))
-        assert caplog.text.count("apply to no result") == 2
+        assert caplog.text.count("applied to no result") == 2
 
     def test_non_rule_declarations_warn_too(self, events, caplog):
         @scorer(evaluator_type="llm_judge", judge_model="gpt-4o", description="checks X")
@@ -2367,7 +2367,7 @@ class TestUnusedDeclarationWarning:
             return [TestUnusedDeclarationWarning._foreign("faithfulness")]
 
         self._run(deepeval_wrap)
-        assert caplog.text.count("apply to no result") == 1
+        assert caplog.text.count("applied to no result") == 1
         for field in ("evaluator_type", "description", "judge_model"):
             assert field in caplog.text
 
@@ -2402,8 +2402,87 @@ class TestUnusedDeclarationWarning:
                 evaluator="ragas",
                 evaluator_type="llm_judge",
             )
-        assert caplog.text.count("evaluator_type='llm_judge') applies to no score") == 1
+        assert caplog.text.count("evaluator_type='llm_judge') applied to no score") == 1
         assert "['deepeval.faithfulness']" in caplog.text
+
+    def test_own_result_in_one_case_of_the_run_does_not_warn(self, events, caplog):
+        seen = []
+
+        @scorer(threshold=0.7)
+        def judge(i, o, e):
+            seen.append(i)
+            if len(seen) == 2:
+                return [EvalScore(name="judge", value=0.9)]
+            return [TestUnusedDeclarationWarning._foreign("faith")]
+
+        self._run(judge, cases=3)
+        assert "to no result" not in caplog.text
+
+    def test_no_own_result_in_the_run_warns_once_at_the_end(self, events, caplog, monkeypatch):
+        from opensearch_genai_observability_sdk_py import benchmark as bm
+
+        @scorer(threshold=0.7)
+        def judge(i, o, e):
+            return [TestUnusedDeclarationWarning._foreign("faith")]
+
+        warned_after = []
+        real = bm._warn_declaration_reaches_no_result
+
+        def spy(use):
+            warned_after.append(len(events(EVALUATION)))
+            real(use)
+
+        monkeypatch.setattr(bm, "_warn_declaration_reaches_no_result", spy)
+        self._run(judge, cases=3)
+        # Decided once, after every case of the run was scored.
+        assert warned_after == [3]
+        assert caplog.text.count("applied to no result") == 1
+        assert "['deepeval.faith']" in caplog.text
+
+    def test_threshold_only_declaration_does_not_list_direction(self, events, caplog):
+        @scorer(threshold=0.7)
+        def judge(i, o, e):
+            return [TestUnusedDeclarationWarning._foreign("faith")]
+
+        assert judge.scorer_spec.direction == "maximize"  # still the resolved default
+        self._run(judge)
+        assert "declares threshold, which" in caplog.text
+        assert "direction" not in caplog.text
+
+    def test_explicit_direction_is_listed(self, events, caplog):
+        @scorer(threshold=0.7, direction="maximize")
+        def judge(i, o, e):
+            return [TestUnusedDeclarationWarning._foreign("faith")]
+
+        self._run(judge)
+        assert "declares threshold, direction, which" in caplog.text
+
+    def test_benchmark_log_type_default_reaching_a_score_in_one_call_does_not_warn(
+        self, events, caplog
+    ):
+        b = Benchmark(name="b")
+        for q in ("q1", "q2", "q3"):
+            b.log(
+                input=q,
+                scores=[EvalScore(name="f", value=0.9, evaluator=None if q == "q2" else "ragas.f")],
+                evaluator="deepeval",
+                evaluator_type="llm_judge",
+            )
+        assert "to no score" not in caplog.text
+        b.close()
+        assert "to no score" not in caplog.text
+
+    def test_benchmark_log_type_default_warns_at_close(self, events, caplog):
+        b = Benchmark(name="b")
+        b.log(
+            input="q",
+            scores=[EvalScore(name="f", value=0.9, evaluator="ragas.f")],
+            evaluator="deepeval",
+            evaluator_type="llm_judge",
+        )
+        assert "to no score" not in caplog.text
+        b.close()
+        assert caplog.text.count("applied to no score") == 1
 
     def test_ownership_is_computed_once_per_score(self, events, monkeypatch):
         from opensearch_genai_observability_sdk_py import benchmark as bm
