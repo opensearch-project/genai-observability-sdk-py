@@ -38,8 +38,8 @@ is not used: one evaluator may produce several evaluations.
 Every option can also be set with an environment variable (used by the
 composite action), so the script runs the same way locally::
 
-    python examples/basics/github-action/run_suite.py \\
-        --suite examples/basics/github-action/sample_suite.py:suite \\
+    python examples/github-action/run_suite.py \\
+        --suite examples/github-action/sample_suite.py:suite \\
         --endpoint http://localhost:4318 \\
         --service-name my-agent-ci \\
         --dashboards-url http://localhost:5601 \\

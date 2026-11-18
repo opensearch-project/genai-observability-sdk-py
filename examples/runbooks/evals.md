@@ -78,7 +78,7 @@ it may carry the judge context `gen_ai.request.model` and `gen_ai.prompt.*`.
 Shown in: [evals/native](../evals/native/) (two runs over the shared suite),
 [end-to-end/strands-observability-agent](../end-to-end/strands-observability-agent/)
 (`offline_eval.py --run-name ...`), [basics/07_benchmarks.py](../basics/07_benchmarks.py).
-In CI: [basics/github-action](../basics/github-action/) and [evals/pytest](../evals/pytest/).
+In CI: [github-action](../github-action/) and [evals/pytest](../evals/pytest/).
 
 ## 4. Score production traffic online: `score()` with retrieval
 

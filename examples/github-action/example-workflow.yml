@@ -41,7 +41,7 @@ jobs:
       - name: Run evals
         id: evals
         # Pin to a commit SHA of this repository in real use.
-        uses: opensearch-project/genai-observability-sdk-py/examples/basics/github-action@main
+        uses: opensearch-project/genai-observability-sdk-py/examples/github-action@main
         with:
           suite: evals/suite.py:suite
           traces-endpoint: ${{ secrets.OSIS_TRACES_ENDPOINT }} # https://<traces-pipeline>/v1/traces

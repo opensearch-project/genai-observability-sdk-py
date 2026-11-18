@@ -44,7 +44,7 @@ needed (except 05):
 | [`08_upload_benchmark_results.py`](basics/08_upload_benchmark_results.py) | `Benchmark.log()`: upload results computed elsewhere, with trace links |
 | [`multi_agent_planner/`](basics/multi_agent_planner/) | A simulated multi-agent trace (`invoke_agent`, `chat`, `execute_tool`) |
 | [`mini_collector_http.py`](basics/mini_collector_http.py) | A tiny OTLP/HTTP receiver on port 4318 that prints spans and evaluation events, no Docker |
-| [`github-action/`](basics/github-action/) | Run an `evaluate()` suite in CI, link the run, fail on regressions |
+| [`github-action/`](github-action/) | Run an `evaluate()` suite in CI, link the run, fail on regressions |
 
 ## Framework and library matrix
 

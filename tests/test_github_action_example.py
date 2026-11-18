@@ -7,7 +7,7 @@
 # Modifications Copyright OpenSearch Contributors. See
 # GitHub history for details.
 
-"""Tests for examples/basics/github-action/run_suite.py (no network)."""
+"""Tests for examples/github-action/run_suite.py (no network)."""
 
 import importlib.util
 import sys
@@ -18,7 +18,7 @@ import pytest
 
 from opensearch_genai_observability_sdk_py import EvalScore, evaluate, scorer
 
-_ACTION_DIR = Path(__file__).resolve().parent.parent / "examples" / "basics" / "github-action"
+_ACTION_DIR = Path(__file__).resolve().parent.parent / "examples" / "github-action"
 
 
 def _load(name):

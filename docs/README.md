@@ -29,4 +29,4 @@ Runbooks (step by step):
 | [`06_retrieval_and_eval.py`](../examples/basics/06_retrieval_and_eval.py) | Retrieve traces from OpenSearch, evaluate, write scores back |
 | [`07_benchmarks.py`](../examples/basics/07_benchmarks.py) | `evaluate()` with scorers, compare agent versions |
 | [`08_upload_benchmark_results.py`](../examples/basics/08_upload_benchmark_results.py) | `Benchmark.log()`: upload results from RAGAS, DeepEval, custom, with trace links |
-| [`github-action/`](../examples/basics/github-action/) | Reusable GitHub Action: run an `evaluate()` suite in CI, link the run in OpenSearch Dashboards, fail on score regressions |
+| [`github-action/`](../examples/github-action/) | Reusable GitHub Action: run an `evaluate()` suite in CI, link the run in OpenSearch Dashboards, fail on score regressions |
