@@ -41,7 +41,8 @@ jobs:
       - name: Run evals
         id: evals
         # Pin to a commit SHA of this repository in real use.
-        uses: opensearch-project/genai-observability-sdk-py/examples/github-action@main
+        # A full commit SHA, not a branch: this job holds AWS credentials. 0.3.0 is the first release with the action.
+        uses: opensearch-project/genai-observability-sdk-py/examples/github-action@d6244e28d9bc09d3fb6d927e0175c931e896ef59 # 0.3.0
         with:
           suite: evals/suite.py:suite
           traces-endpoint: ${{ secrets.OSIS_TRACES_ENDPOINT }} # https://<traces-pipeline>/v1/traces
