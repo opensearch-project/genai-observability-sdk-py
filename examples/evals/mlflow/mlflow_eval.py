@@ -40,8 +40,13 @@ if "AWS_ACCESS_KEY_ID" not in os.environ:
     if creds.token:
         os.environ["AWS_SESSION_TOKEN"] = creds.token
 
+# Strands emits its own chat spans; auto_instrument=False keeps an installed Bedrock
+# (botocore) instrumentor from tracing each model call a second time.
 provider = register(
-    service_name="travel-assistant-evals-mlflow", agent_name=AGENT_NAME, agent_version="v1"
+    auto_instrument=False,
+    service_name="travel-assistant-evals-mlflow-py",
+    agent_name=AGENT_NAME,
+    agent_version="v1",
 )
 
 cases = load_test_suite()

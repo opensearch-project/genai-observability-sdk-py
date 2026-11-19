@@ -1,3 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The OpenSearch Contributors require contributions made to
+# this file be licensed under the Apache-2.0 license or a
+# compatible open source license.
+#
+# Modifications Copyright OpenSearch Contributors. See
+# GitHub history for details.
+
 """Travel assistant on the Amazon Bedrock Converse API (boto3), traced with the
 OpenSearch GenAI Observability SDK.
 
@@ -50,6 +59,7 @@ def find_events(city: str) -> dict:
 
 
 TOOLS = {"get_weather": get_weather, "find_events": find_events}
+MAX_TURNS = 5  # model calls per question, so a model that keeps calling tools cannot loop forever
 CITY_SCHEMA = {
     "type": "object",
     "properties": {"city": {"type": "string"}},
@@ -90,7 +100,7 @@ def ask(messages: list, question: str, conversation_id: str) -> str:
     )
     messages.append({"role": "user", "content": [{"text": question}]})
     input_tokens = output_tokens = 0
-    while True:  # each converse() call is a chat span from the Bedrock instrumentor
+    for _ in range(MAX_TURNS):  # each converse() call is a chat span from the Bedrock instrumentor
         response = client.converse(
             modelId=MODEL_ID,
             system=[{"text": DATA["system_prompt"]}],
@@ -107,7 +117,10 @@ def ask(messages: list, question: str, conversation_id: str) -> str:
         for block in message["content"]:
             if "toolUse" in block:
                 call = block["toolUse"]
-                output = TOOLS[call["name"]](**call["input"])
+                tool = TOOLS.get(call["name"])
+                output = (
+                    tool(**call["input"]) if tool else {"error": f"unknown tool {call['name']}"}
+                )
                 results.append(
                     {"toolResult": {"toolUseId": call["toolUseId"], "content": [{"json": output}]}}
                 )

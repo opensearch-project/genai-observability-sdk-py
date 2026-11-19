@@ -34,7 +34,7 @@ result, so the run links back to the job.
 
 ## What you get
 
-- Spans (service `travel-assistant-evals-pytest`): one trace per test, root
+- Spans (service `travel-assistant-evals-pytest-py`): one trace per test, root
   `invoke_agent travel_assistant` with `chat` and `execute_tool` spans.
 - Results: 10 per session (5 tests x 2 checks) in run `pytest` (or `EVAL_RUN_NAME`) of
   suite `travel-assistant-suite-pytest`, each parented to its agent root span.

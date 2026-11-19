@@ -22,8 +22,13 @@ from opensearch_genai_observability_sdk_py import Benchmark, register
 @pytest.fixture(scope="session")
 def eval_run():
     """The Benchmark run every test logs its verdicts to."""
+    # Strands emits its own chat spans; auto_instrument=False keeps an installed Bedrock
+    # (botocore) instrumentor from tracing each model call a second time.
     provider = register(
-        service_name="travel-assistant-evals-pytest", agent_name=AGENT_NAME, agent_version="v1"
+        auto_instrument=False,
+        service_name="travel-assistant-evals-pytest-py",
+        agent_name=AGENT_NAME,
+        agent_version="v1",
     )
     run = Benchmark(
         "travel-assistant-suite-pytest",

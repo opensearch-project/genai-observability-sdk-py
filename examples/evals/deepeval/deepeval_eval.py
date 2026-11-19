@@ -31,8 +31,13 @@ from opensearch_genai_observability_sdk_py import EvalScore, evaluate, register,
 JUDGE_MODEL_ID = os.environ.get("JUDGE_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
 THRESHOLD = 0.7
 
+# Strands emits its own chat spans; auto_instrument=False keeps an installed Bedrock
+# (botocore) instrumentor from tracing each model call a second time.
 provider = register(
-    service_name="travel-assistant-evals-deepeval", agent_name=AGENT_NAME, agent_version="v1"
+    auto_instrument=False,
+    service_name="travel-assistant-evals-deepeval-py",
+    agent_name=AGENT_NAME,
+    agent_version="v1",
 )
 
 judge = AmazonBedrockModel(model=JUDGE_MODEL_ID, region=REGION)  # or any DeepEval model

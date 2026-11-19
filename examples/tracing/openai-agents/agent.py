@@ -1,3 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The OpenSearch Contributors require contributions made to
+# this file be licensed under the Apache-2.0 license or a
+# compatible open source license.
+#
+# Modifications Copyright OpenSearch Contributors. See
+# GitHub history for details.
+
 """Travel assistant on the OpenAI Agents SDK, traced with the OpenSearch GenAI Observability SDK.
 
 register() activates the OpenAI Agents instrumentor (from the SDK's [openai] extra), which
@@ -19,6 +28,7 @@ from pathlib import Path
 
 from agents import Agent, Runner, function_tool
 from agents.extensions.models.litellm_model import LitellmModel
+from opentelemetry.instrumentation.openai_agents import OpenAIAgentsInstrumentor
 
 from opensearch_genai_observability_sdk_py import register
 
@@ -29,7 +39,12 @@ DATA = json.loads((Path(__file__).resolve().parents[2] / "shared" / "travel_data
 CITIES = DATA["cities"]
 
 # Sends traces to the local OTel Collector (http://localhost:4318) by default.
-provider = register(service_name="travel-assistant-openai-agents-py")
+# auto_instrument=False, then only the Agents SDK instrumentor: the [openai] extra also installs
+# the OpenAI client instrumentor, and the Agents SDK calls the model through that client, so
+# auto-instrumentation would trace each model call twice (and a Bedrock instrumentor, if
+# installed, would do the same on the LiteLLM path).
+provider = register(service_name="travel-assistant-openai-agents-py", auto_instrument=False)
+OpenAIAgentsInstrumentor().instrument()
 
 
 @function_tool

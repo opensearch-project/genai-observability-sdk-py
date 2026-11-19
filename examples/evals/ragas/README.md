@@ -51,7 +51,7 @@ With OpenAI instead of Bedrock, set `OPENAI_API_KEY` and drop the `llm=` and
 
 ## What you get
 
-- Spans (service `travel-assistant-evals-ragas`): one trace per case, root
+- Spans (service `travel-assistant-evals-ragas-py`): one trace per case, root
   `invoke_agent travel_assistant` with `chat` and `execute_tool` spans.
 - Results: 15 (5 cases x 3 metrics) in run `ragas judges` of suite
   `travel-assistant-suite-ragas`, each parented to its agent root span and carrying the

@@ -36,7 +36,11 @@ PROMPTS = {
     "v2": SYSTEM_PROMPT + " Reply in at most two sentences.",
 }
 
-provider = register(service_name="travel-assistant-evals-native-py", agent_name=AGENT_NAME)
+# Strands and the traced judge emit their own chat spans; auto_instrument=False keeps an
+# installed Bedrock (botocore) instrumentor from tracing each model call a second time.
+provider = register(
+    auto_instrument=False, service_name="travel-assistant-evals-native-py", agent_name=AGENT_NAME
+)
 
 
 @scorer(

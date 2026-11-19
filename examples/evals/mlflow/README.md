@@ -49,7 +49,7 @@ With OpenAI as the judge, set `OPENAI_API_KEY` and `JUDGE = "openai:/gpt-4o-mini
 
 ## What you get
 
-- Spans (service `travel-assistant-evals-mlflow`): one trace per `predict_fn` call, root
+- Spans (service `travel-assistant-evals-mlflow-py`): one trace per `predict_fn` call, root
   `invoke_agent travel_assistant` with `chat` and `execute_tool` spans.
 - Results: 10 (5 cases x 2 judges) in run `mlflow judges` of suite
   `travel-assistant-suite-mlflow`, each parented to its agent root span and carrying the

@@ -35,8 +35,13 @@ JUDGE_MODEL_ID = os.environ.get("JUDGE_MODEL_ID", "us.anthropic.claude-haiku-4-5
 EMBEDDINGS_MODEL_ID = os.environ.get("EMBEDDINGS_MODEL_ID", "amazon.titan-embed-text-v2:0")
 THRESHOLDS = {"faithfulness": 0.7, "answer_relevancy": 0.6, "answer_correctness": 0.5}
 
+# Strands emits its own chat spans; auto_instrument=False keeps an installed Bedrock
+# (botocore) instrumentor from tracing each model call a second time.
 provider = register(
-    service_name="travel-assistant-evals-ragas", agent_name=AGENT_NAME, agent_version="v1"
+    auto_instrument=False,
+    service_name="travel-assistant-evals-ragas-py",
+    agent_name=AGENT_NAME,
+    agent_version="v1",
 )
 
 # 1. Run the agent. Each run keeps its trace and span ids to link the results.

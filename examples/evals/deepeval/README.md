@@ -47,7 +47,7 @@ To use another judge, pass any DeepEval model as `judge` (for example `GPTModel`
 
 ## What you get
 
-- Spans (service `travel-assistant-evals-deepeval`): one trace per case, root
+- Spans (service `travel-assistant-evals-deepeval-py`): one trace per case, root
   `invoke_agent travel_assistant` with `chat` and `execute_tool` spans.
 - Results: 15 (5 cases x 3 metrics) in run `deepeval judges` of suite
   `travel-assistant-suite-deepeval`, each parented to its agent root span.
