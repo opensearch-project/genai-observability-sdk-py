@@ -89,13 +89,21 @@ retriever = OpenSearchTraceRetriever(
     host="https://localhost:9200", auth=("admin", password), verify_certs=False
 )
 roots = retriever.list_root_spans(
-    services=["travel-assistant-evals-native-py"], since=since, max_results=50
+    services=["travel-assistant-evals-native-py"], since=since, max_results=500
 )
+# This agent's online runs only: not the judge's own chat traces, not the offline cases
+roots = [
+    r
+    for r in roots
+    if r.agent_name == "travel_assistant"
+    and "test.suite.run.id" not in r.raw.get("attributes", {})
+    and r.input_messages
+    and r.output_messages
+]
 done = retriever.find_evaluated_trace_ids(
     [r.trace_id for r in roots], evaluator="travel_plan_judge"
 )
-offline = {r.trace_id for r in roots if "test.suite.run.id" in r.raw.get("attributes", {})}
-for root in (r for r in roots if r.trace_id not in done | offline):
+for root in (r for r in roots if r.trace_id not in done):
     verdict = judge(root.input_messages[0].content, root.output_messages[-1].content)
     score(
         "plan_quality",
@@ -115,9 +123,12 @@ for root in (r for r in roots if r.trace_id not in done | offline):
 - `list_root_spans()` returns each trace's agent root, the row Agent Traces lists, with
   its GenAI messages, `agent_name` and `agent_version`. Pass both to `score()`. A root is
   a span marked `derived.gen_ai.is_root` or a parentless `invoke_agent` / `create_agent`
-  span, so an LLM judge's own `chat` trace is not listed.
+  span. Data Prepper also marks a traced LLM judge's parentless `chat` span, so the judge's
+  own traces are listed too: keep only your agent's roots (`r.agent_name`).
+- Skip the offline runs (root spans with `test.suite.run.id`) and roots with no messages.
+- The filters run after `max_results`, so keep the page large enough that offline runs and
+  judge traces in the same service don't push real traffic out of it.
 - `find_evaluated_trace_ids(..., evaluator=)` makes the job safe to re-run.
-- Skip the offline runs (root spans with `test.suite.run.id`) and sample the rest.
 
 Shown in: [evals/native](../evals/native/) (`online_eval.py`),
 [end-to-end/strands-observability-agent](../end-to-end/strands-observability-agent/)

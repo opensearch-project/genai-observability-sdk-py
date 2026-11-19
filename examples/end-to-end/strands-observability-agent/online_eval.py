@@ -85,7 +85,9 @@ def known_services_check(question: str, answer: str, live: set[str]) -> tuple[bo
 
 def one_pass(minutes: int, sample_rate: float, max_traces: int) -> int:
     since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-    roots = retriever.list_root_spans(services=[SERVICE_NAME], since=since, max_results=200)
+    # The filters below run after max_results: one offline run adds about 24 roots (agent
+    # cases and judge calls) to this service, so keep the page large.
+    roots = retriever.list_root_spans(services=[SERVICE_NAME], since=since, max_results=1000)
     # This agent's runs only, and not the offline eval runs (their root spans carry
     # test.suite.run.id, and they are scored by offline_eval.py).
     roots = [

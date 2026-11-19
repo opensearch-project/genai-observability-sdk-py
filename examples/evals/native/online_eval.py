@@ -40,15 +40,20 @@ EXPECTED = (
     "or says there is no data for the city."
 )
 
-provider = register(service_name=f"{SERVICE}-judge")
+# Strands and the traced judge emit their own chat spans; auto_instrument=False keeps an
+# installed Bedrock (botocore) instrumentor from tracing each model call a second time.
+provider = register(auto_instrument=False, service_name=f"{SERVICE}-judge")
 retriever = OpenSearchTraceRetriever(
     host=os.environ.get("OPENSEARCH_URL", "https://localhost:9200"),
     auth=(os.environ.get("OPENSEARCH_USER", "admin"), os.environ["OPENSEARCH_PASSWORD"]),
-    verify_certs=os.environ.get("OPENSEARCH_VERIFY_CERTS", "false") == "true",  # local stack
+    # Off by default for the local stack's self-signed certificate; set it for a real cluster
+    verify_certs=os.environ.get("OPENSEARCH_VERIFY_CERTS", "false").lower() in ("1", "true", "yes"),
 )
 
 since = datetime.now(timezone.utc) - timedelta(hours=1)
-roots = retriever.list_root_spans(services=[SERVICE], since=since, max_results=20)
+# The filters below run on the client, after max_results: keep the page large, or offline runs
+# (10 agent cases and 10 judge calls each) can push real traffic out of it.
+roots = retriever.list_root_spans(services=[SERVICE], since=since, max_results=500)
 done = retriever.find_evaluated_trace_ids(
     [r.trace_id for r in roots], evaluator="travel_plan_judge"
 )
@@ -85,23 +90,32 @@ for root in todo:
         "agent_version": root.agent_version or None,
     }
 
-    value, reason, judge_trace_id = judge_plan(question, EXPECTED, answer, tool_results)
-    score(
-        "plan_quality",
-        value,
-        **target,
-        explanation=reason,
-        threshold=4,
-        score_min=1,
-        score_max=5,
-        evaluator="travel_plan_judge",
-        evaluator_type="llm_judge",
-        evaluator_description=JUDGE_DESCRIPTION,
-        judge_model=JUDGE_MODEL_ID,
-        judge_prompt_name=JUDGE_PROMPT_NAME,
-        judge_prompt_version=JUDGE_PROMPT_VERSION,
-        judge_trace_id=judge_trace_id,
-    )
+    judge_context = {
+        "evaluator": "travel_plan_judge",
+        "evaluator_type": "llm_judge",
+        "evaluator_description": JUDGE_DESCRIPTION,
+        "judge_model": JUDGE_MODEL_ID,
+        "judge_prompt_name": JUDGE_PROMPT_NAME,
+        "judge_prompt_version": JUDGE_PROMPT_VERSION,
+    }
+    try:
+        value, reason, judge_trace_id = judge_plan(question, EXPECTED, answer, tool_results)
+    except Exception as exc:  # the judge failed: record an evaluator error, go on with the rest
+        score("plan_quality", **target, error_type=type(exc).__name__, **judge_context)
+        print(f"  {root.trace_id}  plan_quality: judge failed ({type(exc).__name__})")
+        value, reason = None, None
+    else:
+        score(
+            "plan_quality",
+            value,
+            **target,
+            explanation=reason,
+            threshold=4,
+            score_min=1,
+            score_max=5,
+            judge_trace_id=judge_trace_id,
+            **judge_context,
+        )
 
     passed, why = uses_tool_data(question, answer)
     score(

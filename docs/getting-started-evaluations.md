@@ -214,9 +214,14 @@ retriever = OpenSearchTraceRetriever(
 
 since = datetime.now(timezone.utc) - timedelta(minutes=60)  # time window
 roots = retriever.list_root_spans(
-    services=["observability-assistant-py"], since=since, max_results=50
+    services=["observability-assistant-py"], since=since, max_results=500
 )
-roots = [r for r in roots if r.agent_name == AGENT_NAME]
+# This agent's online runs only: not the judge's chat traces, not offline eval cases
+roots = [
+    r
+    for r in roots
+    if r.agent_name == AGENT_NAME and "test.suite.run.id" not in r.raw.get("attributes", {})
+]
 done = retriever.find_evaluated_trace_ids(
     [r.trace_id for r in roots],
     evaluator="answer_quality_judge",  # this job's own results
