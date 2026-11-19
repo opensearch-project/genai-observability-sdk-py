@@ -108,7 +108,7 @@ Scorers:
 
 | Scorer | Type | Checks |
 |---|---|---|
-| `answer_correctness` | code | The answer against a reference query run at eval time: the per-service error counts, the largest index and its document count, the slowest operation, the trace's root span, the live services, the matching log count. When the truth is "nothing", the answer must say so |
+| `answer_correctness` | code | The answer against a reference query run at eval time: the per-service error counts, the largest index and its document count, the slowest operation, the trace's root span, the live services, the matching log count. Counts match within `COUNT_TOLERANCE` (default 5%, at least 2), since the stack keeps writing while the reference query runs. When the truth is "nothing", the answer must say so |
 | `right_tool` | code | The expected tool was called |
 | `trajectory_match` | code | The distinct tools called, read back from the trace's `execute_tool` spans in OpenSearch, equal the golden path |
 | `no_loops` | code | At most 4 model calls (`chat` spans) per run |

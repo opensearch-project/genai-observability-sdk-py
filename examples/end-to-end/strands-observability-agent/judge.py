@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from typing import Any
 
 from config import judge_model_id, make_model, provider
@@ -53,7 +52,16 @@ If the reference data is given, use it as the ground truth.
 Reply with JSON only: {"score": <1-5>, "reason": "<one or two sentences>"}"""
 
 
-_JSON = re.compile(r"\{.*\}", re.DOTALL)
+def _first_json_object(text: str) -> dict[str, Any]:
+    """The first JSON object in the reply; the model may add text or a second object after it."""
+    start = text.find("{")
+    if start < 0:
+        return {}
+    try:
+        parsed, _ = json.JSONDecoder().raw_decode(text[start:])
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _messages(role: str, text: str) -> list[dict[str, Any]]:
@@ -91,8 +99,7 @@ def judge(question: str, answer: str, reference: Any = None) -> dict[str, Any]:
         input_tokens=usage.get("inputTokens"),
         output_tokens=usage.get("outputTokens"),
     )
-    match = _JSON.search(text)
-    parsed = json.loads(match.group(0)) if match else {}
+    parsed = _first_json_object(text)
     value = float(parsed.get("score", 0))
     if not 1 <= value <= 5:
         raise ValueError(f"judge returned no score in 1..5: {text[:200]!r}")

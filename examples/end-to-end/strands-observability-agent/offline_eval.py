@@ -122,27 +122,45 @@ SPAN_WAIT_SECONDS = float(os.environ.get("SPAN_WAIT_SECONDS", "90"))
 
 
 def spans_of(trace_id: str | None, timeout_s: float = SPAN_WAIT_SECONDS) -> list[Any]:
-    """The trace's spans, once ingested (the count is stable across two polls)."""
+    """The trace's spans, once ingested (a root span is there and the count is stable).
+
+    Raises LookupError when the trace is not ingested in time, so the scorers that read it
+    record an evaluator error instead of scoring an empty trace as a pass. Only a complete
+    trace is cached.
+    """
     if not trace_id:
-        return []
+        raise LookupError("the agent run has no trace id")
     if trace_id in _span_cache:
         return _span_cache[trace_id]
     trace.get_tracer_provider().force_flush()  # type: ignore[attr-defined]
-    spans: list[Any] = []
     seen = -1
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         spans = [s for t in retriever.get_traces(trace_id).traces for s in t.spans]
         if spans and len(spans) == seen and any(not s.parent_span_id for s in spans):
-            break
+            _span_cache[trace_id] = spans
+            return spans
         seen = len(spans)
         time.sleep(3)
-    _span_cache[trace_id] = spans
-    return spans
+    raise LookupError(
+        f"trace {trace_id} was not ingested within {timeout_s:.0f}s (raise SPAN_WAIT_SECONDS)"
+    )
 
 
 def _numbers(text: str) -> set[int]:
     return {int(n.replace(",", "")) for n in re.findall(r"\d[\d,]*", text)}
+
+
+# Ground truth is re-queried after the agent answers, over a sliding window, while the stack
+# keeps writing spans and logs (this eval's own included). A count is right when it is within
+# this tolerance of the reference value.
+COUNT_TOLERANCE = float(os.environ.get("COUNT_TOLERANCE", "0.05"))
+
+
+def _mentions_count(text: str, truth: int) -> bool:
+    """The text names a number within COUNT_TOLERANCE (at least 2) of truth."""
+    slack = max(2, round(truth * COUNT_TOLERANCE))
+    return any(abs(n - truth) <= slack for n in _numbers(text))
 
 
 # ---------------------------------------------------------------------------
@@ -166,11 +184,15 @@ def answer_correctness(input: str, output: AgentAnswer, expected: dict) -> EvalS
             why = "no errored spans in the window; the answer must say so"
         else:
             top = sorted(truth.items(), key=lambda kv: -kv[1])[:3]
-            ok = all(svc in answer and n in _numbers(answer) for svc, n in top)
-            why = f"top services by errors: {top}"
+            ok = all(svc in answer and _mentions_count(answer, n) for svc, n in top)
+            why = f"top services by errors: {top} (counts within {COUNT_TOLERANCE:.0%})"
     elif check == "largest_index":
         rows = queries.list_indices()
-        ok = bool(rows) and rows[0]["index"] in answer and rows[0]["docs"] in _numbers(answer)
+        ok = (
+            bool(rows)
+            and rows[0]["index"] in answer
+            and _mentions_count(answer, int(rows[0]["docs"]))
+        )
         why = f"largest: {rows[0]['index']} ({rows[0]['docs']} docs)" if rows else "no indices"
     elif check == "span_indices":
         with_docs = [r["index"] for r in queries.list_indices() if "apm-span" in r["index"]]
@@ -192,7 +214,7 @@ def answer_correctness(input: str, output: AgentAnswer, expected: dict) -> EvalS
         why = f"{len(found)} of {len(live)} live services named"
     elif check == "logs_count":
         total = queries.search_logs(expected["query"], expected["minutes"])["total"]
-        ok = any(w in low for w in NO_DATA_WORDS) if total == 0 else total in _numbers(answer)
+        ok = any(w in low for w in NO_DATA_WORDS) if total == 0 else _mentions_count(answer, total)
         why = f"{total} matching log records"
     else:
         raise ValueError(f"unknown check {check!r}")
