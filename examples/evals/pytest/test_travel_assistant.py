@@ -47,9 +47,15 @@ def test_travel_assistant(case, eval_run):
     try:
         run = run_agent(case["input"])
     except Exception as e:  # the agent failed: record an error result for each check
-        eval_run.log(
-            **ids, error_type=type(e).__name__, scores={"uses_tool_data": 0.0, "answer_length": 0.0}
-        )
+        for check in ("uses_tool_data", "answer_length"):  # each under its own evaluator
+            eval_run.log(
+                **ids,
+                input=case["input"],
+                error_type=type(e).__name__,
+                scores={check: 0.0},
+                evaluator=check,
+                evaluator_type="code",
+            )
         raise
 
     grounded, why = uses_tool_data(case["input"], run.answer)
@@ -60,7 +66,8 @@ def test_travel_assistant(case, eval_run):
         expected=case["expected"],
         trace_id=run.trace_id,  # link the results to the agent run
         span_id=run.span_id,
-        evaluator_type="code",
+        # Each EvalScore names its own evaluator, so the type goes on each score: a log()-level
+        # evaluator_type applies only to scores without an evaluator of their own.
         scores=[
             EvalScore(
                 name="uses_tool_data",
@@ -68,6 +75,7 @@ def test_travel_assistant(case, eval_run):
                 passed=grounded,
                 explanation=why,
                 evaluator="uses_tool_data",
+                evaluator_type="code",
             ),
             EvalScore(
                 name="answer_length",
@@ -75,6 +83,7 @@ def test_travel_assistant(case, eval_run):
                 threshold=MAX_CHARS,
                 direction="minimize",
                 evaluator="answer_length",
+                evaluator_type="code",
             ),
         ],
     )
