@@ -16,6 +16,9 @@ highlighting gen_ai.evaluation.result events emitted by score().
 Requires the collector's own packages (not SDK dependencies):
     pip install fastapi uvicorn
 
+Listens on 127.0.0.1 only; set MINI_COLLECTOR_HOST=0.0.0.0 to accept other hosts (the
+receiver has no authentication).
+
 Usage:
     # Terminal 1: start the collector
     python examples/basics/mini_collector_http.py
@@ -23,6 +26,8 @@ Usage:
     # Terminal 2: run the agent
     python examples/basics/multi_agent_planner/run.py
 """
+
+import os
 
 import uvicorn
 from fastapi import FastAPI, Request, Response
@@ -220,17 +225,21 @@ async def receive_traces(request: Request):
 
 
 if __name__ == "__main__":
+    # Loopback by default: this receiver has no authentication. MINI_COLLECTOR_HOST=0.0.0.0
+    # listens on every interface (for example for a container), which anyone on the network
+    # can then post to.
+    host = os.environ.get("MINI_COLLECTOR_HOST", "127.0.0.1")
     print(f"{BOLD}{'=' * 70}{RESET}")
     print(f"{BOLD}  Mini OTEL Collector — HTTP on port 4318{RESET}")
     print(f"{BOLD}{'=' * 70}{RESET}")
     print("  Listening:")
-    print("    http://0.0.0.0:4318/v1/traces                    (OTel Collector)")
-    print("    http://0.0.0.0:4318/opentelemetry/v1/traces      (Data Prepper)")
-    print("    http://0.0.0.0:4318/v1/logs                      (evaluation events)")
-    print("    http://0.0.0.0:4318/opentelemetry/v1/logs        (Data Prepper)")
+    print(f"    http://{host}:4318/v1/traces                    (OTel Collector)")
+    print(f"    http://{host}:4318/opentelemetry/v1/traces      (Data Prepper)")
+    print(f"    http://{host}:4318/v1/logs                      (evaluation events)")
+    print(f"    http://{host}:4318/opentelemetry/v1/logs        (Data Prepper)")
     print("  Protocol:  OTLP/HTTP (protobuf)")
     print()
     print("  Test with:")
     print("    python examples/basics/multi_agent_planner/run.py")
     print(f"{BOLD}{'=' * 70}{RESET}\n")
-    uvicorn.run(app, host="0.0.0.0", port=4318, log_level="warning")  # noqa: S104
+    uvicorn.run(app, host=host, port=4318, log_level="warning")
