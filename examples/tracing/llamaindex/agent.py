@@ -33,7 +33,7 @@ from llama_index.llms.bedrock_converse import BedrockConverse
 from opensearch_genai_observability_sdk_py import Op, enrich, observe, register
 
 # OTLP endpoint: OTEL_EXPORTER_OTLP_ENDPOINT, else http://localhost:4318.
-register(service_name="travel-assistant-llamaindex", auto_instrument=True)
+register(service_name="travel-assistant-llamaindex-py", auto_instrument=True)
 
 DATA = json.loads((Path(__file__).parent / "../../shared/travel_data.json").read_text())
 SYSTEM_PROMPT = DATA["system_prompt"]

@@ -1,3 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The OpenSearch Contributors require contributions made to
+# this file be licensed under the Apache-2.0 license or a
+# compatible open source license.
+#
+# Modifications Copyright OpenSearch Contributors. See
+# GitHub history for details.
+
 """Travel assistant on CrewAI, traced with the OpenSearch GenAI Observability SDK.
 
 register() activates the CrewAI and Bedrock instrumentors. The CrewAI instrumentor
@@ -30,7 +39,7 @@ CITIES = DATA["cities"]
 logging.getLogger("crewai.llms.base_llm").setLevel(logging.ERROR)
 
 # Sends traces to the local OTel Collector (http://localhost:4318) by default.
-provider = register(service_name="travel-assistant-crewai")
+provider = register(service_name="travel-assistant-crewai-py")
 
 
 @tool("get_weather")

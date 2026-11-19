@@ -32,7 +32,7 @@ variant was not run for this example).
 
 ## What you get
 
-Service `travel-assistant-crewai`, one trace per question:
+Service `travel-assistant-crewai-py`, one trace per question:
 
 ```
 crewai.workflow                      operation invoke_agent, gen_ai.agent.name=travel_assistant

@@ -17,7 +17,9 @@ so the results are comparable. The user asks for a short trip plan for a city; t
 calls two tools, `get_weather(city)` and `find_events(city)`, that return fixed data from
 [`shared/travel_data.json`](shared/), then answers. The only external call is the model.
 Every framework example uses the same system prompt, the same tools, the agent name
-`travel_assistant` and the service name `travel-assistant-<framework>`. The eval examples
+`travel_assistant` and the service name `travel-assistant-<framework>-py`
+(`travel-assistant-evals-<library>-py` for the eval examples); the `-py` suffix keeps them
+apart from the TypeScript SDK's examples on the same stack. The eval examples
 run the same 5 cases from [`shared/test_suite.jsonl`](shared/) (`id`, `name`, `input`,
 `expected`), including an unknown city the agent must not invent data for.
 
@@ -78,7 +80,8 @@ the shared suite with a run name, and online `score()` on traces found with
 examples/
   README.md        this file
   runbooks/        step-by-step guides: tracing.md, evals.md
-  basics/          numbered SDK basics (01_ to 08_), multi_agent_planner, mini collector, github-action
+  basics/          numbered SDK basics (01_ to 08_), multi_agent_planner, mini collector
+  github-action/   the GitHub Action that runs an evaluate() suite in CI
   shared/          travel_data.json and test_suite.jsonl for the travel assistant
   tracing/<name>/  one travel assistant per framework: README.md, agent.py, requirements.txt
   evals/<name>/    the travel assistant scored natively or with an eval library
@@ -115,7 +118,8 @@ Use one virtual environment per example folder. `register()` activates every ins
 instrumentor, so instrumentors left over from another example can trace the same calls twice.
 
 To run against the SDK in this checkout instead of the PyPI release, add
-`pip install -e "../../..[opensearch]"` (from a folder two levels down, adjust the path).
+`pip install -e "../../..[opensearch]"` (from a folder three levels down, such as
+`examples/tracing/strands`; adjust the path elsewhere).
 The basics need only the SDK: `pip install "opensearch-genai-observability-sdk-py[opensearch]>=0.3.0"`,
 then `python examples/basics/01_tracing_basics.py` from the repository root.
 
