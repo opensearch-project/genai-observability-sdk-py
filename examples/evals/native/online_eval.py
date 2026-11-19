@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta, timezone
 
+from agent import AGENT_NAME
 from scorers import (
     JUDGE_DESCRIPTION,
     JUDGE_MODEL_ID,
@@ -33,7 +34,7 @@ from scorers import (
 
 from opensearch_genai_observability_sdk_py import OpenSearchTraceRetriever, register, score
 
-SERVICE = "travel-assistant-evals-native"
+SERVICE = "travel-assistant-evals-native-py"
 EXPECTED = (
     "A short plan that uses only the tool data: the city's weather and at least one event, "
     "or says there is no data for the city."
@@ -61,7 +62,12 @@ def is_test_run(root) -> bool:
 todo = [
     r
     for r in roots
-    if r.trace_id not in done and not is_test_run(r) and r.input_messages and r.output_messages
+    # Only this agent's runs: the service's offline judge calls are `chat` roots of their own
+    if r.agent_name == AGENT_NAME
+    and r.trace_id not in done
+    and not is_test_run(r)
+    and r.input_messages
+    and r.output_messages
 ]
 print(f"{len(roots)} recent traces, {len(done)} already judged, {len(todo)} to judge")
 
@@ -79,7 +85,7 @@ for root in todo:
         "agent_version": root.agent_version or None,
     }
 
-    value, reason = judge_plan(question, EXPECTED, answer, tool_results)
+    value, reason, judge_trace_id = judge_plan(question, EXPECTED, answer, tool_results)
     score(
         "plan_quality",
         value,
@@ -94,6 +100,7 @@ for root in todo:
         judge_model=JUDGE_MODEL_ID,
         judge_prompt_name=JUDGE_PROMPT_NAME,
         judge_prompt_version=JUDGE_PROMPT_VERSION,
+        judge_trace_id=judge_trace_id,
     )
 
     passed, why = uses_tool_data(question, answer)

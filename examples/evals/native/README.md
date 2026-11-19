@@ -32,6 +32,12 @@ The judge records its context on every result: `judge_model` (`gen_ai.request.mo
 `travel-plan-quality@v1`) and a description. Bump `JUDGE_PROMPT_VERSION` in `scorers.py`
 when you change the judge prompt.
 
+Each judge call is traced as its own `chat` span, with the judge prompt as its system
+instructions and the request and verdict as messages. Its trace id is stored on the
+`plan_quality` result as `judge_trace_id`, so each result links to the call that produced it.
+`online_eval.py` judges only `travel_assistant` runs, so those judge traces are not judged
+in turn.
+
 ## Run
 
 Start the observability stack (OTLP on `localhost:4318`, OpenSearch on `localhost:9200`), then:
@@ -57,7 +63,7 @@ for the local stack's self-signed certificate; set `OPENSEARCH_VERIFY_CERTS=true
 
 ## What you get
 
-- Spans (service `travel-assistant-evals-native`): one trace per case or request, with an
+- Spans (service `travel-assistant-evals-native-py`): one trace per case or request, with an
   `invoke_agent travel_assistant` root (`gen_ai.agent.version` v1 or v2), `chat` and
   `execute_tool` spans. `evaluate()` stamps `test.suite.name`, `test.suite.run.id` and
   `test.case.*` on each root.

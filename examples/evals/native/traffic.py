@@ -19,7 +19,7 @@ from agent import AGENT_NAME, run_agent
 from opensearch_genai_observability_sdk_py import register
 
 provider = register(
-    service_name="travel-assistant-evals-native", agent_name=AGENT_NAME, agent_version="v2"
+    service_name="travel-assistant-evals-native-py", agent_name=AGENT_NAME, agent_version="v2"
 )
 
 for question in ("What should I do in Sydney this weekend?", "Plan a day in New York."):

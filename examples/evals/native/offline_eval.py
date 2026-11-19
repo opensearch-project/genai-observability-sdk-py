@@ -36,7 +36,7 @@ PROMPTS = {
     "v2": SYSTEM_PROMPT + " Reply in at most two sentences.",
 }
 
-provider = register(service_name="travel-assistant-evals-native", agent_name=AGENT_NAME)
+provider = register(service_name="travel-assistant-evals-native-py", agent_name=AGENT_NAME)
 
 
 @scorer(
@@ -75,8 +75,10 @@ def answer_length(input, output, expected) -> float:
     judge_prompt_version=JUDGE_PROMPT_VERSION,
 )
 def plan_quality(input, output, expected) -> EvalScore:
-    value, reason = judge_plan(input, expected, output)
-    return EvalScore(name="plan_quality", value=value, explanation=reason)
+    value, reason, judge_trace_id = judge_plan(input, expected, output)
+    return EvalScore(
+        name="plan_quality", value=value, explanation=reason, judge_trace_id=judge_trace_id
+    )
 
 
 for version, prompt in PROMPTS.items():
