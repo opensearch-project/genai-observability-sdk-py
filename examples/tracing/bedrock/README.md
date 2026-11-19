@@ -32,7 +32,7 @@ model must be enabled in the region.
 
 ## What you get
 
-Service `travel-assistant-bedrock`, one trace per question:
+Service `travel-assistant-bedrock-py`, one trace per question:
 
 ```
 invoke_agent travel_assistant        gen_ai.agent.name=travel_assistant, tokens, messages

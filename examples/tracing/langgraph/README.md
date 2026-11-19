@@ -26,7 +26,7 @@ Any LangChain chat model works the same way, for example `ChatOpenAI` from
 
 ## What you get
 
-Service `travel-assistant-langgraph`, one trace per question:
+Service `travel-assistant-langgraph-py`, one trace per question:
 
 ```
 invoke_agent travel_assistant        gen_ai.agent.name=travel_assistant, tokens, conversation id

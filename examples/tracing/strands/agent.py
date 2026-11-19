@@ -36,7 +36,7 @@ CITIES = DATA["cities"]
 # Sends traces to the local OTel Collector (http://localhost:4318) by default.
 # Strands traces itself, so auto_instrument=False keeps an installed Bedrock (botocore)
 # instrumentor from adding a second chat span for every model call.
-provider = register(service_name="travel-assistant-strands", auto_instrument=False)
+provider = register(service_name="travel-assistant-strands-py", auto_instrument=False)
 
 
 @tool

@@ -38,7 +38,7 @@ python agent.py "Plan a trip to Tokyo."  # your own question
 
 ## What you get
 
-Service `travel-assistant-openai-agents`, one trace per question:
+Service `travel-assistant-openai-agents-py`, one trace per question:
 
 ```
 Agent Workflow                       operation invoke_workflow

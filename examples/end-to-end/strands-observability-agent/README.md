@@ -31,7 +31,7 @@ Tools, all read-only except the guarded one:
 
 The agent never sees the OpenSearch credentials: they are read by `config.py` and used only by the client.
 
-Instrumentation (`agent.py`): `register(service_name="observability-assistant", agent_name=..., agent_version=...)`, then the entry point `ask_detailed()` is an `@observe(op=Op.INVOKE_AGENT)` span with `mark_agent_root()`, and `enrich()` sets `gen_ai.agent.version`, the model, the system instructions, the token usage and the question and answer as GenAI messages. Strands' own `invoke_agent`, `chat` and `execute_tool` spans nest under it.
+Instrumentation (`agent.py`): `register(service_name="observability-assistant-py", agent_name=..., agent_version=...)`, then the entry point `ask_detailed()` is an `@observe(op=Op.INVOKE_AGENT)` span with `mark_agent_root()`, and `enrich()` sets `gen_ai.agent.version`, the model, the system instructions, the token usage and the question and answer as GenAI messages. Strands' own `invoke_agent`, `chat` and `execute_tool` spans nest under it.
 
 `agent.py` sets `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_span_attributes_only` (unless you set it yourself) before Strands starts. Without it Strands writes the messages and the tool arguments and results as span events, and Agent Traces reads span attributes (`gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`).
 
@@ -89,7 +89,7 @@ Check the spans from the command line:
 ```bash
 curl -sk -u admin:"$OPENSEARCH_PASSWORD" -X POST https://localhost:9200/_plugins/_ppl \
   -H 'Content-Type: application/json' \
-  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''observability-assistant'\'' | stats count() by `attributes.gen_ai.operation.name`"}'
+  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''observability-assistant-py'\'' | stats count() by `attributes.gen_ai.operation.name`"}'
 ```
 
 ## Run the offline eval

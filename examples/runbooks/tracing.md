@@ -28,7 +28,7 @@ pip install "opensearch-genai-observability-sdk-py[opensearch]>=0.3.0"
 ```python
 from opensearch_genai_observability_sdk_py import register
 
-register(service_name="travel-assistant-strands")
+register(service_name="travel-assistant-strands-py")
 ```
 
 Call it once, before the framework creates its first agent or client. It sends traces to
@@ -81,7 +81,7 @@ Run the agent once, then check the operations recorded for your service:
 ```bash
 curl -sk -u admin:"$OPENSEARCH_PASSWORD" -X POST https://localhost:9200/_plugins/_ppl \
   -H 'Content-Type: application/json' \
-  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''travel-assistant-strands'\'' | stats count() by `attributes.gen_ai.operation.name`"}'
+  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''travel-assistant-strands-py'\'' | stats count() by `attributes.gen_ai.operation.name`"}'
 ```
 
 Expect `invoke_agent`, `chat` and `execute_tool` (frameworks add their own spans, such as Strands'
@@ -90,7 +90,7 @@ event loop cycles). Then check one trace:
 ```bash
 curl -sk -u admin:"$OPENSEARCH_PASSWORD" -X POST https://localhost:9200/_plugins/_ppl \
   -H 'Content-Type: application/json' \
-  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''travel-assistant-strands'\'' | fields traceId, name, `attributes.gen_ai.agent.name`, `attributes.gen_ai.tool.name`, `attributes.gen_ai.tool.call.arguments` | head 20"}'
+  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''travel-assistant-strands-py'\'' | fields traceId, name, `attributes.gen_ai.agent.name`, `attributes.gen_ai.tool.name`, `attributes.gen_ai.tool.call.arguments` | head 20"}'
 ```
 
 Look for: one `traceId` per run, `gen_ai.agent.name` = `travel_assistant` on the

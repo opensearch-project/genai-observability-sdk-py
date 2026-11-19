@@ -22,7 +22,7 @@ python agent.py "Plan a trip to Tokyo."  # your own question
 
 ## What you get
 
-Service `travel-assistant-strands`, one trace per question:
+Service `travel-assistant-strands-py`, one trace per question:
 
 ```
 invoke_agent travel_assistant        gen_ai.agent.name=travel_assistant, tokens, messages

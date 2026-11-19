@@ -56,13 +56,13 @@ python agent.py "Plan a one-day trip to Paris."
 ## Check the spans
 
 In OpenSearch Dashboards open Agent Traces (`/app/agentTraces`) and filter on service
-`travel-assistant-anthropic`, or query the span index:
+`travel-assistant-anthropic-py`, or query the span index:
 
 ```bash
 curl -sk -u admin:$OPENSEARCH_PASSWORD "https://localhost:9200/otel-v1-apm-span-*/_search" \
   -H 'Content-Type: application/json' -d '{
   "size": 0,
-  "query": {"term": {"serviceName": "travel-assistant-anthropic"}},
+  "query": {"term": {"serviceName": "travel-assistant-anthropic-py"}},
   "aggs": {"ops": {"terms": {"field": "attributes.gen_ai.operation.name"}}}
 }'
 ```

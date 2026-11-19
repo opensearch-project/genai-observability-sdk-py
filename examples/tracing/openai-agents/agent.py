@@ -29,7 +29,7 @@ DATA = json.loads((Path(__file__).resolve().parents[2] / "shared" / "travel_data
 CITIES = DATA["cities"]
 
 # Sends traces to the local OTel Collector (http://localhost:4318) by default.
-provider = register(service_name="travel-assistant-openai-agents")
+provider = register(service_name="travel-assistant-openai-agents-py")
 
 
 @function_tool

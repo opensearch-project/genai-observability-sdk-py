@@ -36,7 +36,7 @@ from urllib.parse import urlparse
 
 AGENT_NAME = "observability_assistant"
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "1.0.0")
-SERVICE_NAME = "observability-assistant"
+SERVICE_NAME = "observability-assistant-py"
 
 SPAN_INDEX = os.environ.get("SPAN_INDEX", "otel-v1-apm-span*")
 LOG_INDEX = os.environ.get("LOG_INDEX", "logs-otel-v1*")

@@ -94,7 +94,9 @@ AGENT_NAME = "observability_assistant"
 AGENT_VERSION = "1.0.0"
 
 # Traces and evaluation events go to OTEL_EXPORTER_OTLP_ENDPOINT, else http://localhost:4318.
-register(service_name="observability-assistant", agent_name=AGENT_NAME, agent_version=AGENT_VERSION)
+register(
+    service_name="observability-assistant-py", agent_name=AGENT_NAME, agent_version=AGENT_VERSION
+)
 
 
 def _messages(role, text):
@@ -131,7 +133,7 @@ curl -sk -u admin:"$OPENSEARCH_PASSWORD" 'https://localhost:9200/_cat/indices/ot
 ```bash
 curl -sk -u admin:"$OPENSEARCH_PASSWORD" -X POST https://localhost:9200/_plugins/_ppl \
   -H 'Content-Type: application/json' \
-  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''observability-assistant'\'' | stats count() by `attributes.gen_ai.operation.name`"}'
+  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''observability-assistant-py'\'' | stats count() by `attributes.gen_ai.operation.name`"}'
 ```
 
 A healthy run of the observability assistant shows `invoke_agent` (yours and Strands'), `execute_event_loop_cycle`, `chat` and `execute_tool`, all with one `traceId`. The root span has `gen_ai.agent.name`, `gen_ai.agent.version` and `derived.gen_ai.is_root`.
@@ -211,7 +213,9 @@ retriever = OpenSearchTraceRetriever(
 )
 
 since = datetime.now(timezone.utc) - timedelta(minutes=60)  # time window
-roots = retriever.list_root_spans(services=["observability-assistant"], since=since, max_results=50)
+roots = retriever.list_root_spans(
+    services=["observability-assistant-py"], since=since, max_results=50
+)
 roots = [r for r in roots if r.agent_name == AGENT_NAME]
 done = retriever.find_evaluated_trace_ids(
     [r.trace_id for r in roots],
@@ -263,7 +267,7 @@ register(
     traces_endpoint="https://<traces-pipeline>.us-west-2.osis.amazonaws.com/v1/traces",
     logs_endpoint="https://<logs-pipeline>.us-west-2.osis.amazonaws.com/v1/logs",
     sigv4=True,
-    service_name="observability-assistant",
+    service_name="observability-assistant-py",
 )
 ```
 

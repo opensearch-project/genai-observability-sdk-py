@@ -48,7 +48,7 @@ shows pass / fail; without one a result is only "Scored".
 from opensearch_genai_observability_sdk_py import evaluate, register
 
 register(
-    service_name="travel-assistant-evals-native",
+    service_name="travel-assistant-evals-native-py",
     agent_name="travel_assistant",
     agent_version="1.0.0",
 )
@@ -89,7 +89,7 @@ retriever = OpenSearchTraceRetriever(
     host="https://localhost:9200", auth=("admin", password), verify_certs=False
 )
 roots = retriever.list_root_spans(
-    services=["travel-assistant-evals-native"], since=since, max_results=50
+    services=["travel-assistant-evals-native-py"], since=since, max_results=50
 )
 done = retriever.find_evaluated_trace_ids(
     [r.trace_id for r in roots], evaluator="travel_plan_judge"
