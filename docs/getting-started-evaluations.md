@@ -1,8 +1,8 @@
 # Getting started: observe and evaluate an agent with OpenSearch
 
-This guide takes one agent from its first trace to evaluated production traffic. It threads a single example through every step: the **observability assistant**, a [Strands](https://strandsagents.com) agent that answers questions about your own OpenSearch cluster ("which services had errors in the last hour?", "what are the slowest operations?") with real, read-only tools.
+This guide takes one agent from its first trace to evaluated production traffic. It threads a single example through every step: the **observability assistant**, a [Strands](https://strandsagents.com) agent that answers questions about your own OpenSearch cluster ("which services had errors in the last hour?", "what are the slowest operations?") with real, read-only tools. The runnable code is in [examples/end-to-end/strands-observability-agent](../examples/end-to-end/strands-observability-agent/).
 
-[agent-evaluations.md](agent-evaluations.md) is the reference: every attribute, the ingestion pipelines, index templates and mappings.
+[agent-evaluations.md](agent-evaluations.md) is the reference: every attribute, the ingestion pipelines, index templates and mappings. For short, step-by-step checks against the travel assistant examples, see the [evals runbook](../examples/runbooks/evals.md).
 
 - [0. Where to start](#0-where-to-start)
 - [1. Define goals](#1-define-goals)
@@ -94,7 +94,9 @@ AGENT_NAME = "observability_assistant"
 AGENT_VERSION = "1.0.0"
 
 # Traces and evaluation events go to OTEL_EXPORTER_OTLP_ENDPOINT, else http://localhost:4318.
-register(service_name="observability-assistant", agent_name=AGENT_NAME, agent_version=AGENT_VERSION)
+register(
+    service_name="observability-assistant-py", agent_name=AGENT_NAME, agent_version=AGENT_VERSION
+)
 
 
 def _messages(role, text):
@@ -131,7 +133,7 @@ curl -sk -u admin:"$OPENSEARCH_PASSWORD" 'https://localhost:9200/_cat/indices/ot
 ```bash
 curl -sk -u admin:"$OPENSEARCH_PASSWORD" -X POST https://localhost:9200/_plugins/_ppl \
   -H 'Content-Type: application/json' \
-  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''observability-assistant'\'' | stats count() by `attributes.gen_ai.operation.name`"}'
+  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''observability-assistant-py'\'' | stats count() by `attributes.gen_ai.operation.name`"}'
 ```
 
 A healthy run of the observability assistant shows `invoke_agent` (yours and Strands'), `execute_event_loop_cycle`, `chat` and `execute_tool`, all with one `traceId`. The root span has `gen_ai.agent.name`, `gen_ai.agent.version` and `derived.gen_ai.is_root`.
@@ -211,8 +213,15 @@ retriever = OpenSearchTraceRetriever(
 )
 
 since = datetime.now(timezone.utc) - timedelta(minutes=60)  # time window
-roots = retriever.list_root_spans(services=["observability-assistant"], since=since, max_results=50)
-roots = [r for r in roots if r.agent_name == AGENT_NAME]
+roots = retriever.list_root_spans(
+    services=["observability-assistant-py"], since=since, max_results=500
+)
+# This agent's online runs only: not the judge's chat traces, not offline eval cases
+roots = [
+    r
+    for r in roots
+    if r.agent_name == AGENT_NAME and "test.suite.run.id" not in r.raw.get("attributes", {})
+]
 done = retriever.find_evaluated_trace_ids(
     [r.trace_id for r in roots],
     evaluator="answer_quality_judge",  # this job's own results
@@ -263,7 +272,7 @@ register(
     traces_endpoint="https://<traces-pipeline>.us-west-2.osis.amazonaws.com/v1/traces",
     logs_endpoint="https://<logs-pipeline>.us-west-2.osis.amazonaws.com/v1/logs",
     sigv4=True,
-    service_name="observability-assistant",
+    service_name="observability-assistant-py",
 )
 ```
 
@@ -476,7 +485,7 @@ Paste these into your coding assistant, in your agent's repository.
 ### 1. Instrument my agent
 
 ```text
-Instrument this agent with the OpenSearch GenAI observability SDK
+Instrument this agent with the OpenSearch GenAI Observability SDK
 (pip package opensearch-genai-observability-sdk-py>=0.3.0, docs:
 https://github.com/opensearch-project/genai-observability-sdk-py).
 
@@ -497,7 +506,7 @@ https://github.com/opensearch-project/genai-observability-sdk-py).
 ### 2. Write a test suite for my agent
 
 ```text
-Write an offline evaluation for this agent with the OpenSearch GenAI observability SDK
+Write an offline evaluation for this agent with the OpenSearch GenAI Observability SDK
 (evaluate(), @scorer, EvalScore).
 
 - Create test_suite.jsonl with 8 to 12 realistic cases: {"case_id", "case_name",
@@ -524,7 +533,7 @@ Write an offline evaluation for this agent with the OpenSearch GenAI observabili
 ### 3. Set up online evaluations
 
 ```text
-Add an online evaluator for this agent with the OpenSearch GenAI observability SDK.
+Add an online evaluator for this agent with the OpenSearch GenAI Observability SDK.
 
 - Use OpenSearchTraceRetriever (host, auth, verify_certs from env) to list root spans
   of the agent's service from the last N minutes (list_root_spans), keep the ones
@@ -593,5 +602,6 @@ print(f"{app}/compare/{quote(run_a, safe='')}/{quote(run_b, safe='')}")
 ## Further reading
 
 - [From day one to healthy production: instrumenting and evaluating AI agents with OpenSearch](https://github.com/anirudha/os-agent-observability-evals/blob/main/blog.md): the same journey end to end, with a sample support agent in several frameworks.
+- [Evals runbook](../examples/runbooks/evals.md) and [tracing runbook](../examples/runbooks/tracing.md): step by step against the example agents, with the checks to run.
 - [Agent evaluations](agent-evaluations.md): the full attribute reference, ingestion pipelines and index templates.
 - [API reference](api-reference.md): every parameter of `register()`, `score()`, `evaluate()`, `Benchmark` and `OpenSearchTraceRetriever`.

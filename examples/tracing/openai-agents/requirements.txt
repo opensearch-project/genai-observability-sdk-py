@@ -1,0 +1,3 @@
+opensearch-genai-observability-sdk-py[openai]>=0.3.0
+openai-agents[litellm]>=0.4.0
+boto3

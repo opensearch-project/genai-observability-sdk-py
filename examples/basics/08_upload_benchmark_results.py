@@ -26,7 +26,7 @@ Three patterns:
     C. Upload with trace links (connect eval results to agent traces)
 
 Usage:
-    python examples/08_upload_benchmark_results.py
+    python examples/basics/08_upload_benchmark_results.py
 
 Prerequisites:
     pip install opensearch-genai-observability-sdk-py
@@ -47,6 +47,7 @@ register(
 # ---------------------------------------------------------------------------
 # Pattern A: Upload from any eval framework (list of dicts)
 # ---------------------------------------------------------------------------
+
 
 def upload_custom_results():
     """Upload results from your own eval pipeline."""
@@ -96,6 +97,7 @@ def upload_custom_results():
 # Pattern B: Upload from RAGAS (commented out, requires ragas package)
 # ---------------------------------------------------------------------------
 
+
 def upload_ragas_results():
     """Upload results from a RAGAS evaluation run.
 
@@ -133,6 +135,7 @@ def upload_ragas_results():
 # ---------------------------------------------------------------------------
 # Pattern C: Upload with trace links
 # ---------------------------------------------------------------------------
+
 
 def upload_with_trace_links():
     """Upload eval results linked to existing agent traces.
@@ -172,7 +175,7 @@ def upload_with_trace_links():
                 scores={"accuracy": r["accuracy"]},
                 status="pass" if r["accuracy"] >= 0.9 else "fail",
                 trace_id=r["trace_id"],  # The original agent trace
-                span_id=r["span_id"],    # Score events are parented to this span
+                span_id=r["span_id"],  # Score events are parented to this span
                 case_id=r["question"][:20].replace(" ", "_").lower(),
             )
 

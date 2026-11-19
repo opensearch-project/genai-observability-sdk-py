@@ -1,0 +1,56 @@
+{
+  "system_prompt": "You are a travel assistant. When the user asks for a trip plan for a city, call get_weather and find_events for that city, then reply with a short plan (at most 5 sentences) that mentions the weather and at least one event. Use only data returned by the tools. If a tool reports no data for the city, say you have no data for that city and do not invent any.",
+  "cities": {
+    "paris": {
+      "name": "Paris",
+      "weather": {"condition": "sunny", "high_c": 24, "low_c": 15},
+      "events": [
+        {"name": "Louvre late opening", "time": "Friday 18:00"},
+        {"name": "Seine jazz cruise", "time": "Saturday 20:00"},
+        {"name": "Montmartre food walk", "time": "Sunday 11:00"}
+      ]
+    },
+    "tokyo": {
+      "name": "Tokyo",
+      "weather": {"condition": "light rain", "high_c": 19, "low_c": 13},
+      "events": [
+        {"name": "teamLab Planets visit", "time": "Friday 10:00"},
+        {"name": "Tsukiji outer market tour", "time": "Saturday 08:00"}
+      ]
+    },
+    "new york": {
+      "name": "New York",
+      "weather": {"condition": "cloudy", "high_c": 17, "low_c": 9},
+      "events": [
+        {"name": "Broadway matinee", "time": "Saturday 14:00"},
+        {"name": "Central Park bike tour", "time": "Sunday 10:00"},
+        {"name": "MoMA free evening", "time": "Friday 17:30"}
+      ]
+    },
+    "seattle": {
+      "name": "Seattle",
+      "weather": {"condition": "rain", "high_c": 12, "low_c": 7},
+      "events": [
+        {"name": "Pike Place Market tasting tour", "time": "Saturday 10:00"},
+        {"name": "Museum of Pop Culture", "time": "Sunday 12:00"}
+      ]
+    },
+    "barcelona": {
+      "name": "Barcelona",
+      "weather": {"condition": "sunny", "high_c": 27, "low_c": 19},
+      "events": [
+        {"name": "Sagrada Familia guided tour", "time": "Friday 09:00"},
+        {"name": "Flamenco show", "time": "Saturday 21:00"},
+        {"name": "Barceloneta beach volleyball", "time": "Sunday 16:00"}
+      ]
+    },
+    "sydney": {
+      "name": "Sydney",
+      "weather": {"condition": "windy", "high_c": 21, "low_c": 14},
+      "events": [
+        {"name": "Opera House backstage tour", "time": "Saturday 11:00"},
+        {"name": "Bondi to Coogee coastal walk", "time": "Sunday 08:00"}
+      ]
+    }
+  }
+}

@@ -21,8 +21,8 @@ scorer (error.type, no score). Data Prepper routes the events to the
 otel-v1-genai-evaluation-* index.
 
 Usage:
-    AGENT_VERSION=v1 python examples/07_benchmarks.py
-    AGENT_VERSION=v2 python examples/07_benchmarks.py
+    AGENT_VERSION=v1 python examples/basics/07_benchmarks.py
+    AGENT_VERSION=v2 python examples/basics/07_benchmarks.py
     # Open agent-health UI → Benchmarks → select runs → Compare
 
 Prerequisites:
@@ -71,7 +71,10 @@ def _simulate(question: str, version: str) -> str:
     responses = {
         "What is Python?": {
             "v1": "A programming language.",
-            "v2": "Python is a high-level language for web dev, data science, and automation. Source: python.org",
+            "v2": (
+                "Python is a high-level language for web dev, data science, and automation."
+                " Source: python.org"
+            ),
         },
         "What causes rain?": {
             "v1": "Water falls from clouds.",
@@ -106,6 +109,8 @@ if __name__ == "__main__":
         task=my_agent,
         data=TEST_CASES,
         scores=[correctness, has_source],
+        agent_version=AGENT_VERSION,  # results and runs are grouped and compared by version
+        run_name=f"rag-agent {AGENT_VERSION}",
         metadata={"app.variant": AGENT_VERSION},
     )
 

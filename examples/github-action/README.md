@@ -71,7 +71,7 @@ Copy [`example-workflow.yml`](example-workflow.yml) to `.github/workflows/agent-
 
 ### SDK version
 
-The action needs `opensearch-genai-observability-sdk-py>=0.3.0`, the first release with `endpoint=` as a base URL, `traces_endpoint=` / `logs_endpoint=`, and `sigv4=` for traces and evaluation events. Until 0.3.0 is on PyPI, `pip` cannot resolve the default `install` and the step fails; set `install` to a git requirement pinned to a commit, for example `git+https://github.com/opensearch-project/genai-observability-sdk-py@<commit-sha>`. SigV4 needs no extra (`botocore` is a core dependency).
+The action needs `opensearch-genai-observability-sdk-py>=0.3.0`, the first release with `endpoint=` as a base URL, `traces_endpoint=` / `logs_endpoint=`, and `sigv4=` for traces and evaluation events. If you set `install` (for example to add your suite's own packages), keep the SDK requirement in it. SigV4 needs no extra (`botocore` is a core dependency).
 
 ### Outputs
 

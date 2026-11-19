@@ -1,0 +1,2 @@
+opensearch-genai-observability-sdk-py[openai]>=0.3.0
+openai>=1.40

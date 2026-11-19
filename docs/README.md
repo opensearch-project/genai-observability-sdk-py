@@ -1,6 +1,6 @@
 # Documentation
 
-Reference and concepts for the OpenSearch GenAI SDK for Python.
+Reference and concepts for the OpenSearch GenAI Observability SDK for Python. For step-by-step guides that you run against example agents, see [`examples/`](../examples/README.md).
 
 | Document | What it covers |
 |---|---|
@@ -10,18 +10,23 @@ Reference and concepts for the OpenSearch GenAI SDK for Python.
 | [Agent evaluations](agent-evaluations.md) | Evaluation concepts and reference: data model, attributes, what gets stored, index template, ingestion, verify, troubleshooting |
 | [Getting started with agent evaluations](getting-started-evaluations.md) | Guided walkthrough from an instrumented agent to online and offline results in OpenSearch Dashboards |
 
+Runbooks (step by step):
+
+- [Tracing runbook](../examples/runbooks/tracing.md): stand up the stack, `register()`, instrument, check the spans, open Agent Traces.
+- [Evals runbook](../examples/runbooks/evals.md): offline evals, online evals, checking the results.
+
 ## Examples
 
-The examples in [`examples/`](../examples/), one SDK feature each:
+[`examples/README.md`](../examples/README.md) lists every example. The basic examples in [`examples/basics/`](../examples/basics/), one SDK feature each:
 
 | Example | Description |
 |---|---|
-| [`01_tracing_basics.py`](../examples/01_tracing_basics.py) | `@observe` decorator, context manager, `enrich()` |
-| [`02_scoring.py`](../examples/02_scoring.py) | Evaluation events: inline, offline, trace-level, session-level, evaluator failures |
-| [`03_aws_sigv4.py`](../examples/03_aws_sigv4.py) | AWS SigV4 for traces and evaluation events with `register(sigv4=...)` |
-| [`04_async_tracing.py`](../examples/04_async_tracing.py) | Async function tracing with `@observe` |
-| [`05_openai_auto_instrument.py`](../examples/05_openai_auto_instrument.py) | OpenAI auto-instrumentation via `register()` |
-| [`06_retrieval_and_eval.py`](../examples/06_retrieval_and_eval.py) | Retrieve traces from OpenSearch, evaluate, write scores back |
-| [`07_benchmarks.py`](../examples/07_benchmarks.py) | `evaluate()` with scorers, compare agent versions |
-| [`08_upload_benchmark_results.py`](../examples/08_upload_benchmark_results.py) | `Benchmark.log()`: upload results from RAGAS, DeepEval, custom, with trace links |
+| [`01_tracing_basics.py`](../examples/basics/01_tracing_basics.py) | `@observe` decorator, context manager, `enrich()` |
+| [`02_scoring.py`](../examples/basics/02_scoring.py) | Evaluation events: inline, offline, trace-level, session-level, evaluator failures |
+| [`03_aws_sigv4.py`](../examples/basics/03_aws_sigv4.py) | AWS SigV4 for traces and evaluation events with `register(sigv4=...)` |
+| [`04_async_tracing.py`](../examples/basics/04_async_tracing.py) | Async function tracing with `@observe` |
+| [`05_openai_auto_instrument.py`](../examples/basics/05_openai_auto_instrument.py) | OpenAI auto-instrumentation via `register()` |
+| [`06_retrieval_and_eval.py`](../examples/basics/06_retrieval_and_eval.py) | Retrieve traces from OpenSearch, evaluate, write scores back |
+| [`07_benchmarks.py`](../examples/basics/07_benchmarks.py) | `evaluate()` with scorers, compare agent versions |
+| [`08_upload_benchmark_results.py`](../examples/basics/08_upload_benchmark_results.py) | `Benchmark.log()`: upload results from RAGAS, DeepEval, custom, with trace links |
 | [`github-action/`](../examples/github-action/) | Reusable GitHub Action: run an `evaluate()` suite in CI, link the run in OpenSearch Dashboards, fail on score regressions |

@@ -1,7 +1,7 @@
 [project]
 name = "opensearch-genai-observability-sdk-py"
 version = "0.3.0"
-description = "OpenSearch AI Observability SDK — OTEL-native tracing and scoring for LLM applications"
+description = "OpenSearch GenAI Observability SDK for Python: OTel-native tracing and scoring for LLM applications"
 authors = [
     { name = "OpenSearch Contributors" },
 ]
