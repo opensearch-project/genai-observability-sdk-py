@@ -13,6 +13,9 @@ No Docker needed. Receives OTLP/HTTP protobuf on port 4318 and
 pretty-prints every span (/v1/traces) and every log record (/v1/logs),
 highlighting gen_ai.evaluation.result events emitted by score().
 
+Requires the collector's own packages (not SDK dependencies):
+    pip install fastapi uvicorn
+
 Usage:
     # Terminal 1: start the collector
     python examples/basics/mini_collector_http.py

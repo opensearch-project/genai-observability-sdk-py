@@ -109,6 +109,8 @@ if __name__ == "__main__":
         task=my_agent,
         data=TEST_CASES,
         scores=[correctness, has_source],
+        agent_version=AGENT_VERSION,  # results and runs are grouped and compared by version
+        run_name=f"rag-agent {AGENT_VERSION}",
         metadata={"app.variant": AGENT_VERSION},
     )
 

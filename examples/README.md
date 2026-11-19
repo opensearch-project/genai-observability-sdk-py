@@ -43,7 +43,7 @@ needed (except 05):
 | [`07_benchmarks.py`](basics/07_benchmarks.py) | `evaluate()` with scorers, two agent versions |
 | [`08_upload_benchmark_results.py`](basics/08_upload_benchmark_results.py) | `Benchmark.log()`: upload results computed elsewhere, with trace links |
 | [`multi_agent_planner/`](basics/multi_agent_planner/) | A simulated multi-agent trace (`invoke_agent`, `chat`, `execute_tool`) |
-| [`mini_collector_http.py`](basics/mini_collector_http.py) | A tiny OTLP/HTTP receiver on port 4318 that prints spans and evaluation events, no Docker |
+| [`mini_collector_http.py`](basics/mini_collector_http.py) | A tiny OTLP/HTTP receiver on port 4318 that prints spans and evaluation events, no Docker (`pip install fastapi uvicorn`) |
 | [`github-action/`](github-action/) | Run an `evaluate()` suite in CI, link the run, fail on regressions |
 
 ## Framework and library matrix
@@ -124,7 +124,7 @@ Then check that the data arrived (quote URLs that contain `?`):
 ```bash
 curl -sk -u admin:"$OPENSEARCH_PASSWORD" -X POST https://localhost:9200/_plugins/_ppl \
   -H 'Content-Type: application/json' \
-  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''travel-assistant-strands'\'' | stats count() by `attributes.gen_ai.operation.name`"}'
+  -d '{"query": "source=otel-v1-apm-span-* | where serviceName = '\''travel-assistant-strands-py'\'' | stats count() by `attributes.gen_ai.operation.name`"}'
 ```
 
 Open **Agent Traces** at `http://localhost:5601/app/agentTraces` for the traces and
