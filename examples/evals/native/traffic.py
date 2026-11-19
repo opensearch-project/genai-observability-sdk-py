@@ -14,7 +14,7 @@ python traffic.py
 
 from __future__ import annotations
 
-from agent import AGENT_NAME, run_agent
+from agent import AGENT_NAME, PROMPTS, run_agent
 
 from opensearch_genai_observability_sdk_py import register
 
@@ -28,7 +28,8 @@ provider = register(
 )
 
 for question in ("What should I do in Sydney this weekend?", "Plan a day in New York."):
-    run = run_agent(question, version="v2")
+    # The v2 prompt, so results filed under version v2 belong to v2 answers
+    run = run_agent(question, system_prompt=PROMPTS["v2"], version="v2")
     print(f"trace {run.trace_id}: {run.answer[:80]}...")
 
 provider.force_flush()

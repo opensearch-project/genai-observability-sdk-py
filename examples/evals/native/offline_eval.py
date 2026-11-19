@@ -18,7 +18,7 @@ trace; each scorer result is one gen_ai.evaluation.result linked to the agent's 
 
 from __future__ import annotations
 
-from agent import AGENT_NAME, SYSTEM_PROMPT, load_test_suite, run_agent
+from agent import AGENT_NAME, PROMPTS, load_test_suite, run_agent
 from scorers import (
     JUDGE_DESCRIPTION,
     JUDGE_MODEL_ID,
@@ -31,10 +31,6 @@ from scorers import (
 from opensearch_genai_observability_sdk_py import EvalScore, evaluate, register, scorer
 
 SUITE = "travel-assistant-suite"
-PROMPTS = {
-    "v1": SYSTEM_PROMPT,
-    "v2": SYSTEM_PROMPT + " Reply in at most two sentences.",
-}
 
 # Strands and the traced judge emit their own chat spans; auto_instrument=False keeps an
 # installed Bedrock (botocore) instrumentor from tracing each model call a second time.

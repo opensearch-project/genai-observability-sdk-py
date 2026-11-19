@@ -33,6 +33,11 @@ from strands.models.bedrock import BedrockModel  # noqa: E402
 SHARED = Path(__file__).resolve().parent / ".." / ".." / "shared"
 TRAVEL = json.loads((SHARED / "travel_data.json").read_text())
 SYSTEM_PROMPT = TRAVEL["system_prompt"]
+# Prompt versions: the offline runs compare them, and traffic runs the one it is labeled with.
+PROMPTS = {
+    "v1": SYSTEM_PROMPT,
+    "v2": SYSTEM_PROMPT + " Reply in at most two sentences.",
+}
 CITIES = TRAVEL["cities"]
 
 AGENT_NAME = "travel_assistant"
